@@ -1,0 +1,5 @@
+CREATE UNIQUE INDEX "custom_domains_single_primary_idx" ON "custom_domains" USING btree ("organization_id") WHERE "custom_domains"."is_primary" = true;--> statement-breakpoint
+CREATE UNIQUE INDEX "workflow_versions_single_published_idx" ON "workflow_versions" USING btree ("organization_id","workflow_id") WHERE "workflow_versions"."status" = 'PUBLISHED';--> statement-breakpoint
+ALTER TABLE "workflow_steps" ADD CONSTRAINT "workflow_steps_org_version_id_unique" UNIQUE("organization_id","workflow_version_id","id");--> statement-breakpoint
+ALTER TABLE "workflow_transitions" ADD CONSTRAINT "workflow_transitions_from_step_fk" FOREIGN KEY ("organization_id","workflow_version_id","from_step_id") REFERENCES "public"."workflow_steps"("organization_id","workflow_version_id","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "workflow_transitions" ADD CONSTRAINT "workflow_transitions_to_step_fk" FOREIGN KEY ("organization_id","workflow_version_id","to_step_id") REFERENCES "public"."workflow_steps"("organization_id","workflow_version_id","id") ON DELETE cascade ON UPDATE no action;

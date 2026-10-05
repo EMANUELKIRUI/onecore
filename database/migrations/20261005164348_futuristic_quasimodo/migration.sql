@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD CONSTRAINT "sessions_organization_membership_fk" FOREIGN KEY ("organization_id","user_id") REFERENCES "organization_memberships"("organization_id","user_id") ON DELETE CASCADE;

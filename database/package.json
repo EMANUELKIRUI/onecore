@@ -1,0 +1,32 @@
+{
+  "name": "@onecore/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
+    "db:migrate": "drizzle-kit migrate --config=drizzle.config.ts",
+    "db:seed": "tsx seeds/seed.ts"
+  },
+  "dependencies": {
+    "@onecore/core-domain": "*",
+    "drizzle-orm": "1.0.0-rc.5-5935859",
+    "postgres": "^3.4.9",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@node-rs/argon2": "^2.2.1",
+    "drizzle-kit": "1.0.0-rc.5-5935859"
+  }
+}

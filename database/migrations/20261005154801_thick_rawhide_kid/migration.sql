@@ -1,0 +1,3 @@
+ALTER TABLE "custom_development_projects" ADD CONSTRAINT "custom_development_projects_org_id_id_unique" UNIQUE("organization_id","id");
+--> statement-breakpoint
+ALTER TABLE "custom_development_releases" ADD CONSTRAINT "custom_development_releases_project_fk" FOREIGN KEY ("organization_id","project_id") REFERENCES "public"."custom_development_projects"("organization_id","id") ON DELETE cascade ON UPDATE no action;

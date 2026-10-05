@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD CONSTRAINT "sessions_branch_requires_organization" CHECK ("branch_id" IS NULL OR "organization_id" IS NOT NULL);

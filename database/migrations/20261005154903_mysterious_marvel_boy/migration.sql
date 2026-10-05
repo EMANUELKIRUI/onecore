@@ -1,0 +1,4 @@
+ALTER TABLE "workflow_steps" ADD CONSTRAINT "workflow_steps_org_id_id_unique" UNIQUE("organization_id","id");
+--> statement-breakpoint
+ALTER TABLE "workflow_actions" ADD CONSTRAINT "workflow_actions_step_fk" FOREIGN KEY ("organization_id","workflow_step_id") REFERENCES "public"."workflow_steps"("organization_id","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "workflow_conditions" ADD CONSTRAINT "workflow_conditions_step_fk" FOREIGN KEY ("organization_id","workflow_step_id") REFERENCES "public"."workflow_steps"("organization_id","id") ON DELETE cascade ON UPDATE no action;
