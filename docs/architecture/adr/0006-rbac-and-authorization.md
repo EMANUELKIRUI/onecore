@@ -40,8 +40,9 @@ must not imply operational access or bypass PostgreSQL RLS.
 Permissions are reusable across organizations while every role grant and
 membership assignment is protected by tenant constraints and RLS. Each
 authorization operation re-reads the relevant state, avoiding stale global
-caches at the cost of several indexed queries. Module entitlement is part of
-permission resolution, but the full registry lifecycle is deferred.
+caches at the cost of several indexed queries. Module lifecycle, plan
+compatibility, and dependency-aware entitlement are part of permission
+resolution; see [ADR 0007](0007-module-registry-and-entitlements.md).
 
 `ORGANIZATION`, `BRANCH`, `OWN`, `ASSIGNED`, and `CUSTOM` scopes are represented
 now. Record filtering for future business resources, custom policy

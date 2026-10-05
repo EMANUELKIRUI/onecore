@@ -30,6 +30,7 @@ import {
   featureFlagScopes,
   membershipStatuses,
   membershipBranchAccessModes,
+  moduleLifecycles,
   organizationModuleStatuses,
   organizationStatuses,
   outboxStatuses,
@@ -68,6 +69,7 @@ export const userAccountStatus = pgEnum(
 export const dataScopeType = pgEnum("data_scope_type", dataScopeTypes);
 export const roleStatus = pgEnum("role_status", roleStatuses);
 export const permissionStatus = pgEnum("permission_status", permissionStatuses);
+export const moduleLifecycle = pgEnum("module_lifecycle", moduleLifecycles);
 export const organizationModuleStatus = pgEnum(
   "organization_module_status",
   organizationModuleStatuses,
@@ -450,15 +452,25 @@ export const membershipDataScopes = pgTable(
   ],
 );
 
-export const modules = pgTable("modules", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  key: varchar("key", { length: 100 }).notNull().unique(),
-  name: varchar("name", { length: 150 }).notNull(),
-  description: text("description"),
-  isAvailable: boolean("is_available").notNull().default(false),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-});
+export const modules = pgTable(
+  "modules",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    key: varchar("key", { length: 100 }).notNull().unique(),
+    name: varchar("name", { length: 150 }).notNull(),
+    description: text("description"),
+    lifecycle: moduleLifecycle("lifecycle").notNull().default("DEVELOPMENT"),
+    isAvailable: boolean("is_available").notNull().default(false),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    index("modules_lifecycle_available_idx").on(
+      table.lifecycle,
+      table.isAvailable,
+    ),
+  ],
+);
 
 export const moduleVersions = pgTable(
   "module_versions",
@@ -496,6 +508,11 @@ export const moduleDependencies = pgTable(
       name: "module_dependencies_pk",
       columns: [table.moduleId, table.dependencyModuleId],
     }),
+    index("module_dependencies_dependency_idx").on(table.dependencyModuleId),
+    check(
+      "module_dependencies_no_self_reference",
+      sql`${table.moduleId} <> ${table.dependencyModuleId}`,
+    ),
   ],
 );
 
@@ -531,6 +548,7 @@ export const modulePermissions = pgTable(
       name: "module_permissions_pk",
       columns: [table.moduleId, table.permissionId],
     }),
+    index("module_permissions_permission_idx").on(table.permissionId),
   ],
 );
 
@@ -682,6 +700,7 @@ export const planModules = pgTable(
       name: "plan_modules_pk",
       columns: [table.planId, table.moduleId],
     }),
+    index("plan_modules_module_idx").on(table.moduleId),
   ],
 );
 

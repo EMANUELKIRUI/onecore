@@ -28,4 +28,21 @@ The permission catalog is global and read-only to the API. Never make
 `onecore_app` an owner or grant it `BYPASSRLS`.
 See [RBAC security documentation](../../docs/security/rbac.md).
 
+Phase 6 extends the existing module catalog with an explicit lifecycle and
+backfills versioned manifests for existing module rows. The migration grants
+the runtime role read access to registry and subscription/plan facts and only
+`SELECT, INSERT, UPDATE` on tenant-scoped organization module entitlements.
+Global lifecycle changes use the registry service with the separate
+`onecore_migrator` connection; it does not grant global catalog writes to the
+API role. The migration-role-only audit policy permits platform registry
+events in the existing append-only audit table. A separate narrow
+`platform_user_roles` insert policy lets only `onecore_migrator` provision
+platform-role assignments. The development seed receives only read/insert
+policies on organization roots so it can provision idempotent demo tenants;
+it receives no organization update/delete policy. `onecore_app` remains
+read-only on platform-role assignments.
+Review
+[module entitlement security](../../docs/security/module-entitlements.md)
+before granting deployment roles.
+
 Phase 4 adds a typed branch lifecycle, fail-closed membership branch-access mode, and a session branch ID constrained to the selected organization. The branch status migration normalizes existing status casing and rejects values outside the typed lifecycle; review existing production branch status values before applying it.

@@ -2,11 +2,16 @@ import { and, eq } from "drizzle-orm";
 import { Algorithm, hash as hashPassword } from "@node-rs/argon2";
 import {
   defaultOrganizationRoleTemplates,
+  moduleManifestSchema,
   permissionCatalog,
   roleAdministrationPermissionKeys,
 } from "@onecore/core-domain";
 import { createDatabase } from "../src/index.js";
-import { withOrganizationTransaction } from "../src/tenant-context.js";
+import {
+  withAuthenticatedUserTransaction,
+  withLoginTransaction,
+  withOrganizationTransaction,
+} from "../src/tenant-context.js";
 import {
   businessSettings,
   branches,
@@ -16,6 +21,8 @@ import {
   features,
   membershipRoles,
   modules,
+  modulePermissions,
+  moduleVersions,
   notificationConfigurations,
   organizationBranding,
   organizationFeatures,
@@ -112,58 +119,79 @@ const moduleDefinitions = [
     name: "Role-Based Access Control",
     features: [],
   },
+  {
+    key: "core.modules",
+    name: "Module Registry and Entitlements",
+    features: [],
+  },
 ];
 
 try {
-  const [platformAdmin] = await db
-    .insert(users)
-    .values({
-      email: "platform-admin@example.test",
-      displayName: "Development Platform Superadmin",
-      status: "ACTIVE",
-      ...(developmentPasswordHash
-        ? { passwordHash: developmentPasswordHash }
-        : {}),
-    })
-    .onConflictDoUpdate({
-      target: users.email,
-      set: {
-        displayName: "Development Platform Superadmin",
-        ...(developmentPasswordHash
-          ? { passwordHash: developmentPasswordHash }
-          : {}),
-      },
-    })
-    .returning();
-  const [multiOrganizationUser] = await db
-    .insert(users)
-    .values({
-      email: "multi-organization@example.test",
-      displayName: "Development Multi-Organization User",
-      status: "ACTIVE",
-      ...(developmentPasswordHash
-        ? { passwordHash: developmentPasswordHash }
-        : {}),
-    })
-    .onConflictDoUpdate({
-      target: users.email,
-      set: {
-        displayName: "Development Multi-Organization User",
-        ...(developmentPasswordHash
-          ? { passwordHash: developmentPasswordHash }
-          : {}),
-      },
-    })
-    .returning();
+  const [platformAdmin] = await withLoginTransaction(
+    db,
+    "platform-admin@example.test",
+    (transaction) =>
+      transaction
+        .insert(users)
+        .values({
+          email: "platform-admin@example.test",
+          displayName: "Development Platform Superadmin",
+          status: "ACTIVE",
+          ...(developmentPasswordHash
+            ? { passwordHash: developmentPasswordHash }
+            : {}),
+        })
+        .onConflictDoUpdate({
+          target: users.email,
+          set: {
+            displayName: "Development Platform Superadmin",
+            ...(developmentPasswordHash
+              ? { passwordHash: developmentPasswordHash }
+              : {}),
+          },
+        })
+        .returning(),
+  );
+  const [multiOrganizationUser] = await withLoginTransaction(
+    db,
+    "multi-organization@example.test",
+    (transaction) =>
+      transaction
+        .insert(users)
+        .values({
+          email: "multi-organization@example.test",
+          displayName: "Development Multi-Organization User",
+          status: "ACTIVE",
+          ...(developmentPasswordHash
+            ? { passwordHash: developmentPasswordHash }
+            : {}),
+        })
+        .onConflictDoUpdate({
+          target: users.email,
+          set: {
+            displayName: "Development Multi-Organization User",
+            ...(developmentPasswordHash
+              ? { passwordHash: developmentPasswordHash }
+              : {}),
+          },
+        })
+        .returning(),
+  );
   if (!platformAdmin || !multiOrganizationUser) {
     throw new Error(
       "Development identity seed could not create platform users",
     );
   }
-  await db
-    .insert(platformUserRoles)
-    .values({ userId: platformAdmin.id, role: "SUPERADMIN" })
-    .onConflictDoNothing();
+  await withAuthenticatedUserTransaction(
+    db,
+    platformAdmin.id,
+    async (transaction) => {
+      await transaction
+        .insert(platformUserRoles)
+        .values({ userId: platformAdmin.id, role: "SUPERADMIN" })
+        .onConflictDoNothing();
+    },
+  );
 
   for (const moduleDefinition of moduleDefinitions) {
     await db
@@ -171,9 +199,18 @@ try {
       .values({
         key: moduleDefinition.key,
         name: moduleDefinition.name,
+        lifecycle: "AVAILABLE",
         isAvailable: true,
       })
-      .onConflictDoNothing({ target: modules.key });
+      .onConflictDoUpdate({
+        target: modules.key,
+        set: {
+          name: moduleDefinition.name,
+          lifecycle: "AVAILABLE",
+          isAvailable: true,
+          updatedAt: new Date(),
+        },
+      });
   }
 
   const allModules = await db.select().from(modules);
@@ -227,6 +264,55 @@ try {
         ],
         set: { description: permission.description },
       });
+  }
+
+  for (const moduleDefinition of moduleDefinitions) {
+    const module = moduleByKey.get(moduleDefinition.key);
+    if (!module) {
+      throw new Error(`Seed module was not found: ${moduleDefinition.key}`);
+    }
+    const manifest = moduleManifestSchema.parse({
+      name: moduleDefinition.key,
+      version: "1.0.0",
+      displayName: moduleDefinition.name,
+      dependencies: [],
+      permissions: permissionCatalog
+        .filter((permission) => permission.module === moduleDefinition.key)
+        .map((permission) => permission.key),
+      features: moduleDefinition.features.map(({ key }) => key),
+      lifecycle: "AVAILABLE",
+    });
+    await db
+      .insert(moduleVersions)
+      .values({
+        moduleId: module.id,
+        version: manifest.version,
+        status: manifest.lifecycle,
+        manifest,
+      })
+      .onConflictDoUpdate({
+        target: [moduleVersions.moduleId, moduleVersions.version],
+        set: { status: manifest.lifecycle, manifest },
+      });
+    for (const permission of permissionCatalog.filter(
+      (candidate) => candidate.module === moduleDefinition.key,
+    )) {
+      const [catalogPermission] = await db
+        .select({ id: permissions.id })
+        .from(permissions)
+        .where(eq(permissions.key, permission.key))
+        .limit(1);
+      if (!catalogPermission) {
+        throw new Error(`Seed permission was not found: ${permission.key}`);
+      }
+      await db
+        .insert(modulePermissions)
+        .values({
+          moduleId: module.id,
+          permissionId: catalogPermission.id,
+        })
+        .onConflictDoNothing();
+    }
   }
 
   await db
@@ -296,33 +382,28 @@ try {
       );
     }
 
-    const [user] = await db
-      .insert(users)
-      .values({
-        email: demo.email,
-        displayName: `${demo.name} Owner`,
-        ...(developmentPasswordHash
-          ? { passwordHash: developmentPasswordHash }
-          : {}),
-      })
-      .onConflictDoUpdate({
-        target: users.email,
-        set: {
+    const [user] = await withLoginTransaction(db, demo.email, (transaction) =>
+      transaction
+        .insert(users)
+        .values({
+          email: demo.email,
           displayName: `${demo.name} Owner`,
           ...(developmentPasswordHash
             ? { passwordHash: developmentPasswordHash }
             : {}),
-        },
-      })
-      .returning();
+        })
+        .onConflictDoUpdate({
+          target: users.email,
+          set: {
+            displayName: `${demo.name} Owner`,
+            ...(developmentPasswordHash
+              ? { passwordHash: developmentPasswordHash }
+              : {}),
+          },
+        })
+        .returning(),
+    );
     if (!user) throw new Error(`Seed user could not be created: ${demo.email}`);
-
-    const [coreModule] = await db
-      .select()
-      .from(modules)
-      .where(eq(modules.key, "core.organization"));
-    if (!coreModule)
-      throw new Error("Organization administration module was not found");
 
     await withOrganizationTransaction(
       db,
@@ -496,39 +577,31 @@ try {
             .onConflictDoNothing();
         }
 
-        await transaction
-          .insert(organizationModules)
-          .values({
-            organizationId: organization.id,
-            moduleId: coreModule.id,
-            status: "ENABLED",
-            source: "MANUAL",
-          })
-          .onConflictDoUpdate({
-            target: [
-              organizationModules.organizationId,
-              organizationModules.moduleId,
-            ],
-            set: { status: "ENABLED" },
-          });
-
-        const rbacModule = moduleByKey.get("core.rbac");
-        if (!rbacModule) throw new Error("RBAC module was not seeded");
-        await transaction
-          .insert(organizationModules)
-          .values({
-            organizationId: organization.id,
-            moduleId: rbacModule.id,
-            status: "ENABLED",
-            source: "MANUAL",
-          })
-          .onConflictDoUpdate({
-            target: [
-              organizationModules.organizationId,
-              organizationModules.moduleId,
-            ],
-            set: { status: "ENABLED" },
-          });
+        for (const moduleKey of [
+          "core.organization",
+          "core.rbac",
+          "core.modules",
+        ]) {
+          const module = moduleByKey.get(moduleKey);
+          if (!module)
+            throw new Error(`Required core module is missing: ${moduleKey}`);
+          await transaction
+            .insert(organizationModules)
+            .values({
+              organizationId: organization.id,
+              moduleId: module.id,
+              status: "ENABLED",
+              source: "MANUAL",
+              enabledAt: new Date(),
+            })
+            .onConflictDoUpdate({
+              target: [
+                organizationModules.organizationId,
+                organizationModules.moduleId,
+              ],
+              set: { status: "ENABLED", enabledAt: new Date() },
+            });
+        }
 
         for (const featureKey of ["branding", "custom-fields"]) {
           const feature = featureByKey.get(`core.organization:${featureKey}`);

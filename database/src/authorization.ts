@@ -8,8 +8,6 @@ import {
   auditLogs,
   membershipDataScopes,
   membershipRoles,
-  modules,
-  organizationModules,
   permissions,
   platformUserRoles,
   rolePermissions,
@@ -28,6 +26,10 @@ import {
   permissionRequiresBranch,
   resolveEffectivePermissionGrants,
 } from "./authorization-policy.js";
+import {
+  loadOrganizationModuleAccess,
+  type OrganizationModuleAccess,
+} from "./module-entitlements.js";
 
 const uuidSchema = z.uuid();
 
@@ -117,6 +119,7 @@ export interface AuthorizationService {
 interface ResolvedAccess {
   context: ResolvedAuthorizationContext;
   permissionScopes: Map<string, DataScopeType[]>;
+  moduleAccess: Map<string, OrganizationModuleAccess>;
 }
 
 function denied(statusCode: 401 | 403): AuthorizationDecision {
@@ -262,19 +265,14 @@ export function createAuthorizationService(
           eq(membershipDataScopes.membershipId, membership.membershipId),
         ),
       );
-    const moduleEntitlements = await transaction
-      .select({
-        moduleKey: modules.key,
-        available: modules.isAvailable,
-        status: organizationModules.status,
-      })
-      .from(organizationModules)
-      .innerJoin(modules, eq(organizationModules.moduleId, modules.id))
-      .where(eq(organizationModules.organizationId, context.organizationId));
+    const moduleAccess = await loadOrganizationModuleAccess(
+      transaction,
+      context.organizationId,
+    );
     const entitledModules = new Set(
-      moduleEntitlements
-        .filter((module) => module.available && module.status === "ENABLED")
-        .map((module) => module.moduleKey),
+      [...moduleAccess.entries()]
+        .filter(([, access]) => access.allowed)
+        .map(([moduleName]) => moduleName),
     );
     const membershipScopeTypes = memberScopes.map(({ scopeType }) => scopeType);
     const effectiveGrants = resolveEffectivePermissionGrants(
@@ -313,6 +311,7 @@ export function createAuthorizationService(
         permissions: effectiveGrants,
       },
       permissionScopes,
+      moduleAccess,
     };
   }
 
@@ -458,6 +457,32 @@ export function createAuthorizationService(
             decision.allowed,
             decision.allowed ? null : "permission_or_scope_denied",
           );
+          const moduleName = decision.key.split(".").slice(0, -2).join(".");
+          const moduleDecision = access.moduleAccess.get(moduleName);
+          if (!moduleDecision?.allowed) {
+            await writeAuthorizationMutationEvent(
+              transaction,
+              access.context,
+              metadata,
+              "MODULE_ACCESS_DENIED",
+              "module",
+              moduleName,
+              {
+                permission: decision.key,
+                reason: moduleDecision?.reason ?? "MODULE_NOT_FOUND",
+              },
+            );
+          } else if (decision.allowed) {
+            await writeAuthorizationMutationEvent(
+              transaction,
+              access.context,
+              metadata,
+              "MODULE_ACCESS_GRANTED",
+              "module",
+              moduleName,
+              { permission: decision.key },
+            );
+          }
         }
         if (!allowed) return { allowed: false as const };
 

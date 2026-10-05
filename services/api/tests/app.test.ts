@@ -50,6 +50,11 @@ describe("API foundation", () => {
         message: "Authentication is required.",
       },
     });
+    const anonymousModuleCatalog = await app.inject({
+      method: "GET",
+      url: "/modules",
+    });
+    expect(anonymousModuleCatalog.statusCode).toBe(401);
 
     const userId = crypto.randomUUID();
     const organizationId = crypto.randomUUID();
@@ -101,6 +106,12 @@ describe("API foundation", () => {
         message: "The request is not authorized.",
       },
     });
+    const moduleDenied = await authenticatedApp.inject({
+      method: "GET",
+      url: "/modules",
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(moduleDenied.statusCode).toBe(403);
     await authenticatedApp.close();
     await app.close();
   });

@@ -8,6 +8,12 @@ import {
   deploymentTypeSchema,
   createPermissionKey,
   permissionDefinitionSchema,
+  canTransitionModuleLifecycle,
+  compareSemanticVersions,
+  moduleManifestSchema,
+  resolveModuleAccess,
+  resolveModuleActivationOrder,
+  validateModuleDependencyGraph,
   organizationStatusSchema,
   parseCustomFieldValue,
 } from "../src/index.js";
@@ -101,5 +107,143 @@ describe("platform domain values", () => {
     expect(() => createPermissionKey("Sales", "sale", "create")).toThrow();
     expect(() => createPermissionKey("sales", "sale.create", "read")).toThrow();
     expect(() => createPermissionKey("sales", "sale", "read all")).toThrow();
+  });
+
+  it("validates manifests, canonical permissions, and semantic versions", () => {
+    const manifest = moduleManifestSchema.parse({
+      name: "core.reporting",
+      version: "1.2.3",
+      displayName: "Reporting",
+      dependencies: [
+        { moduleName: "core.organization", minimumVersion: "1.0.0" },
+      ],
+      permissions: ["core.reporting.report.read"],
+      features: ["scheduled"],
+      lifecycle: "DEVELOPMENT",
+    });
+    expect(manifest.name).toBe("core.reporting");
+    expect(() =>
+      moduleManifestSchema.parse({
+        ...manifest,
+        version: "1.2",
+      }),
+    ).toThrow();
+    expect(() =>
+      moduleManifestSchema.parse({
+        ...manifest,
+        permissions: ["not canonical"],
+      }),
+    ).toThrow();
+    expect(compareSemanticVersions("1.2.0", "1.1.9")).toBe(1);
+    expect(compareSemanticVersions("1.2.0-beta.2", "1.2.0")).toBe(-1);
+    expect(
+      compareSemanticVersions(
+        "999999999999999999999.0.0",
+        "999999999999999999998.0.0",
+      ),
+    ).toBe(1);
+  });
+
+  it("allows only sequential module lifecycle transitions", () => {
+    expect(
+      canTransitionModuleLifecycle("DEVELOPMENT", "INTERNAL_TESTING"),
+    ).toBe(true);
+    expect(canTransitionModuleLifecycle("DEVELOPMENT", "AVAILABLE")).toBe(
+      false,
+    );
+    expect(canTransitionModuleLifecycle("DEPRECATED", "RETIRED")).toBe(true);
+    expect(canTransitionModuleLifecycle("RETIRED", "AVAILABLE")).toBe(false);
+  });
+
+  it("resolves dependencies deterministically and rejects missing, cyclic, or old dependencies", () => {
+    const modules = [
+      {
+        name: "core.foundation",
+        version: "2.0.0",
+        lifecycle: "AVAILABLE" as const,
+        dependencies: [],
+      },
+      {
+        name: "core.analytics",
+        version: "1.0.0",
+        lifecycle: "AVAILABLE" as const,
+        dependencies: [
+          { moduleName: "core.foundation", minimumVersion: "1.5.0" },
+        ],
+      },
+    ];
+    expect(resolveModuleActivationOrder(modules, "core.analytics")).toEqual([
+      "core.foundation",
+      "core.analytics",
+    ]);
+    expect(() =>
+      resolveModuleActivationOrder(
+        [{ ...modules[1]!, dependencies: [{ moduleName: "missing.module" }] }],
+        "core.analytics",
+      ),
+    ).toThrow("MODULE_NOT_FOUND");
+    expect(() =>
+      validateModuleDependencyGraph([
+        {
+          ...modules[0]!,
+          dependencies: [{ moduleName: "core.analytics" }],
+        },
+        modules[1]!,
+      ]),
+    ).toThrow("DEPENDENCY_CYCLE");
+    expect(() =>
+      resolveModuleActivationOrder(
+        [
+          modules[0]!,
+          {
+            ...modules[1]!,
+            dependencies: [
+              { moduleName: "core.foundation", minimumVersion: "3.0.0" },
+            ],
+          },
+        ],
+        "core.analytics",
+      ),
+    ).toThrow("DEPENDENCY_VERSION_UNSATISFIED");
+  });
+
+  it("fails closed for unregistered, unavailable, disabled, unentitled, or dependency-broken modules", () => {
+    const eligible = {
+      registered: true,
+      lifecycle: "AVAILABLE" as const,
+      isAvailable: true,
+      entitlementStatus: "ENABLED" as const,
+      planAllowsModule: true,
+      dependenciesEnabled: true,
+    };
+    expect(resolveModuleAccess(eligible)).toEqual({ allowed: true });
+    expect(resolveModuleAccess({ ...eligible, lifecycle: "QA" })).toEqual({
+      allowed: false,
+      reason: "MODULE_UNAVAILABLE",
+    });
+    expect(
+      resolveModuleAccess({ ...eligible, entitlementStatus: "DISABLED" }),
+    ).toEqual({
+      allowed: false,
+      reason: "MODULE_DISABLED",
+    });
+    expect(
+      resolveModuleAccess({ ...eligible, entitlementStatus: null }),
+    ).toEqual({
+      allowed: false,
+      reason: "NOT_ENTITLED",
+    });
+    expect(
+      resolveModuleAccess({ ...eligible, planAllowsModule: false }),
+    ).toEqual({
+      allowed: false,
+      reason: "SUBSCRIPTION_NOT_ALLOWED",
+    });
+    expect(
+      resolveModuleAccess({ ...eligible, dependenciesEnabled: false }),
+    ).toEqual({
+      allowed: false,
+      reason: "DEPENDENCY_NOT_SATISFIED",
+    });
   });
 });

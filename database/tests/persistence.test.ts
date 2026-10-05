@@ -7,7 +7,10 @@ import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { parseCustomFieldValue } from "@onecore/core-domain";
+import {
+  moduleManifestSchema,
+  parseCustomFieldValue,
+} from "@onecore/core-domain";
 import { evaluateFeatureFlag } from "../src/feature-flags.js";
 import * as schema from "../schema/index.js";
 
@@ -50,10 +53,13 @@ describe("PostgreSQL persistence foundation", () => {
   beforeAll(async () => {
     client = new PGlite();
     database = drizzle({ client });
+    await client.exec(`
+      CREATE ROLE onecore_app NOLOGIN NOBYPASSRLS;
+      CREATE ROLE onecore_migrator NOLOGIN NOSUPERUSER NOBYPASSRLS;
+    `);
     await migrate(database, { migrationsFolder: migrationsDirectory });
 
     await client.exec(`
-      CREATE ROLE onecore_app NOLOGIN NOBYPASSRLS;
       GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO onecore_app;
     `);
   });
@@ -126,6 +132,7 @@ describe("PostgreSQL persistence foundation", () => {
       );
       return { read, update, deleted };
     });
+
     expect(noContextRows.read.rows).toEqual([]);
     expect(noContextRows.update.rows).toEqual([]);
     expect(noContextRows.deleted.rows).toEqual([]);
@@ -147,6 +154,91 @@ describe("PostgreSQL persistence foundation", () => {
         ),
       ),
     ).rejects.toThrow();
+  });
+
+  it("isolates organization module entitlements under forced RLS", async () => {
+    const organizationA = await createOrganization("Module Tenant A");
+    const organizationB = await createOrganization("Module Tenant B");
+    const moduleKey = `core.test.m${crypto.randomUUID().replaceAll("-", "")}`;
+    const manifest = moduleManifestSchema.parse({
+      name: moduleKey,
+      version: "1.0.0",
+      displayName: "Module Tenant Isolation Test",
+      dependencies: [],
+      permissions: [],
+      features: [],
+      lifecycle: "AVAILABLE",
+    });
+    const [module] = await database
+      .insert(schema.modules)
+      .values({
+        key: moduleKey,
+        name: manifest.displayName,
+        lifecycle: "AVAILABLE",
+        isAvailable: true,
+      })
+      .returning();
+    if (!module) throw new Error("Test module was not created");
+    await database.insert(schema.moduleVersions).values({
+      moduleId: module.id,
+      version: manifest.version,
+      status: manifest.lifecycle,
+      manifest,
+    });
+    await database.insert(schema.organizationModules).values([
+      {
+        organizationId: organizationA.id,
+        moduleId: module.id,
+        status: "ENABLED",
+        source: "MANUAL",
+      },
+      {
+        organizationId: organizationB.id,
+        moduleId: module.id,
+        status: "ENABLED",
+        source: "MANUAL",
+      },
+    ]);
+
+    const tenantAEntitlements = await asTenant(
+      organizationA.id,
+      (transaction) =>
+        transaction.query<{ organization_id: string; status: string }>(
+          "SELECT organization_id, status FROM organization_modules",
+        ),
+    );
+    expect(tenantAEntitlements.rows).toEqual([
+      { organization_id: organizationA.id, status: "ENABLED" },
+    ]);
+
+    const crossTenantChanges = await asTenant(
+      organizationA.id,
+      async (transaction) => ({
+        update: await transaction.query(
+          "UPDATE organization_modules SET status = 'DISABLED' WHERE organization_id = $1 RETURNING id",
+          [organizationB.id],
+        ),
+        delete: await transaction.query(
+          "DELETE FROM organization_modules WHERE organization_id = $1 RETURNING id",
+          [organizationB.id],
+        ),
+      }),
+    );
+    expect(crossTenantChanges.update.rows).toEqual([]);
+    expect(crossTenantChanges.delete.rows).toEqual([]);
+    await expect(
+      asTenant(organizationA.id, (transaction) =>
+        transaction.query(
+          "INSERT INTO organization_modules (organization_id, module_id, status, source) VALUES ($1, $2, 'ENABLED', 'MANUAL')",
+          [organizationB.id, module.id],
+        ),
+      ),
+    ).rejects.toThrow();
+    const missingContext = await client.transaction(async (transaction) => {
+      await transaction.exec("SET LOCAL ROLE onecore_app");
+      return transaction.query("SELECT id FROM organization_modules");
+    });
+    expect(missingContext.rows).toEqual([]);
   });
 
   it("forces RLS on every organization-scoped table and keeps the API role non-bypass", async () => {

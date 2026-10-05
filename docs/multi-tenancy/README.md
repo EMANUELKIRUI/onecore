@@ -8,7 +8,7 @@ Users are global identity records and can join multiple organizations through `o
 
 ## Isolation path
 
-Request handling resolves the user and active organization through authentication and membership checks, then validates requested branch context before accessing tenant data. Complete role/permission, module-entitlement, and data-scope enforcement remains deferred. Client-supplied organization/branch/role/module/scope values are not trusted.
+Request handling resolves the user and active organization through authentication and membership checks, then validates requested branch context before accessing tenant data. Phase 5 centrally resolves organization roles, permissions, and data-scope grants; Phase 6 additionally requires an available, plan-compatible, enabled module entitlement before its permissions are effective. Business-row filtering for `OWN`, `ASSIGNED`, and `CUSTOM` scopes remains deferred. Client-supplied organization/branch/role/module/scope values are not trusted.
 
 The database adds a second boundary:
 

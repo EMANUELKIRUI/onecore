@@ -48,6 +48,21 @@ export {
   resolveEffectivePermissionGrants,
   type PermissionGrantCandidate,
 } from "./authorization-policy.js";
+export {
+  createModuleRegistry,
+  moduleVersionSatisfies,
+  type ModuleRegistry,
+  type ModuleRegistryActor,
+  type RegisteredModule,
+} from "./module-registry.js";
+export {
+  loadOrganizationModuleActivationAccess,
+  loadOrganizationModuleAccess,
+  resolveOrganizationModuleActivationAccess,
+  resolveOrganizationModuleAccess,
+  type OrganizationModuleAccess,
+  type OrganizationModuleCandidate,
+} from "./module-entitlements.js";
 
 export type Database = PostgresJsDatabase;
 

@@ -258,6 +258,30 @@ export const permissionCatalog = [
     action: "remove",
     description: "Remove organization roles from memberships.",
   },
+  {
+    module: "core.modules",
+    resource: "module",
+    action: "read",
+    description: "Read registered modules and organization availability.",
+  },
+  {
+    module: "core.modules",
+    resource: "entitlement",
+    action: "read",
+    description: "Read organization module entitlements.",
+  },
+  {
+    module: "core.modules",
+    resource: "entitlement",
+    action: "request",
+    description: "Request an available module for the organization.",
+  },
+  {
+    module: "core.modules",
+    resource: "entitlement",
+    action: "manage",
+    description: "Enable or disable organization module entitlements.",
+  },
   ...(
     [
       ["sales", "sale", "create"],
@@ -294,6 +318,17 @@ export const roleAdministrationPermissionKeys = [
   "core.rbac.role_permission.revoke",
   "core.rbac.membership_role.assign",
   "core.rbac.membership_role.remove",
+  "core.modules.module.read",
+  "core.modules.entitlement.read",
+  "core.modules.entitlement.request",
+  "core.modules.entitlement.manage",
+] as const;
+
+export const moduleAdministrationPermissionKeys = [
+  "core.modules.module.read",
+  "core.modules.entitlement.read",
+  "core.modules.entitlement.request",
+  "core.modules.entitlement.manage",
 ] as const;
 
 export const organizationOwnerPermissionKey =
@@ -327,10 +362,14 @@ export const defaultOrganizationRoleTemplates = [
 ] as const;
 
 export const organizationModuleStatuses = [
+  "REQUESTED",
+  "PENDING",
+  "APPROVED",
   "AVAILABLE",
   "ENABLED",
   "DISABLED",
   "SUSPENDED",
+  "EXPIRED",
 ] as const;
 export const organizationModuleStatusSchema = z.enum(
   organizationModuleStatuses,
@@ -338,6 +377,308 @@ export const organizationModuleStatusSchema = z.enum(
 export type OrganizationModuleStatus = z.infer<
   typeof organizationModuleStatusSchema
 >;
+
+export const moduleLifecycles = [
+  "DEVELOPMENT",
+  "INTERNAL_TESTING",
+  "QA",
+  "SECURITY_REVIEW",
+  "STAGING",
+  "UAT",
+  "SUPERADMIN_REVIEW",
+  "APPROVED",
+  "AVAILABLE",
+  "DEPRECATED",
+  "RETIRED",
+] as const;
+export const moduleLifecycleSchema = z.enum(moduleLifecycles);
+export type ModuleLifecycle = z.infer<typeof moduleLifecycleSchema>;
+
+const moduleSemanticVersionPattern =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+export const moduleManifestSchema = z
+  .object({
+    name: z
+      .string()
+      .min(1)
+      .max(100)
+      .regex(/^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/),
+    version: z.string().regex(moduleSemanticVersionPattern),
+    displayName: z.string().trim().min(1).max(150),
+    description: z.string().trim().max(2_000).optional(),
+    dependencies: z
+      .array(
+        z
+          .object({
+            moduleName: z
+              .string()
+              .min(1)
+              .max(100)
+              .regex(/^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/),
+            minimumVersion: z
+              .string()
+              .regex(moduleSemanticVersionPattern)
+              .optional(),
+          })
+          .strict(),
+      )
+      .default([])
+      .refine(
+        (dependencies) =>
+          new Set(dependencies.map(({ moduleName }) => moduleName)).size ===
+          dependencies.length,
+        "Module dependencies must be unique",
+      ),
+    permissions: z.array(z.string().min(1).max(150)).default([]),
+    features: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(100)
+          .regex(/^[a-z][a-z0-9_-]*$/),
+      )
+      .default([]),
+    lifecycle: moduleLifecycleSchema,
+    configuration: z.unknown().optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict()
+  .superRefine((manifest, context) => {
+    if (
+      manifest.dependencies.some(
+        ({ moduleName }) => moduleName === manifest.name,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["dependencies"],
+        message: "A module cannot depend on itself",
+      });
+    }
+    const permissionKeys = manifest.permissions;
+    if (new Set(permissionKeys).size !== permissionKeys.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["permissions"],
+        message: "Manifest permissions must be unique",
+      });
+    }
+    for (const [index, key] of permissionKeys.entries()) {
+      const segments = key.split(".");
+      const action = segments.pop();
+      const resource = segments.pop();
+      const module = segments.join(".");
+      if (
+        !permissionDefinitionSchema.safeParse({ module, resource, action })
+          .success
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["permissions", index],
+          message: "Manifest permissions must use canonical permission keys",
+        });
+      }
+    }
+    const featureKeys = manifest.features;
+    if (new Set(featureKeys).size !== featureKeys.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["features"],
+        message: "Manifest features must be unique",
+      });
+    }
+  });
+
+export type ModuleManifest = z.infer<typeof moduleManifestSchema>;
+
+const moduleLifecycleTransitions: Record<
+  ModuleLifecycle,
+  readonly ModuleLifecycle[]
+> = {
+  DEVELOPMENT: ["INTERNAL_TESTING"],
+  INTERNAL_TESTING: ["QA"],
+  QA: ["SECURITY_REVIEW"],
+  SECURITY_REVIEW: ["STAGING"],
+  STAGING: ["UAT"],
+  UAT: ["SUPERADMIN_REVIEW"],
+  SUPERADMIN_REVIEW: ["APPROVED"],
+  APPROVED: ["AVAILABLE"],
+  AVAILABLE: ["DEPRECATED"],
+  DEPRECATED: ["AVAILABLE", "RETIRED"],
+  RETIRED: [],
+};
+
+export function canTransitionModuleLifecycle(
+  from: ModuleLifecycle,
+  to: ModuleLifecycle,
+): boolean {
+  return moduleLifecycleTransitions[from].includes(to);
+}
+
+export interface ModuleDependencyNode {
+  name: string;
+  version: string;
+  lifecycle: ModuleLifecycle;
+  dependencies: readonly ModuleManifest["dependencies"][number][];
+}
+
+export function compareSemanticVersions(left: string, right: string): number {
+  const leftMatch = moduleSemanticVersionPattern.exec(left);
+  const rightMatch = moduleSemanticVersionPattern.exec(right);
+  if (!leftMatch || !rightMatch)
+    throw new TypeError("Invalid semantic version");
+  for (let index = 1; index <= 3; index += 1) {
+    const leftPart = BigInt(leftMatch[index] ?? "0");
+    const rightPart = BigInt(rightMatch[index] ?? "0");
+    if (leftPart !== rightPart) return leftPart < rightPart ? -1 : 1;
+  }
+  const leftPrerelease = leftMatch[4]?.split(".") ?? [];
+  const rightPrerelease = rightMatch[4]?.split(".") ?? [];
+  if (leftPrerelease.length === 0 || rightPrerelease.length === 0) {
+    return leftPrerelease.length === rightPrerelease.length
+      ? 0
+      : leftPrerelease.length === 0
+        ? 1
+        : -1;
+  }
+  const length = Math.max(leftPrerelease.length, rightPrerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftPrerelease[index];
+    const rightPart = rightPrerelease[index];
+    if (leftPart === undefined || rightPart === undefined) {
+      return leftPart === rightPart ? 0 : leftPart === undefined ? -1 : 1;
+    }
+    if (leftPart === rightPart) continue;
+    const leftNumeric = /^\d+$/.test(leftPart);
+    const rightNumeric = /^\d+$/.test(rightPart);
+    if (leftNumeric && rightNumeric) {
+      const leftNumber = BigInt(leftPart);
+      const rightNumber = BigInt(rightPart);
+      return leftNumber < rightNumber ? -1 : 1;
+    }
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return leftPart < rightPart ? -1 : 1;
+  }
+  return 0;
+}
+
+export function resolveModuleActivationOrder(
+  modules: readonly ModuleDependencyNode[],
+  requestedModule: string,
+): string[] {
+  const byName = new Map(modules.map((module) => [module.name, module]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const order: string[] = [];
+
+  function visit(name: string): void {
+    const module = byName.get(name);
+    if (!module) throw new Error(`MODULE_NOT_FOUND:${name}`);
+    if (visiting.has(name)) throw new Error(`DEPENDENCY_CYCLE:${name}`);
+    if (visited.has(name)) return;
+    if (module.lifecycle !== "AVAILABLE") {
+      throw new Error(`MODULE_UNAVAILABLE:${name}`);
+    }
+    visiting.add(name);
+    for (const dependency of [...module.dependencies].sort((a, b) =>
+      a.moduleName.localeCompare(b.moduleName),
+    )) {
+      const required = byName.get(dependency.moduleName);
+      if (!required)
+        throw new Error(`MODULE_NOT_FOUND:${dependency.moduleName}`);
+      if (
+        dependency.minimumVersion &&
+        compareSemanticVersions(required.version, dependency.minimumVersion) < 0
+      ) {
+        throw new Error(
+          `DEPENDENCY_VERSION_UNSATISFIED:${dependency.moduleName}`,
+        );
+      }
+      visit(dependency.moduleName);
+    }
+    visiting.delete(name);
+    visited.add(name);
+    order.push(name);
+  }
+
+  visit(requestedModule);
+  return order;
+}
+
+export function validateModuleDependencyGraph(
+  modules: readonly ModuleDependencyNode[],
+): void {
+  const names = new Set(modules.map(({ name }) => name));
+  if (names.size !== modules.length) {
+    throw new Error("DUPLICATE_MODULE_NAME");
+  }
+  const byName = new Map(modules.map((module) => [module.name, module]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  function visit(name: string): void {
+    if (!byName.has(name)) throw new Error(`MODULE_NOT_FOUND:${name}`);
+    if (visiting.has(name)) throw new Error(`DEPENDENCY_CYCLE:${name}`);
+    if (visited.has(name)) return;
+    visiting.add(name);
+    const module = byName.get(name);
+    if (!module) throw new Error(`MODULE_NOT_FOUND:${name}`);
+    for (const dependency of module.dependencies) {
+      visit(dependency.moduleName);
+    }
+    visiting.delete(name);
+    visited.add(name);
+  }
+  for (const module of modules) {
+    visit(module.name);
+  }
+}
+
+export type ModuleAccessFailure =
+  | "MODULE_NOT_FOUND"
+  | "MODULE_UNAVAILABLE"
+  | "NOT_ENTITLED"
+  | "MODULE_DISABLED"
+  | "DEPENDENCY_NOT_SATISFIED"
+  | "SUBSCRIPTION_NOT_ALLOWED";
+
+export interface ModuleAccessInput {
+  registered: boolean;
+  lifecycle: ModuleLifecycle | null;
+  isAvailable: boolean;
+  entitlementStatus: OrganizationModuleStatus | null;
+  planAllowsModule: boolean;
+  dependenciesEnabled: boolean;
+}
+
+export function resolveModuleAccess(
+  input: ModuleAccessInput,
+): { allowed: true } | { allowed: false; reason: ModuleAccessFailure } {
+  if (!input.registered || input.lifecycle === null) {
+    return { allowed: false, reason: "MODULE_NOT_FOUND" };
+  }
+  if (!input.isAvailable || input.lifecycle !== "AVAILABLE") {
+    return { allowed: false, reason: "MODULE_UNAVAILABLE" };
+  }
+  if (!input.planAllowsModule) {
+    return { allowed: false, reason: "SUBSCRIPTION_NOT_ALLOWED" };
+  }
+  if (
+    input.entitlementStatus === null ||
+    input.entitlementStatus === "REQUESTED" ||
+    input.entitlementStatus === "PENDING"
+  ) {
+    return { allowed: false, reason: "NOT_ENTITLED" };
+  }
+  if (input.entitlementStatus !== "ENABLED") {
+    return { allowed: false, reason: "MODULE_DISABLED" };
+  }
+  if (!input.dependenciesEnabled) {
+    return { allowed: false, reason: "DEPENDENCY_NOT_SATISFIED" };
+  }
+  return { allowed: true };
+}
 
 export const entitlementSources = ["SUBSCRIPTION", "MANUAL", "CUSTOM"] as const;
 export const entitlementSourceSchema = z.enum(entitlementSources);

@@ -11,4 +11,5 @@
 - [Authentication threat model](security/authentication.md)
 - [Deployment and governance](deployment/README.md)
 - [Modules](modules/README.md)
+- [Module entitlement security](security/module-entitlements.md)
 - [API](api/README.md)
