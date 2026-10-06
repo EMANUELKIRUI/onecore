@@ -17,6 +17,24 @@ export {
 } from "./organization-repository.js";
 export { recordOutboxEvent, type DomainEvent } from "./outbox.js";
 export {
+  calculateEventRetryDelay,
+  dispatchAuthorizedOutboxBatch,
+  dispatchOutboxBatch,
+  EventDispatchError,
+  eventDeadLetterReadPermission,
+  eventDispatchPermission,
+  isRetryableFailure,
+  listAuthorizedEventDeadLetters,
+  listEventDeadLetters,
+  platformAuditEventHandlers,
+  replayEventDeadLetter,
+  replayAuthorizedEventDeadLetter,
+  type EventDeadLetterSummary,
+  type EventDispatchOptions,
+  type EventDispatchResult,
+  type EventHandler,
+} from "./event-dispatcher.js";
+export {
   createIdentityRepository,
   type AuthenticationAuditEvent,
   type IdentityBranch,
@@ -27,8 +45,10 @@ export {
 } from "./identity-repository.js";
 export {
   evaluateFeatureFlag,
+  resolveFeatureFlag,
   type FeatureFlagContext,
   type FeatureFlagValue,
+  type VerifiedFeatureFlagContext,
 } from "./feature-flags.js";
 export {
   createAuthorizationService,

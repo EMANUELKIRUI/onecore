@@ -12,6 +12,7 @@ import {
 } from "@onecore/database";
 import { z } from "zod";
 import type { ApiFastifyInstance } from "./fastify-instance.js";
+import { recordModuleEntitlementEvent } from "./event-publication.js";
 
 const modulePathSchema = z.object({
   moduleName: z
@@ -244,7 +245,10 @@ export function registerModuleRoutes(
               source: "MANUAL",
             })
             .onConflictDoNothing()
-            .returning({ id: organizationModules.id });
+            .returning({
+              id: organizationModules.id,
+              source: organizationModules.source,
+            });
           if (!requested) {
             return sendResponse(reply, 409, {
               error: {
@@ -413,6 +417,15 @@ export function registerModuleRoutes(
             parsed.data.moduleName,
             { source: "SUBSCRIPTION" },
           );
+          await recordModuleEntitlementEvent(
+            transaction,
+            context,
+            request.id,
+            parsed.data.moduleName,
+            module.id,
+            true,
+            "SUBSCRIPTION",
+          );
           return sendResponse(reply, 200, {
             moduleName: parsed.data.moduleName,
             status: "ENABLED",
@@ -545,6 +558,15 @@ export function registerModuleRoutes(
             "MODULE_DISABLED",
             "module_entitlement",
             parsed.data.moduleName,
+          );
+          await recordModuleEntitlementEvent(
+            transaction,
+            context,
+            request.id,
+            parsed.data.moduleName,
+            module.id,
+            false,
+            disabled.source,
           );
           return sendResponse(reply, 200, {
             moduleName: parsed.data.moduleName,

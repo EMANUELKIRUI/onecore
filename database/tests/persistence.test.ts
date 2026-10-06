@@ -10,8 +10,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   moduleManifestSchema,
   parseCustomFieldValue,
+  parseFeatureFlagValue,
 } from "@onecore/core-domain";
-import { evaluateFeatureFlag } from "../src/feature-flags.js";
+import {
+  evaluateFeatureFlag,
+  resolveFeatureFlag,
+} from "../src/feature-flags.js";
+import { withActiveOrganizationTransaction } from "../src/tenant-context.js";
+import type { Database } from "../src/index.js";
 import * as schema from "../schema/index.js";
 
 const migrationsDirectory = fileURLToPath(
@@ -695,6 +701,76 @@ describe("PostgreSQL persistence foundation", () => {
     ).rejects.toThrow();
   });
 
+  it("rejects configuration context for inactive memberships and suspended organizations", async () => {
+    const activeOrganization = await createOrganization("Active Context Org");
+    const suspendedOrganization = await createOrganization(
+      "Suspended Context Org",
+    );
+    const [activeUser] = await database
+      .insert(schema.users)
+      .values({
+        email: `active-context-${crypto.randomUUID()}@example.test`,
+        displayName: "Active Context User",
+      })
+      .returning();
+    const [inactiveMembershipUser] = await database
+      .insert(schema.users)
+      .values({
+        email: `inactive-context-${crypto.randomUUID()}@example.test`,
+        displayName: "Inactive Context User",
+      })
+      .returning();
+    if (!activeUser || !inactiveMembershipUser) {
+      throw new Error("Context test identities were not created");
+    }
+    await database.insert(schema.organizationMemberships).values([
+      {
+        organizationId: activeOrganization.id,
+        userId: activeUser.id,
+        status: "ACTIVE",
+      },
+      {
+        organizationId: activeOrganization.id,
+        userId: inactiveMembershipUser.id,
+        status: "SUSPENDED",
+      },
+      {
+        organizationId: suspendedOrganization.id,
+        userId: activeUser.id,
+        status: "ACTIVE",
+      },
+    ]);
+    await database
+      .update(schema.organizations)
+      .set({ status: "SUSPENDED" })
+      .where(eq(schema.organizations.id, suspendedOrganization.id));
+
+    const trustedDatabase = database as unknown as Database;
+    const active = await withActiveOrganizationTransaction(
+      trustedDatabase,
+      activeUser.id,
+      activeOrganization.id,
+      async (_transaction, membership) => membership.membershipId,
+    );
+    const inactiveMembership = await withActiveOrganizationTransaction(
+      trustedDatabase,
+      inactiveMembershipUser.id,
+      activeOrganization.id,
+      async () => "unexpected",
+    );
+    const suspendedOrganizationContext =
+      await withActiveOrganizationTransaction(
+        trustedDatabase,
+        activeUser.id,
+        suspendedOrganization.id,
+        async () => "unexpected",
+      );
+
+    expect(active).toBeTruthy();
+    expect(inactiveMembership).toBeUndefined();
+    expect(suspendedOrganizationContext).toBeUndefined();
+  });
+
   it("keeps module availability, organization entitlement, features, and flags distinct", async () => {
     const organization = await createOrganization("Entitlement Tenant");
     const [module] = await database
@@ -811,6 +887,178 @@ describe("PostgreSQL persistence foundation", () => {
     ).toBe(false);
   });
 
+  it("fails closed without verified tenant context or module entitlement", () => {
+    const definition = {
+      key: "module.enabled",
+      valueType: "BOOLEAN" as const,
+      defaultValue: false,
+      isSecuritySensitive: false,
+    };
+    const moduleAssignment = {
+      scope: "MODULE" as const,
+      enabled: true,
+      value: true,
+      environment: null,
+      moduleId: "module-a",
+      organizationId: null,
+      branchId: null,
+      userId: null,
+    };
+    const context = {
+      authenticated: true,
+      organizationId: "organization-a",
+      moduleId: "module-a",
+      organizationActive: true,
+      membershipActive: true,
+      moduleEntitlements: new Map([["module-a", false]]),
+    };
+
+    expect(resolveFeatureFlag(definition, [moduleAssignment], context)).toBe(
+      false,
+    );
+    expect(
+      resolveFeatureFlag(definition, [moduleAssignment], {
+        ...context,
+        moduleEntitlements: new Map([["module-a", true]]),
+      }),
+    ).toBe(true);
+    expect(
+      resolveFeatureFlag(definition, [moduleAssignment], {
+        organizationId: context.organizationId,
+        authenticated: true,
+        organizationActive: context.organizationActive,
+        membershipActive: context.membershipActive,
+        moduleEntitlements: new Map(),
+      }),
+    ).toBe(false);
+    expect(resolveFeatureFlag(definition, [moduleAssignment], null)).toBe(
+      false,
+    );
+    expect(
+      resolveFeatureFlag(definition, [moduleAssignment], {
+        ...context,
+        membershipActive: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("resolves typed branch overrides and rejects unsafe values", () => {
+    const definition = {
+      key: "branding.theme",
+      valueType: "STRING" as const,
+      defaultValue: "default",
+      isSecuritySensitive: false,
+    };
+    const assignments = [
+      {
+        scope: "ORGANIZATION" as const,
+        enabled: false,
+        value: "organization-theme",
+        environment: null,
+        moduleId: null,
+        organizationId: "organization-a",
+        branchId: null,
+        userId: null,
+      },
+      {
+        scope: "BRANCH" as const,
+        enabled: false,
+        value: "branch-theme",
+        environment: null,
+        moduleId: null,
+        organizationId: "organization-a",
+        branchId: "branch-a",
+        userId: null,
+      },
+    ];
+    const context = {
+      authenticated: true,
+      organizationId: "organization-a",
+      branchId: "branch-a",
+      organizationActive: true,
+      membershipActive: true,
+      moduleEntitlements: new Map<string, boolean>(),
+    };
+
+    expect(resolveFeatureFlag(definition, assignments, context)).toBe(
+      "branch-theme",
+    );
+    expect(parseFeatureFlagValue("NUMBER", 42)).toBe(42);
+    expect(() => parseFeatureFlagValue("NUMBER", "42")).toThrow();
+
+    const securityDefinition = {
+      key: "tenant.isolation",
+      valueType: "BOOLEAN" as const,
+      defaultValue: false,
+      isSecuritySensitive: true,
+    };
+    const unsafeAssignment = {
+      scope: "ORGANIZATION" as const,
+      enabled: false,
+      value: true,
+      environment: null,
+      moduleId: null,
+      organizationId: "organization-a",
+      branchId: null,
+      userId: null,
+    };
+    expect(
+      resolveFeatureFlag(securityDefinition, [unsafeAssignment], context),
+    ).toBe(false);
+  });
+
+  it("requires branch feature assignments to use a branch from the same organization", async () => {
+    const organizationA = await createOrganization("Branch Feature A");
+    const organizationB = await createOrganization("Branch Feature B");
+    const [branchA] = await database
+      .insert(schema.branches)
+      .values({
+        organizationId: organizationA.id,
+        name: "Feature Branch A",
+        code: "FEATURE-A",
+      })
+      .returning();
+    const [branchB] = await database
+      .insert(schema.branches)
+      .values({
+        organizationId: organizationB.id,
+        name: "Feature Branch B",
+        code: "FEATURE-B",
+      })
+      .returning();
+    const [flag] = await database
+      .insert(schema.featureFlags)
+      .values({
+        key: `BRANCH_FLAG_${crypto.randomUUID().replaceAll("-", "")}`,
+        description: "Branch assignment foreign-key test.",
+      })
+      .returning();
+    if (!branchA || !branchB || !flag) {
+      throw new Error("Branch assignment fixtures were not created");
+    }
+
+    await database.insert(schema.featureFlagAssignments).values({
+      flagId: flag.id,
+      scope: "ORGANIZATION",
+      scopeKey: "BRANCH",
+      organizationId: organizationA.id,
+      branchId: branchA.id,
+      enabled: true,
+      value: true,
+    });
+    await expect(
+      database.insert(schema.featureFlagAssignments).values({
+        flagId: flag.id,
+        scope: "ORGANIZATION",
+        scopeKey: "BRANCH",
+        organizationId: organizationA.id,
+        branchId: branchB.id,
+        enabled: true,
+        value: true,
+      }),
+    ).rejects.toThrow();
+  });
+
   it("keeps custom fields tenant-scoped and rejects cross-tenant values", async () => {
     const organizationA = await createOrganization("Custom Field A");
     const organizationB = await createOrganization("Custom Field B");
@@ -854,6 +1102,292 @@ describe("PostgreSQL persistence foundation", () => {
         value: "B-100",
       }),
     ).rejects.toThrow();
+  });
+
+  it("isolates every configuration resource under forced tenant RLS", async () => {
+    const organizationA = await createOrganization("Configuration Tenant A");
+    const organizationB = await createOrganization("Configuration Tenant B");
+    const flagId = crypto.randomUUID();
+    const workflowAId = crypto.randomUUID();
+    const workflowBId = crypto.randomUUID();
+
+    await database.insert(schema.organizationSettings).values([
+      {
+        organizationId: organizationA.id,
+        countryCode: "KE",
+        currencyCode: "KES",
+        timezone: "Africa/Nairobi",
+      },
+      {
+        organizationId: organizationB.id,
+        countryCode: "UG",
+        currencyCode: "UGX",
+        timezone: "Africa/Kampala",
+      },
+    ]);
+    await database.insert(schema.businessSettings).values([
+      { organizationId: organizationA.id, legalName: "Tenant A Ltd" },
+      { organizationId: organizationB.id, legalName: "Tenant B Ltd" },
+    ]);
+    await database.insert(schema.organizationBranding).values([
+      { organizationId: organizationA.id, logoUrl: "storage://a/logo" },
+      { organizationId: organizationB.id, logoUrl: "storage://b/logo" },
+    ]);
+    await database.insert(schema.notificationConfigurations).values([
+      { organizationId: organizationA.id, preferences: { events: [] } },
+      { organizationId: organizationB.id, preferences: { events: [] } },
+    ]);
+    await database.insert(schema.customFieldDefinitions).values([
+      {
+        organizationId: organizationA.id,
+        entityType: "test_record",
+        key: "tenant_code",
+        label: "Tenant A Code",
+        fieldType: "TEXT",
+      },
+      {
+        organizationId: organizationB.id,
+        entityType: "test_record",
+        key: "tenant_code",
+        label: "Tenant B Code",
+        fieldType: "TEXT",
+      },
+    ]);
+    await database.insert(schema.workflowDefinitions).values([
+      {
+        id: workflowAId,
+        organizationId: organizationA.id,
+        key: "tenant_flow",
+        name: "Tenant A Flow",
+      },
+      {
+        id: workflowBId,
+        organizationId: organizationB.id,
+        key: "tenant_flow",
+        name: "Tenant B Flow",
+      },
+    ]);
+    await database.insert(schema.integrations).values([
+      {
+        organizationId: organizationA.id,
+        key: "mail",
+        provider: "EMAIL_PROVIDER",
+        secretReference: "secret/a",
+      },
+      {
+        organizationId: organizationB.id,
+        key: "mail",
+        provider: "EMAIL_PROVIDER",
+        secretReference: "secret/b",
+      },
+    ]);
+    const globallyUniqueDomain = `shared-${crypto.randomUUID()}.example.test`;
+    await database.insert(schema.customDomains).values([
+      {
+        organizationId: organizationA.id,
+        domain: globallyUniqueDomain,
+        domainType: "DOMAIN",
+      },
+      {
+        organizationId: organizationB.id,
+        domain: `b-${crypto.randomUUID()}.example.test`,
+        domainType: "DOMAIN",
+      },
+    ]);
+    await expect(
+      database.insert(schema.customDomains).values({
+        organizationId: organizationB.id,
+        domain: globallyUniqueDomain,
+        domainType: "DOMAIN",
+      }),
+    ).rejects.toThrow();
+    await database.insert(schema.featureFlags).values({
+      id: flagId,
+      key: `tenant-flag-${crypto.randomUUID()}`,
+      description: "Tenant isolation test flag.",
+    });
+    await database.insert(schema.featureFlagAssignments).values([
+      {
+        flagId,
+        scope: "ORGANIZATION",
+        scopeKey: "ORGANIZATION",
+        organizationId: organizationA.id,
+        enabled: true,
+        value: true,
+      },
+      {
+        flagId,
+        scope: "ORGANIZATION",
+        scopeKey: "ORGANIZATION",
+        organizationId: organizationB.id,
+        enabled: true,
+        value: true,
+      },
+    ]);
+
+    const visible = await asTenant(organizationA.id, async (transaction) => ({
+      settings: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM organization_settings",
+      ),
+      business: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM business_settings",
+      ),
+      branding: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM organization_branding",
+      ),
+      notifications: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM notification_configurations",
+      ),
+      fields: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM custom_field_definitions",
+      ),
+      workflows: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM workflow_definitions",
+      ),
+      integrations: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM integrations",
+      ),
+      domains: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM custom_domains",
+      ),
+      assignments: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM feature_flag_assignments",
+      ),
+      updateSettings: await transaction.query(
+        "UPDATE organization_settings SET timezone = 'Etc/UTC' WHERE organization_id = $1 RETURNING organization_id",
+        [organizationB.id],
+      ),
+      deleteField: await transaction.query(
+        "DELETE FROM custom_field_definitions WHERE organization_id = $1 RETURNING id",
+        [organizationB.id],
+      ),
+      updateWorkflow: await transaction.query(
+        "UPDATE workflow_definitions SET name = 'tampered' WHERE organization_id = $1 RETURNING id",
+        [organizationB.id],
+      ),
+      updateNotification: await transaction.query(
+        "UPDATE notification_configurations SET preferences = '{}' WHERE organization_id = $1 RETURNING organization_id",
+        [organizationB.id],
+      ),
+      updateIntegration: await transaction.query(
+        "UPDATE integrations SET configuration = '{\"tampered\":true}' WHERE organization_id = $1 RETURNING id",
+        [organizationB.id],
+      ),
+      updateDomain: await transaction.query(
+        "UPDATE custom_domains SET is_primary = true WHERE organization_id = $1 RETURNING id",
+        [organizationB.id],
+      ),
+      updateAssignment: await transaction.query(
+        "UPDATE feature_flag_assignments SET enabled = false WHERE organization_id = $1 RETURNING id",
+        [organizationB.id],
+      ),
+    }));
+
+    for (const rows of [
+      visible.settings.rows,
+      visible.business.rows,
+      visible.branding.rows,
+      visible.notifications.rows,
+      visible.fields.rows,
+      visible.workflows.rows,
+      visible.integrations.rows,
+      visible.domains.rows,
+      visible.assignments.rows,
+    ]) {
+      expect(rows).toEqual([{ organization_id: organizationA.id }]);
+    }
+    for (const rows of [
+      visible.updateSettings.rows,
+      visible.deleteField.rows,
+      visible.updateWorkflow.rows,
+      visible.updateNotification.rows,
+      visible.updateIntegration.rows,
+      visible.updateDomain.rows,
+      visible.updateAssignment.rows,
+    ]) {
+      expect(rows).toEqual([]);
+    }
+
+    const missingContext = await client.transaction(async (transaction) => {
+      await transaction.exec("SET LOCAL ROLE onecore_app");
+      const settings = await transaction.query(
+        "SELECT organization_id FROM organization_settings",
+      );
+      const integrations = await transaction.query(
+        "SELECT organization_id FROM integrations",
+      );
+      const deleted = await transaction.query(
+        "DELETE FROM custom_domains RETURNING id",
+      );
+      return { settings, integrations, deleted };
+    });
+    expect(missingContext.settings.rows).toEqual([]);
+    expect(missingContext.integrations.rows).toEqual([]);
+    expect(missingContext.deleted.rows).toEqual([]);
+
+    const [platformSuperadmin] = await database
+      .insert(schema.users)
+      .values({
+        email: `platform-superadmin-${crypto.randomUUID()}@example.test`,
+        displayName: "Platform Superadmin",
+        status: "ACTIVE",
+      })
+      .returning();
+    if (!platformSuperadmin)
+      throw new Error("Platform Superadmin was not created");
+    await database.insert(schema.platformUserRoles).values({
+      userId: platformSuperadmin.id,
+      role: "SUPERADMIN",
+    });
+    const superadminTenantView = await client.transaction(
+      async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_app");
+        await transaction.query(
+          "SELECT set_config('app.current_user_id', $1, true)",
+          [platformSuperadmin.id],
+        );
+        await transaction.query(
+          "SELECT set_config('app.current_organization_id', $1, true)",
+          [organizationA.id],
+        );
+        const role = await transaction.query<{ role: string }>(
+          "SELECT role FROM platform_user_roles",
+        );
+        const foreignSettings = await transaction.query(
+          "SELECT organization_id FROM organization_settings WHERE organization_id = $1",
+          [organizationB.id],
+        );
+        return { role, foreignSettings };
+      },
+    );
+    expect(superadminTenantView.role.rows).toEqual([{ role: "SUPERADMIN" }]);
+    expect(superadminTenantView.foreignSettings.rows).toEqual([]);
+
+    const rlsCatalog = await client.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM pg_class
+       WHERE relname = ANY($1) AND relrowsecurity AND relforcerowsecurity`,
+      [
+        [
+          "organization_settings",
+          "business_settings",
+          "organization_branding",
+          "notification_configurations",
+          "custom_field_definitions",
+          "custom_field_values",
+          "workflow_definitions",
+          "workflow_versions",
+          "workflow_steps",
+          "workflow_transitions",
+          "workflow_triggers",
+          "workflow_actions",
+          "workflow_conditions",
+          "integrations",
+          "custom_domains",
+          "feature_flag_assignments",
+        ],
+      ],
+    );
+    expect(rlsCatalog.rows[0]?.count).toBe(16);
   });
 
   it("enforces version activation, append-only audit records, and database constraints", async () => {

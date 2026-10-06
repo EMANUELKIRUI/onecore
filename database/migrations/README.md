@@ -45,4 +45,32 @@ Review
 [module entitlement security](../../docs/security/module-entitlements.md)
 before granting deployment roles.
 
+## Phase 7 configuration grants
+
+After applying the configuration migration, grant the runtime role only the
+required configuration operations. Keep the grants additive and review them
+against the active API surface before deployment:
+
+```sql
+GRANT SELECT ON public.feature_flags TO onecore_app;
+GRANT SELECT, INSERT, UPDATE ON public.feature_flag_assignments TO onecore_app;
+GRANT SELECT, INSERT, UPDATE ON public.organization_settings,
+  public.business_settings, public.organization_branding,
+  public.notification_configurations TO onecore_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.custom_field_definitions,
+  public.integrations, public.custom_domains TO onecore_app;
+GRANT SELECT, INSERT, UPDATE ON public.workflow_definitions,
+  public.workflow_versions, public.workflow_steps,
+  public.workflow_triggers, public.workflow_conditions,
+  public.workflow_actions, public.workflow_transitions TO onecore_app;
+```
+
+The standard identity, audit, RBAC, and Phase 6 entitlement grants above are
+still required. Custom-field record values are not exposed by these APIs and
+must not be granted until an authorized business-record service needs them.
+Never grant table ownership, schema `CREATE`, `BYPASSRLS`, or `GRANT ALL` to
+`onecore_app`. All listed tenant tables have forced RLS; verify their owner is
+the migrator role and test tenant isolation using the runtime role after
+provisioning grants.
+
 Phase 4 adds a typed branch lifecycle, fail-closed membership branch-access mode, and a session branch ID constrained to the selected organization. The branch status migration normalizes existing status casing and rejects values outside the typed lifecycle; review existing production branch status values before applying it.

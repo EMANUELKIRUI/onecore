@@ -1,6 +1,12 @@
-# Organization configuration
+# Configuration and customization
 
-Configuration is preferred to customer-specific source changes. Organization differences should be expressed as relational settings, subscription/module entitlements, feature flags, workflow definitions, and—only when necessary—compatible OneCore extensions or a reviewed reusable platform change. Separate customer code branches are prohibited.
+OneCore customization is shared platform behavior, not customer-specific code. Prefer this order: configuration, a feature flag, a reusable workflow, a compatible extension, and only then reviewed custom development. Never create organization-specific source forks.
+
+## Precedence and trust
+
+The intended hierarchy is system defaults, platform configuration, module defaults, organization configuration, branch configuration, and explicitly supported personal preferences. Feature resolution applies user, branch, organization, module, environment, platform/global, then system/default precedence. Personal configuration is not persisted. Security controls are never organization-overridable.
+
+The API derives organization identity from the authenticated session and active membership. Organization IDs in route paths are checked against that context; they are never authority by themselves. Configuration reads and writes run through centralized RBAC authorization and the tenant transaction. RLS remains the database boundary. Platform roles do not override it.
 
 ## Structured configuration
 
@@ -24,12 +30,24 @@ Store exact amounts in PostgreSQL `numeric`, alongside currency codes. A future 
 
 `custom_field_definitions` are unique per organization/entity/key and declare one of `TEXT`, `NUMBER`, `BOOLEAN`, `DATE`, `DATETIME`, `CURRENCY`, `SELECT`, `MULTI_SELECT`, or `REFERENCE`. `custom_field_values` are separately tenant-scoped and reference a definition through a composite organization/definition foreign key. The domain package supplies a type-specific value parser. Dynamic resource references are not foreign keys to arbitrary module tables; the owning service must validate resource existence and field options.
 
-Custom field names/options/validation are untrusted configuration, not executable code. Limit and validate option shape, field values, reference access, and sensitive data use in the future service layer.
+Custom field names/options/validation are untrusted configuration, not executable code. Tenant-authorized GET/POST/PATCH/DELETE APIs manage definitions, defaults, visibility, ordering, and status. Values remain stored by future business modules through the existing `custom_field_values` relation; this phase does not implement those business records. Server validation uses `parseCustomFieldValue`, allow-listed option/validation shapes, composite tenant foreign keys, centralized authorization, forced RLS, and audit records. No schema is created dynamically.
 
 ## Feature flags
 
-Definitions (`feature_flags`) are distinct from scoped assignments. The central `evaluateFeatureFlag` abstraction resolves `USER` → `ORGANIZATION` → `MODULE` → `ENVIRONMENT` → `GLOBAL` → definition default. Assignment dimensions have database checks and uniqueness constraints. Evaluation is server-side; never treat a client-visible flag as permission or module entitlement. All flag mutations must be recorded in audit history by the service that changes them.
+Definitions (`feature_flags`) are distinct from scoped assignments and support `BOOLEAN`, `STRING`, `NUMBER`, and `JSON` values. Assignments support `SYSTEM`, `PLATFORM`, `GLOBAL`, `ENVIRONMENT`, `MODULE`, `ORGANIZATION`, `BRANCH`, and `USER`. `resolveFeatureFlag` validates declared values and requires authenticated, active tenant context; module resolution also requires server-loaded entitlement. Organization/verified-branch API mutations use feature-specific RBAC and audit; security-sensitive definitions cannot be changed by an organization. A flag never grants permission or module entitlement.
+
+## Workflow and other metadata
+
+Tenant-authorized APIs manage workflow definitions, draft versions, steps, triggers, bounded condition metadata, transitions, and allow-listed `NOTIFICATION`/`APPROVAL` action metadata. Versions are immutable after publication; activation retires the previous published version, and deactivation retires the active version. One published version per workflow is enforced in PostgreSQL. Metadata is never executed as SQL, shell commands, JavaScript, or application code. There is no visual builder or workflow execution engine.
+
+Organization notification preference GET/PATCH APIs validate event, channel, enabled state, recipient mode, and optional session-verified branch scope. Integration GET/POST/PATCH/DELETE APIs allow-list non-secret provider metadata, reject secret-shaped request fields, and redact legacy unknown JSON keys and secret references from responses. No external messaging/provider execution or secret manager is implemented. Custom-domain GET/POST/PATCH/DELETE APIs normalize and globally uniquify domains; new domains remain `PENDING`, and only verified domains can be marked primary. DNS and SSL automation are not implemented.
+
+Configuration APIs use existing organization settings permissions and dedicated feature, custom-field, workflow, notification, integration, and domain read/manage permissions. Migrations provision these permissions for existing system Organization Owner and Organization Admin roles; Manager, Staff, and Viewer do not gain management privileges. All route operations use Phase 5 centralized authorization and tenant transactions.
 
 ## Deployment model
 
 Deployment type is organization data for future provisioning/billing/support policy; it must not become a collection of scattered code branches. See the [deployment model](../deployment/README.md).
+
+The server-side capability resolver currently exposes the same metadata-only capabilities for `SAAS`, `CUSTOM`, `DEDICATED`, and `ENTERPRISE`. Provider execution and workflow execution remain disabled for every deployment type.
+
+See the focused notes on [feature flags](feature-flags.md), [custom fields](custom-fields.md), [workflows](workflows.md), [notifications](notifications.md), and [integrations](integrations.md), plus [configuration security](../security/configuration-security.md).

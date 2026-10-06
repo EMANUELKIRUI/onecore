@@ -630,6 +630,7 @@ try {
             .values({
               flagId: flag.id,
               scope: "ORGANIZATION",
+              scopeKey: "ORGANIZATION",
               organizationId: organization.id,
               enabled: true,
             })

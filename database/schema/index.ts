@@ -27,13 +27,17 @@ import {
   dataScopeTypes,
   deploymentTypes,
   entitlementSources,
-  featureFlagScopes,
+  featureFlagTypes,
+  customFieldStatuses,
   membershipStatuses,
   membershipBranchAccessModes,
   moduleLifecycles,
   organizationModuleStatuses,
   organizationStatuses,
   outboxStatuses,
+  type EventDeliveryStatus,
+  type EventFailureKind,
+  type EventProcessingStatus,
   permissionStatuses,
   roleStatuses,
   sslStatuses,
@@ -41,6 +45,7 @@ import {
   userAccountStatuses,
   workflowStatuses,
   workflowVersionStatuses,
+  type FeatureFlagScope,
 } from "@onecore/core-domain";
 import { sql } from "drizzle-orm";
 
@@ -78,7 +83,18 @@ export const entitlementSource = pgEnum(
   "entitlement_source",
   entitlementSources,
 );
-export const featureFlagScope = pgEnum("feature_flag_scope", featureFlagScopes);
+export const featureFlagScope = pgEnum("feature_flag_scope", [
+  "GLOBAL",
+  "ENVIRONMENT",
+  "MODULE",
+  "ORGANIZATION",
+  "USER",
+]);
+export const featureFlagType = pgEnum("feature_flag_type", featureFlagTypes);
+export const customFieldStatus = pgEnum(
+  "custom_field_status",
+  customFieldStatuses,
+);
 export const billingInterval = pgEnum("billing_interval", billingIntervals);
 export const subscriptionStatus = pgEnum(
   "subscription_status",
@@ -605,14 +621,38 @@ export const organizationFeatures = pgTable(
   ],
 );
 
-export const featureFlags = pgTable("feature_flags", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  key: varchar("key", { length: 120 }).notNull().unique(),
-  description: text("description").notNull(),
-  defaultEnabled: boolean("default_enabled").notNull().default(false),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-});
+export const featureFlags = pgTable(
+  "feature_flags",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    key: varchar("key", { length: 120 }).notNull().unique(),
+    description: text("description").notNull(),
+    defaultEnabled: boolean("default_enabled").notNull().default(false),
+    valueType: featureFlagType("value_type").notNull().default("BOOLEAN"),
+    defaultValue: jsonb("default_value")
+      .$type<unknown>()
+      .notNull()
+      .default(sql`'false'::jsonb`),
+    isSecuritySensitive: boolean("is_security_sensitive")
+      .notNull()
+      .default(false),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    check(
+      "feature_flags_default_value_type_check",
+      sql`(${table.valueType} = 'BOOLEAN' and jsonb_typeof(${table.defaultValue}) = 'boolean')
+        or (${table.valueType} = 'STRING' and jsonb_typeof(${table.defaultValue}) = 'string')
+        or (${table.valueType} = 'NUMBER' and jsonb_typeof(${table.defaultValue}) = 'number')
+        or ${table.valueType} = 'JSON'`,
+    ),
+    check(
+      "feature_flags_security_boolean_check",
+      sql`not ${table.isSecuritySensitive} or (${table.valueType} = 'BOOLEAN' and ${table.defaultValue} = 'false'::jsonb)`,
+    ),
+  ],
+);
 
 export const featureFlagAssignments = pgTable(
   "feature_flag_assignments",
@@ -622,31 +662,39 @@ export const featureFlagAssignments = pgTable(
       .notNull()
       .references(() => featureFlags.id, { onDelete: "cascade" }),
     scope: featureFlagScope("scope").notNull(),
+    scopeKey: varchar("scope_key", { length: 20 })
+      .$type<FeatureFlagScope>()
+      .notNull()
+      .default("ORGANIZATION"),
     environment: varchar("environment", { length: 30 }),
     moduleId: uuid("module_id").references(() => modules.id, {
       onDelete: "cascade",
     }),
+    branchId: uuid("branch_id"),
     organizationId: uuid("organization_id").references(() => organizations.id, {
       onDelete: "cascade",
     }),
     userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
     enabled: boolean("enabled").notNull(),
+    value: jsonb("value").$type<unknown>(),
     createdAt: createdAt(),
   },
   (table) => [
     index("feature_flag_assignments_lookup_idx").on(
       table.flagId,
-      table.scope,
+      table.scopeKey,
       table.organizationId,
+      table.branchId,
       table.userId,
     ),
     unique("feature_flag_assignments_scope_unique")
       .on(
         table.flagId,
-        table.scope,
+        table.scopeKey,
         table.environment,
         table.moduleId,
         table.organizationId,
+        table.branchId,
         table.userId,
       )
       .nullsNotDistinct(),
@@ -658,6 +706,15 @@ export const featureFlagAssignments = pgTable(
         or (${table.scope} = 'ORGANIZATION' and ${table.environment} is null and ${table.moduleId} is null and ${table.organizationId} is not null and ${table.userId} is null)
         or (${table.scope} = 'USER' and ${table.environment} is null and ${table.moduleId} is null and ${table.organizationId} is not null and ${table.userId} is not null)`,
     ),
+    check(
+      "feature_flag_assignments_scope_key_check",
+      sql`(${table.scopeKey} in ('SYSTEM', 'PLATFORM', 'GLOBAL') and ${table.environment} is null and ${table.moduleId} is null and ${table.organizationId} is null and ${table.branchId} is null and ${table.userId} is null)
+        or (${table.scopeKey} = 'ENVIRONMENT' and ${table.environment} is not null and ${table.moduleId} is null and ${table.organizationId} is null and ${table.branchId} is null and ${table.userId} is null)
+        or (${table.scopeKey} = 'MODULE' and ${table.environment} is null and ${table.moduleId} is not null and ${table.organizationId} is null and ${table.branchId} is null and ${table.userId} is null)
+        or (${table.scopeKey} = 'ORGANIZATION' and ${table.environment} is null and ${table.moduleId} is null and ${table.organizationId} is not null and ${table.branchId} is null and ${table.userId} is null)
+        or (${table.scopeKey} = 'BRANCH' and ${table.environment} is null and ${table.moduleId} is null and ${table.organizationId} is not null and ${table.branchId} is not null and ${table.userId} is null)
+        or (${table.scopeKey} = 'USER' and ${table.environment} is null and ${table.moduleId} is null and ${table.organizationId} is not null and ${table.branchId} is null and ${table.userId} is not null)`,
+    ),
     foreignKey({
       name: "feature_flag_assignments_membership_fk",
       columns: [table.organizationId, table.userId],
@@ -665,6 +722,11 @@ export const featureFlagAssignments = pgTable(
         organizationMemberships.organizationId,
         organizationMemberships.userId,
       ],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "feature_flag_assignments_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
     }).onDelete("cascade"),
   ],
 );
@@ -969,8 +1031,12 @@ export const customFieldDefinitions = pgTable(
     label: varchar("label", { length: 150 }).notNull(),
     fieldType: customFieldType("field_type").notNull(),
     isRequired: boolean("is_required").notNull().default(false),
+    defaultValue: jsonb("default_value").$type<unknown>(),
     options: jsonb("options").$type<unknown[]>().notNull().default([]),
     validation: jsonObject("validation"),
+    isVisible: boolean("is_visible").notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+    status: customFieldStatus("status").notNull().default("ACTIVE"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -987,6 +1053,10 @@ export const customFieldDefinitions = pgTable(
     index("custom_field_definitions_org_entity_idx").on(
       table.organizationId,
       table.entityType,
+    ),
+    check(
+      "custom_field_definitions_sort_order_nonnegative",
+      sql`${table.sortOrder} >= 0`,
     ),
   ],
 );
@@ -1676,26 +1746,167 @@ export const outboxEvents = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     eventType: varchar("event_type", { length: 150 }).notNull(),
+    aggregateType: varchar("aggregate_type", { length: 100 })
+      .notNull()
+      .default("legacy"),
     aggregateId: uuid("aggregate_id").notNull(),
     organizationId: uuid("organization_id").references(() => organizations.id, {
       onDelete: "restrict",
     }),
+    branchId: uuid("branch_id"),
+    actorUserId: uuid("actor_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    correlationId: uuid("correlation_id").notNull().defaultRandom(),
+    causationId: uuid("causation_id"),
     occurredAt: timestamp("occurred_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
     payload: jsonObject("payload"),
+    metadata: jsonObject("metadata"),
     version: integer("version").notNull().default(1),
     status: outboxStatus("status").notNull().default("PENDING"),
+    deliveryStatus: varchar("delivery_status", { length: 20 })
+      .$type<EventDeliveryStatus>()
+      .notNull()
+      .default("PENDING"),
     attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastError: varchar("last_error", { length: 2_000 }),
+    processingStartedAt: timestamp("processing_started_at", {
+      withTimezone: true,
+    }),
     publishedAt: timestamp("published_at", { withTimezone: true }),
+    updatedAt: updatedAt(),
     createdAt: createdAt(),
   },
   (table) => [
-    index("outbox_events_pending_idx").on(table.status, table.occurredAt),
+    unique("outbox_events_org_id_unique").on(table.organizationId, table.id),
+    index("outbox_events_pending_idx").on(
+      table.organizationId,
+      table.deliveryStatus,
+      table.nextAttemptAt,
+      table.createdAt,
+    ),
     index("outbox_events_aggregate_idx").on(
+      table.organizationId,
       table.aggregateId,
       table.occurredAt,
     ),
     index("outbox_events_org_idx").on(table.organizationId, table.occurredAt),
+    index("outbox_events_type_idx").on(
+      table.organizationId,
+      table.eventType,
+      table.createdAt,
+    ),
+    check(
+      "outbox_events_attempts_nonnegative",
+      sql`${table.attempts} >= 0`,
+    ),
+    check(
+      "outbox_events_delivery_status_check",
+      sql`${table.deliveryStatus} in ('PENDING', 'PROCESSING', 'PUBLISHED', 'FAILED', 'DEAD_LETTERED')`,
+    ),
+    foreignKey({
+      name: "outbox_events_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+export const eventProcessingRecords = pgTable(
+  "event_processing_records",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    eventId: uuid("event_id").notNull(),
+    eventType: varchar("event_type", { length: 150 }).notNull(),
+    handlerName: varchar("handler_name", { length: 150 }).notNull(),
+    eventVersion: integer("event_version").notNull(),
+    status: varchar("status", { length: 20 })
+      .$type<EventProcessingStatus>()
+      .notNull()
+      .default("PROCESSING"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    failureKind: varchar("failure_kind", { length: 40 })
+      .$type<EventFailureKind>(),
+    lastError: varchar("last_error", { length: 2_000 }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    foreignKey({
+      name: "event_processing_records_outbox_fk",
+      columns: [table.organizationId, table.eventId],
+      foreignColumns: [outboxEvents.organizationId, outboxEvents.id],
+    }).onDelete("restrict"),
+    unique("event_processing_records_event_handler_unique").on(
+      table.eventId,
+      table.handlerName,
+    ),
+    index("event_processing_records_org_status_idx").on(
+      table.organizationId,
+      table.status,
+      table.nextAttemptAt,
+    ),
+    check(
+      "event_processing_records_attempts_nonnegative",
+      sql`${table.attempts} >= 0`,
+    ),
+    check(
+      "event_processing_records_status_check",
+      sql`${table.status} in ('PROCESSING', 'SUCCEEDED', 'FAILED', 'DEAD_LETTERED')`,
+    ),
+  ],
+);
+
+export const eventDeadLetters = pgTable(
+  "event_dead_letters",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    eventId: uuid("event_id").notNull(),
+    eventType: varchar("event_type", { length: 150 }).notNull(),
+    handlerName: varchar("handler_name", { length: 150 }).notNull(),
+    failureKind: varchar("failure_kind", { length: 40 })
+      .$type<EventFailureKind>()
+      .notNull(),
+    failureReason: varchar("failure_reason", { length: 2_000 }).notNull(),
+    attempts: integer("attempts").notNull(),
+    deadLetteredAt: timestamp("dead_lettered_at", {
+      withTimezone: true,
+    }).notNull(),
+    replayedAt: timestamp("replayed_at", { withTimezone: true }),
+    replayCount: integer("replay_count").notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    foreignKey({
+      name: "event_dead_letters_outbox_fk",
+      columns: [table.organizationId, table.eventId],
+      foreignColumns: [outboxEvents.organizationId, outboxEvents.id],
+    }).onDelete("restrict"),
+    unique("event_dead_letters_event_handler_unique").on(
+      table.eventId,
+      table.handlerName,
+    ),
+    index("event_dead_letters_org_time_idx").on(
+      table.organizationId,
+      table.deadLetteredAt,
+    ),
+    check(
+      "event_dead_letters_attempts_nonnegative",
+      sql`${table.attempts} >= 0 and ${table.replayCount} >= 0`,
+    ),
   ],
 );

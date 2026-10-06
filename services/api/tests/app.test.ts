@@ -1,8 +1,63 @@
 import { createHash } from "node:crypto";
 import { loadConfig } from "@onecore/config";
+import type {
+  AuthorizationContext,
+  AuthorizationMetadata,
+  AuthorizationResult,
+  AuthorizationService,
+  OrganizationTransaction,
+  ResolvedAuthorizationContext,
+} from "@onecore/database";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { MemoryIdentityRepository } from "./identity-fixture.js";
+
+function allowOnlyTestTenant(organizationId: string): AuthorizationService {
+  const withPermission = async (
+    context: AuthorizationContext | null,
+    _permissionKey: string,
+    _metadata: AuthorizationMetadata,
+    operation: (
+      transaction: OrganizationTransaction,
+      context: ResolvedAuthorizationContext,
+    ) => Promise<unknown>,
+  ): Promise<AuthorizationResult<unknown>> => {
+    const membershipId = context?.membershipId;
+    if (
+      !context ||
+      !membershipId ||
+      context.organizationId !== organizationId
+    ) {
+      return {
+        allowed: false,
+        statusCode: context ? 403 : 401,
+        dataScopes: [],
+      };
+    }
+    const resolvedContext = {
+      ...context,
+      organizationId,
+      membershipId,
+      branch: context.branchId
+        ? { branchId: context.branchId, name: "Tenant A Branch", code: "A" }
+        : null,
+      branchAccessMode: "ALL" as const,
+      roles: [],
+      platformRoles: [],
+      permissions: [],
+    };
+    const value = await operation(
+      {} as OrganizationTransaction,
+      resolvedContext,
+    );
+    return {
+      allowed: true,
+      value,
+      context: resolvedContext,
+    };
+  };
+  return { withPermission } as unknown as AuthorizationService;
+}
 
 describe("API foundation", () => {
   it("serves a liveness response", async () => {
@@ -55,6 +110,79 @@ describe("API foundation", () => {
       url: "/modules",
     });
     expect(anonymousModuleCatalog.statusCode).toBe(401);
+    const anonymousConfiguration = await app.inject({
+      method: "GET",
+      url: `/organizations/${crypto.randomUUID()}/configuration`,
+    });
+    expect(anonymousConfiguration.statusCode).toBe(401);
+    const anonymousFeatureMutation = await app.inject({
+      method: "PATCH",
+      url: `/organizations/${crypto.randomUUID()}/features/ENABLE_AI`,
+      payload: { enabled: true },
+    });
+    expect(anonymousFeatureMutation.statusCode).toBe(401);
+    const anonymousCustomFields = await app.inject({
+      method: "GET",
+      url: `/organizations/${crypto.randomUUID()}/custom-fields`,
+    });
+    expect(anonymousCustomFields.statusCode).toBe(401);
+    const anonymousWorkflows = await app.inject({
+      method: "GET",
+      url: `/organizations/${crypto.randomUUID()}/workflows`,
+    });
+    expect(anonymousWorkflows.statusCode).toBe(401);
+    const anonymousDomains = await app.inject({
+      method: "GET",
+      url: `/organizations/${crypto.randomUUID()}/domains`,
+    });
+    expect(anonymousDomains.statusCode).toBe(401);
+    const clientSuppliedBranch = await app.inject({
+      method: "PATCH",
+      url: `/organizations/${crypto.randomUUID()}/features/BRANCH_FLAG`,
+      payload: {
+        scope: "BRANCH",
+        branchId: crypto.randomUUID(),
+        enabled: true,
+      },
+    });
+    expect(clientSuppliedBranch.statusCode).toBe(400);
+    const executableCustomFieldMetadata = await app.inject({
+      method: "POST",
+      url: `/organizations/${crypto.randomUUID()}/custom-fields`,
+      payload: {
+        entityType: "test_record",
+        key: "unsafe_field",
+        label: "Unsafe Field",
+        fieldType: "TEXT",
+        validation: { script: "return true" },
+      },
+    });
+    expect(executableCustomFieldMetadata.statusCode).toBe(400);
+    const executableWorkflowAction = await app.inject({
+      method: "POST",
+      url: `/organizations/${crypto.randomUUID()}/workflows/${crypto.randomUUID()}/versions`,
+      payload: {
+        steps: [{ key: "start", name: "Start", position: 0 }],
+        actions: [
+          {
+            stepKey: "start",
+            actionType: "NOTIFICATION",
+            configuration: { script: "DROP TABLE organizations" },
+          },
+        ],
+      },
+    });
+    expect(executableWorkflowAction.statusCode).toBe(400);
+    const secretBearingIntegration = await app.inject({
+      method: "POST",
+      url: `/organizations/${crypto.randomUUID()}/integrations`,
+      payload: {
+        key: "gateway",
+        provider: "PAYMENT_GATEWAY",
+        apiKey: "must-not-be-accepted",
+      },
+    });
+    expect(secretBearingIntegration.statusCode).toBe(400);
 
     const userId = crypto.randomUUID();
     const organizationId = crypto.randomUUID();
@@ -112,7 +240,99 @@ describe("API foundation", () => {
       cookies: { onecore_session: sessionSecret },
     });
     expect(moduleDenied.statusCode).toBe(403);
+    const configurationDenied = await authenticatedApp.inject({
+      method: "GET",
+      url: `/organizations/${organizationId}/configuration`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(configurationDenied.statusCode).toBe(403);
     await authenticatedApp.close();
+    await app.close();
+  });
+
+  it("does not let configuration route IDs switch the verified organization or branch", async () => {
+    const userId = crypto.randomUUID();
+    const organizationA = crypto.randomUUID();
+    const organizationB = crypto.randomUUID();
+    const branchA = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+    const sessionSecret = "b".repeat(43);
+    const secretHash = createHash("sha256").update(sessionSecret).digest("hex");
+    const identity = new MemoryIdentityRepository();
+    identity.addUser({
+      id: userId,
+      email: "tenant-boundary@example.test",
+      displayName: "Tenant Boundary Test",
+      status: "ACTIVE",
+      passwordHash: null,
+      failedLoginAttempts: 0,
+      failedLoginWindowStartedAt: null,
+      lockedUntil: null,
+      lastLoginAt: null,
+    });
+    identity.addMembership(userId, {
+      organizationId: organizationA,
+      name: "Tenant A",
+      slug: "tenant-a",
+      branchAccessMode: "ALL",
+    });
+    identity.addOrganizationBranch(organizationA, {
+      branchId: branchA,
+      name: "Tenant A Branch",
+      code: "A",
+    });
+    identity.sessions.set(secretHash, {
+      id: sessionId,
+      secretHash,
+      userId,
+      organizationId: organizationA,
+      branchId: branchA,
+      expiresAt: new Date(Date.now() + 60_000),
+      lastUsedAt: new Date(),
+      revokedAt: null,
+      ipAddress: null,
+      userAgent: null,
+    });
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      allowOnlyTestTenant(organizationA),
+    );
+
+    for (const url of [
+      `/organizations/${organizationB}/configuration`,
+      `/organizations/${organizationB}/features`,
+      `/organizations/${organizationB}/custom-fields`,
+      `/organizations/${organizationB}/workflows`,
+      `/organizations/${organizationB}/notification-settings`,
+      `/organizations/${organizationB}/integrations`,
+      `/organizations/${organizationB}/domains`,
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url,
+        cookies: { onecore_session: sessionSecret },
+      });
+      expect(response.statusCode, url).toBe(404);
+    }
+
+    const foreignBranch = await app.inject({
+      method: "PATCH",
+      url: `/organizations/${organizationA}/notification-settings`,
+      cookies: { onecore_session: sessionSecret },
+      payload: {
+        events: [
+          {
+            event: "APPROVAL_REQUESTED",
+            channel: "IN_APP",
+            enabled: true,
+            branchId: crypto.randomUUID(),
+            recipientMode: "BRANCH_MANAGERS",
+          },
+        ],
+      },
+    });
+    expect(foreignBranch.statusCode).toBe(403);
     await app.close();
   });
 

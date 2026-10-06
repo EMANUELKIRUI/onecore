@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export * from "./events.js";
+
 export const deploymentTypes = [
   "SAAS",
   "CUSTOM",
@@ -8,6 +10,38 @@ export const deploymentTypes = [
 ] as const;
 export const deploymentTypeSchema = z.enum(deploymentTypes);
 export type DeploymentType = z.infer<typeof deploymentTypeSchema>;
+
+export interface ConfigurationCapabilities {
+  deploymentType: DeploymentType;
+  organizationSettings: true;
+  featureFlags: true;
+  branchOverrides: true;
+  customFields: true;
+  workflowMetadata: true;
+  notificationPreferences: true;
+  integrationMetadata: true;
+  customDomains: true;
+  externalProviderExecution: false;
+  workflowExecution: false;
+}
+
+export function resolveConfigurationCapabilities(
+  deploymentType: DeploymentType,
+): ConfigurationCapabilities {
+  return {
+    deploymentType,
+    organizationSettings: true,
+    featureFlags: true,
+    branchOverrides: true,
+    customFields: true,
+    workflowMetadata: true,
+    notificationPreferences: true,
+    integrationMetadata: true,
+    customDomains: true,
+    externalProviderExecution: false,
+    workflowExecution: false,
+  };
+}
 
 export const organizationStatuses = [
   "PENDING",
@@ -198,6 +232,90 @@ export const permissionCatalog = [
     description: "Update organization settings.",
   },
   {
+    module: "core.organization",
+    resource: "features",
+    action: "read",
+    description: "Read organization feature assignments.",
+  },
+  {
+    module: "core.organization",
+    resource: "features",
+    action: "update",
+    description: "Update organization feature assignments.",
+  },
+  {
+    module: "core.organization",
+    resource: "custom_fields",
+    action: "read",
+    description: "Read organization custom-field definitions.",
+  },
+  {
+    module: "core.organization",
+    resource: "custom_fields",
+    action: "manage",
+    description: "Manage organization custom-field definitions.",
+  },
+  {
+    module: "core.organization",
+    resource: "workflows",
+    action: "read",
+    description: "Read organization workflow metadata.",
+  },
+  {
+    module: "core.organization",
+    resource: "workflows",
+    action: "manage",
+    description: "Manage organization workflow metadata.",
+  },
+  {
+    module: "core.organization",
+    resource: "notifications",
+    action: "read",
+    description: "Read organization notification preferences.",
+  },
+  {
+    module: "core.organization",
+    resource: "notifications",
+    action: "manage",
+    description: "Manage organization notification preferences.",
+  },
+  {
+    module: "core.organization",
+    resource: "integrations",
+    action: "read",
+    description: "Read organization integration metadata.",
+  },
+  {
+    module: "core.organization",
+    resource: "integrations",
+    action: "manage",
+    description: "Manage organization integration metadata.",
+  },
+  {
+    module: "core.organization",
+    resource: "domains",
+    action: "read",
+    description: "Read organization custom-domain metadata.",
+  },
+  {
+    module: "core.organization",
+    resource: "domains",
+    action: "manage",
+    description: "Manage organization custom-domain metadata.",
+  },
+  {
+    module: "core.organization",
+    resource: "events",
+    action: "read",
+    description: "Inspect organization event delivery and dead letters.",
+  },
+  {
+    module: "core.organization",
+    resource: "events",
+    action: "manage",
+    description: "Dispatch and replay organization events.",
+  },
+  {
     module: "core.rbac",
     resource: "organization_owner",
     action: "manage",
@@ -334,11 +452,31 @@ export const moduleAdministrationPermissionKeys = [
 export const organizationOwnerPermissionKey =
   "core.rbac.organization_owner.manage";
 
+export const organizationConfigurationPermissionKeys = [
+  "core.organization.features.read",
+  "core.organization.features.update",
+  "core.organization.custom_fields.read",
+  "core.organization.custom_fields.manage",
+  "core.organization.workflows.read",
+  "core.organization.workflows.manage",
+  "core.organization.notifications.read",
+  "core.organization.notifications.manage",
+  "core.organization.integrations.read",
+  "core.organization.integrations.manage",
+  "core.organization.domains.read",
+  "core.organization.domains.manage",
+  "core.organization.events.read",
+  "core.organization.events.manage",
+] as const;
+
 export const defaultOrganizationRoleTemplates = [
   { name: "Organization Owner", permissionKeys: null },
   {
     name: "Organization Admin",
-    permissionKeys: roleAdministrationPermissionKeys,
+    permissionKeys: [
+      ...roleAdministrationPermissionKeys,
+      ...organizationConfigurationPermissionKeys,
+    ],
   },
   {
     name: "Manager",
@@ -685,14 +823,43 @@ export const entitlementSourceSchema = z.enum(entitlementSources);
 export type EntitlementSource = z.infer<typeof entitlementSourceSchema>;
 
 export const featureFlagScopes = [
+  "SYSTEM",
+  "PLATFORM",
   "GLOBAL",
   "ENVIRONMENT",
   "MODULE",
   "ORGANIZATION",
+  "BRANCH",
   "USER",
 ] as const;
 export const featureFlagScopeSchema = z.enum(featureFlagScopes);
 export type FeatureFlagScope = z.infer<typeof featureFlagScopeSchema>;
+
+export const featureFlagTypes = [
+  "BOOLEAN",
+  "STRING",
+  "NUMBER",
+  "JSON",
+] as const;
+export const featureFlagTypeSchema = z.enum(featureFlagTypes);
+export type FeatureFlagType = z.infer<typeof featureFlagTypeSchema>;
+
+export const featureFlagValueSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("BOOLEAN"), value: z.boolean() }),
+  z.object({ type: z.literal("STRING"), value: z.string().max(4_096) }),
+  z.object({ type: z.literal("NUMBER"), value: z.number().finite() }),
+  z.object({
+    type: z.literal("JSON"),
+    value: z.json().refine((value) => JSON.stringify(value).length <= 65_536),
+  }),
+]);
+
+export function parseFeatureFlagValue(
+  type: FeatureFlagType,
+  value: unknown,
+): unknown {
+  return featureFlagValueSchema.parse({ type, value }).value;
+}
 
 export const billingIntervals = [
   "MONTHLY",
@@ -727,6 +894,10 @@ export const customFieldTypes = [
 ] as const;
 export const customFieldTypeSchema = z.enum(customFieldTypes);
 export type CustomFieldType = z.infer<typeof customFieldTypeSchema>;
+
+export const customFieldStatuses = ["ACTIVE", "INACTIVE"] as const;
+export const customFieldStatusSchema = z.enum(customFieldStatuses);
+export type CustomFieldStatus = z.infer<typeof customFieldStatusSchema>;
 
 export const workflowStatuses = ["DRAFT", "ACTIVE", "ARCHIVED"] as const;
 export const workflowStatusSchema = z.enum(workflowStatuses);

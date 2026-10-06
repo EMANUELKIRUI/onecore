@@ -7,6 +7,9 @@ import {
 import type { ApiErrorResponse, HealthResponse } from "@onecore/contracts";
 import { registerAuthentication } from "./authentication.js";
 import { registerAuthorizationRoutes } from "./authorization.js";
+import { registerConfigurationRoutes } from "./configuration.js";
+import { registerConfigurationResourceRoutes } from "./configuration-resources.js";
+import { registerEventRoutes } from "./events.js";
 import { registerModuleRoutes } from "./modules.js";
 import { createApiFastify } from "./fastify-instance.js";
 
@@ -19,6 +22,9 @@ export function buildApp(
 
   registerAuthentication(app, config, identityRepository);
   registerAuthorizationRoutes(app, authorizationService);
+  registerConfigurationRoutes(app, authorizationService);
+  registerConfigurationResourceRoutes(app, authorizationService);
+  registerEventRoutes(app, authorizationService);
   registerModuleRoutes(app, authorizationService);
 
   app.get<{ Reply: HealthResponse }>("/health", async () => ({ status: "ok" }));

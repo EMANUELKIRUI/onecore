@@ -16,9 +16,74 @@ import {
   validateModuleDependencyGraph,
   organizationStatusSchema,
   parseCustomFieldValue,
+  resolveConfigurationCapabilities,
+  createDomainEvent,
+  parseDomainEvent,
 } from "../src/index.js";
 
 describe("platform domain values", () => {
+  it("creates and validates versioned tenant event envelopes", () => {
+    const event = createDomainEvent({
+      eventType: "CONFIGURATION_CHANGED",
+      organizationId: "11111111-1111-4111-8111-111111111111",
+      actorUserId: "22222222-2222-4222-8222-222222222222",
+      aggregateType: "organization_configuration",
+      aggregateId: "11111111-1111-4111-8111-111111111111",
+      payload: {
+        resource: "organization_settings",
+        resourceId: "11111111-1111-4111-8111-111111111111",
+        changedFields: ["timezone"],
+      },
+      metadata: { source: "api-test" },
+    });
+
+    expect(event.eventId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(event.correlationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(event.eventVersion).toBe(1);
+    expect(parseDomainEvent(event)).toEqual(event);
+    expect(() =>
+      createDomainEvent({
+        eventType: "CONFIGURATION_CHANGED",
+        organizationId: "11111111-1111-4111-8111-111111111111",
+        aggregateType: "organization_configuration",
+        aggregateId: "11111111-1111-4111-8111-111111111111",
+        payload: {
+          resource: "organization_settings",
+          resourceId: "11111111-1111-4111-8111-111111111111",
+          changedFields: [],
+          arbitrarySql: "DROP TABLE organizations",
+        } as never,
+      }),
+    ).toThrow();
+    expect(() =>
+      parseDomainEvent({ ...event, eventVersion: 99 }),
+    ).toThrow(/Unsupported/);
+    expect(() =>
+      parseDomainEvent({ ...event, metadata: { script: "execute()" } }),
+    ).toThrow(/inert/);
+    expect(() =>
+      parseDomainEvent({
+        ...event,
+        metadata: { note: "x".repeat(65_537) },
+      }),
+    ).toThrow(/maximum size/);
+  });
+
+  it("resolves configuration capabilities consistently for deployment types", () => {
+    for (const deploymentType of [
+      "SAAS",
+      "CUSTOM",
+      "DEDICATED",
+      "ENTERPRISE",
+    ] as const) {
+      const capabilities = resolveConfigurationCapabilities(deploymentType);
+      expect(capabilities.deploymentType).toBe(deploymentType);
+      expect(capabilities.customFields).toBe(true);
+      expect(capabilities.workflowExecution).toBe(false);
+      expect(capabilities.externalProviderExecution).toBe(false);
+    }
+  });
+
   it("restricts deployment type and organization lifecycle to platform values", () => {
     expect(deploymentTypeSchema.parse("SAAS")).toBe("SAAS");
     expect(deploymentTypeSchema.parse("DEDICATED")).toBe("DEDICATED");
