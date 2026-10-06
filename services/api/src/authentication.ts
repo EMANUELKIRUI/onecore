@@ -100,7 +100,7 @@ function clearSessionCookie(reply: FastifyReply, config: RuntimeConfig) {
   reply.clearCookie(SESSION_COOKIE, cookieOptions(config));
 }
 
-function validateMutationOrigin(
+export function validateMutationOrigin(
   request: FastifyRequest,
   reply: FastifyReply,
   config: RuntimeConfig,

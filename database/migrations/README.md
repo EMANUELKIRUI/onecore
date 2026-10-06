@@ -65,3 +65,15 @@ organization, branch, and branch-assignment context; table-level update
 privileges remain absent. Create the `onecore_app` role as non-owner and
 `NOBYPASSRLS` before applying migrations; do not provision its table access
 with ad-hoc grants.
+
+## Production lifecycle mutations
+
+The lifecycle mutation migration grants the runtime role column-scoped `INSERT`
+on organizations, users, memberships, and outbox events, plus organization
+status updates. Trusted organization provisioning may insert only the
+established system-role templates, with a `SUPERADMIN` platform role required
+by restrictive RLS policy for system-role writes; tenant policies continue to
+bind every row to transaction-local organization context. User creation and
+invitations run only inside the authorized organization transaction using
+`core.organization.user.create`. Do not grant table ownership or broader
+update/delete privileges to enable these paths.

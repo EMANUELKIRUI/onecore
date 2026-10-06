@@ -1,5 +1,6 @@
+import { sql } from "drizzle-orm";
 import { parseDomainEvent, type EventEnvelope } from "@onecore/core-domain";
-import { auditLogs, outboxEvents } from "../schema/index.js";
+import { auditLogs } from "../schema/index.js";
 import type { OrganizationTransaction } from "./tenant-context.js";
 
 export type DomainEvent = EventEnvelope;
@@ -9,23 +10,21 @@ export async function recordOutboxEvent(
   input: unknown,
 ): Promise<EventEnvelope> {
   const event = parseDomainEvent(input);
-  await transaction.insert(outboxEvents).values({
-    id: event.eventId,
-    eventType: event.eventType,
-    aggregateType: event.aggregateType,
-    aggregateId: event.aggregateId,
-    organizationId: event.organizationId,
-    branchId: event.branchId ?? null,
-    actorUserId: event.actorUserId ?? null,
-    correlationId: event.correlationId,
-    causationId: event.causationId ?? null,
-    occurredAt: event.occurredAt,
-    payload: event.payload,
-    metadata: event.metadata,
-    version: event.eventVersion,
-    deliveryStatus: "PENDING",
-    nextAttemptAt: new Date(),
-  });
+  await transaction.execute(sql`
+    insert into outbox_events (
+      id, event_type, aggregate_type, aggregate_id, organization_id, branch_id,
+      actor_user_id, correlation_id, causation_id, occurred_at, payload,
+      metadata, version, delivery_status, next_attempt_at
+    ) values (
+      ${event.eventId}, ${event.eventType}, ${event.aggregateType},
+      ${event.aggregateId}, ${event.organizationId}, ${event.branchId ?? null},
+      ${event.actorUserId ?? null}, ${event.correlationId},
+      ${event.causationId ?? null}, ${event.occurredAt.toISOString()},
+      ${JSON.stringify(event.payload)}::jsonb,
+      ${JSON.stringify(event.metadata)}::jsonb, ${event.eventVersion},
+      'PENDING', ${new Date().toISOString()}
+    )
+  `);
   await transaction.insert(auditLogs).values({
     organizationId: event.organizationId,
     actorUserId: event.actorUserId ?? null,

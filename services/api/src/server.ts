@@ -5,6 +5,7 @@ import {
   createDatabaseRateLimiter,
   createDatabase,
   createIdentityRepository,
+  createLifecycleMutationService,
 } from "@onecore/database";
 import { buildApp } from "./app.js";
 
@@ -20,6 +21,7 @@ const app = buildApp(
   {
     readinessCheck: () => checkDatabaseConnectivity(db),
     rateLimiter: createDatabaseRateLimiter(db),
+    lifecycleMutations: createLifecycleMutationService(db),
   },
 );
 app.addHook("onClose", close);

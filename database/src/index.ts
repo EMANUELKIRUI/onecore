@@ -18,6 +18,13 @@ export {
 } from "./organization-repository.js";
 export { recordOutboxEvent, type DomainEvent } from "./outbox.js";
 export {
+  createLifecycleMutationService,
+  LifecycleMutationError,
+  type LifecycleMutationService,
+  type LifecycleRequestMetadata,
+  type PlatformLifecycleActor,
+} from "./lifecycle-mutations.js";
+export {
   calculateEventRetryDelay,
   createEventHandlerRegistry,
   dispatchAuthorizedOutboxBatch,
@@ -120,7 +127,10 @@ export {
   type RateLimiter,
   type RateLimitInput,
 } from "./rate-limiter.js";
-export { createServiceTelemetry, observeServiceOperation } from "./service-telemetry.js";
+export {
+  createServiceTelemetry,
+  observeServiceOperation,
+} from "./service-telemetry.js";
 
 export type Database = PostgresJsDatabase;
 

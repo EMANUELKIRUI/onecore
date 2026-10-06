@@ -280,12 +280,44 @@ describe("PostgreSQL persistence foundation", () => {
     }
 
     const requiredColumnPrivileges = [
+      "organizations:INSERT:id",
+      "organizations:INSERT:name",
+      "organizations:INSERT:slug",
+      "organizations:INSERT:industry",
+      "organizations:INSERT:status",
+      "organizations:INSERT:deployment_type",
+      "users:INSERT:id",
+      "users:INSERT:email",
+      "users:INSERT:display_name",
+      "users:INSERT:status",
+      "users:INSERT:password_hash",
+      "organization_memberships:INSERT:id",
+      "organization_memberships:INSERT:organization_id",
+      "organization_memberships:INSERT:user_id",
+      "organization_memberships:INSERT:status",
+      "organization_memberships:INSERT:branch_access_mode",
+      "outbox_events:INSERT:id",
+      "outbox_events:INSERT:event_type",
+      "outbox_events:INSERT:aggregate_type",
+      "outbox_events:INSERT:aggregate_id",
+      "outbox_events:INSERT:organization_id",
+      "outbox_events:INSERT:branch_id",
+      "outbox_events:INSERT:actor_user_id",
+      "outbox_events:INSERT:correlation_id",
+      "outbox_events:INSERT:causation_id",
+      "outbox_events:INSERT:occurred_at",
+      "outbox_events:INSERT:payload",
+      "outbox_events:INSERT:metadata",
+      "outbox_events:INSERT:version",
+      "outbox_events:INSERT:delivery_status",
+      "outbox_events:INSERT:next_attempt_at",
       "users:UPDATE:status",
       "users:UPDATE:failed_login_attempts",
       "users:UPDATE:failed_login_window_started_at",
       "users:UPDATE:locked_until",
       "users:UPDATE:last_login_at",
       "users:UPDATE:updated_at",
+      "organizations:UPDATE:status",
       "sessions:INSERT:secret_hash",
       "sessions:INSERT:user_id",
       "sessions:INSERT:organization_id",
@@ -306,6 +338,7 @@ describe("PostgreSQL persistence foundation", () => {
       "roles:INSERT:organization_id",
       "roles:INSERT:name",
       "roles:INSERT:description",
+      "roles:INSERT:is_system",
       "roles:UPDATE:name",
       "roles:UPDATE:description",
       "roles:UPDATE:status",
@@ -316,15 +349,29 @@ describe("PostgreSQL persistence foundation", () => {
         true,
       );
     }
+    const forbiddenRoleInsertColumns = [
+      "roles:INSERT:id",
+      "roles:INSERT:status",
+      "roles:INSERT:created_at",
+      "roles:INSERT:updated_at",
+    ];
+    for (const privilege of forbiddenRoleInsertColumns) {
+      expect(initialApplicationColumnPrivileges.has(privilege), privilege).toBe(
+        false,
+      );
+    }
 
     const forbidden = [
-      "users:INSERT",
       "users:UPDATE",
+      "organizations:INSERT",
+      "organizations:UPDATE",
       "users:DELETE",
+      "users:INSERT",
       "sessions:INSERT",
       "sessions:UPDATE",
       "organization_memberships:UPDATE",
-      "organizations:UPDATE",
+      "organization_memberships:INSERT",
+      "outbox_events:INSERT",
       "branches:UPDATE",
       "membership_branches:UPDATE",
       "roles:INSERT",
@@ -340,6 +387,42 @@ describe("PostgreSQL persistence foundation", () => {
       );
     }
     expect(initialApplicationSchemaCreate).toBe(false);
+  });
+
+  it("keeps lifecycle grants column-scoped and system-role provisioning restrictive", async () => {
+    const organizationPrivileges = await client.query<{
+      tableUpdate: boolean;
+      statusUpdate: boolean;
+    }>(`
+      SELECT
+        has_table_privilege('onecore_app', 'public.organizations', 'UPDATE') AS "tableUpdate",
+        has_column_privilege('onecore_app', 'public.organizations', 'status', 'UPDATE') AS "statusUpdate"
+    `);
+    expect(organizationPrivileges.rows[0]).toEqual({
+      tableUpdate: false,
+      statusUpdate: true,
+    });
+
+    const policies = await client.query<{
+      policyname: string;
+      permissive: string;
+      cmd: string;
+      roles: string[];
+      with_check: string | null;
+    }>(`
+      SELECT policyname, permissive, cmd, roles, with_check
+      FROM pg_policies
+      WHERE schemaname = 'public'
+        AND tablename = 'roles'
+        AND policyname = 'roles_system_templates_platform_provisioning'
+    `);
+    expect(policies.rows).toHaveLength(1);
+    expect(policies.rows[0]).toMatchObject({
+      permissive: "RESTRICTIVE",
+      cmd: "INSERT",
+      roles: ["onecore_app"],
+    });
+    expect(policies.rows[0]?.with_check).toContain("SUPERADMIN");
   });
 
   it("migrates a clean database and keeps organizations and branches tenant-isolated", async () => {

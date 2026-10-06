@@ -3,6 +3,7 @@ import {
   denyAllAuthorizationService,
   type AuthorizationService,
   type IdentityRepository,
+  type LifecycleMutationService,
   type RateLimiter,
 } from "@onecore/database";
 import type { ApiErrorResponse, HealthResponse } from "@onecore/contracts";
@@ -20,11 +21,13 @@ import { registerConfigurationRoutes } from "./configuration.js";
 import { registerConfigurationResourceRoutes } from "./configuration-resources.js";
 import { registerEventRoutes } from "./events.js";
 import { registerModuleRoutes } from "./modules.js";
+import { registerLifecycleRoutes } from "./lifecycle.js";
 import { createApiFastify } from "./fastify-instance.js";
 
 export interface ApiAppOptions {
   readinessCheck?: () => Promise<void>;
   rateLimiter?: RateLimiter;
+  lifecycleMutations?: LifecycleMutationService;
 }
 
 declare module "fastify" {
@@ -149,6 +152,14 @@ export function buildApp(
   registerConfigurationResourceRoutes(app, correlatedAuthorization);
   registerEventRoutes(app, correlatedAuthorization);
   registerModuleRoutes(app, correlatedAuthorization);
+  if (options.lifecycleMutations) {
+    registerLifecycleRoutes(
+      app,
+      correlatedAuthorization,
+      options.lifecycleMutations,
+      config,
+    );
+  }
 
   const live = async (): Promise<HealthResponse> => ({ status: "ok" });
   app.get<{ Reply: HealthResponse }>("/health", live);

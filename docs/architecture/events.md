@@ -40,19 +40,22 @@ The outbox, processing, and dead-letter records are organization-scoped under fo
 
 Core-domain tests cover valid envelopes, invalid versions/payloads, executable and secret metadata, and size limits. PGlite persistence tests cover commit/rollback atomicity and forced RLS. The same database tests are useful local checks, but production PostgreSQL role ownership, live concurrent worker behavior, and live replay/RLS security still require validation against the configured PostgreSQL 18.6 instance.
 
-### Phase 8 lifecycle blockers
+### Production lifecycle mutations
 
-`ORGANIZATION_CREATED`, `ORGANIZATION_ACTIVATED`, `USER_CREATED`, and
-`USER_INVITED` are registered contracts but are not emitted. The current
-production API/repository has no organization provisioning or activation
-mutation, and no user signup or invitation mutation. Organization and user
-inserts in the opt-in development seed are bootstrap fixtures, not production
-application mutation boundaries, and deliberately do not publish these
-events.
+The API provides canonical organization creation and activation, platform user
+creation, and organization user invitations. Each successful mutation writes
+its state, audit record, and corresponding lifecycle event through one
+authorized transaction and the existing outbox. Organization creation begins
+in `PENDING`, provisions the existing default role templates, and creates an
+`ACTIVE` membership with the `Organization Owner` role for the explicitly
+identified bootstrap owner. New bootstrap identities are created as `ACTIVE`
+with an Argon2id password hash; existing active identities are reused without
+changing their credentials. The platform SUPERADMIN is not automatically made
+a tenant member.
 
-These four events remain a **Phase 8 code-completion blocker** until their
-canonical production mutation paths exist. When those paths are implemented,
-each must write its state, corresponding audit record, and event through the
-same authorized transaction and existing outbox. Do not add event-only
-endpoints or emit events from the seed to close this gap. No POS, Inventory,
-Sales, external broker, or frontend consumer is part of this phase.
+Invitation persistence does not send email or SMS. Delivery, acceptance,
+credential setup, and invitation-token lifecycle remain separate work; the
+ordinary invitation event is the integration point for a delivery consumer.
+The development seed remains bootstrap-only and does not publish lifecycle
+events. No POS, Inventory, Sales, external broker, or frontend consumer is
+introduced by these mutations.
