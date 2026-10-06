@@ -7,6 +7,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   createDomainEvent,
   moduleManifestSchema,
@@ -16,7 +17,15 @@ import {
 import {
   dispatchOutboxBatch,
   EventDispatchError,
+  createPlatformServices,
+  createJobHandlerRegistry,
+  createJobService,
+  JobExecutionError,
   recordOutboxEvent,
+  type JobHandler,
+  type AuthorizationContext,
+  type AuthorizationResult,
+  type AuthorizationService,
   type EventDispatchOptions,
   type EventHandler,
   type OrganizationTransaction,
@@ -80,6 +89,92 @@ function eventWorkerContext(
     roles: [],
     platformRoles: [],
     permissions: [],
+  };
+}
+
+function platformTestAuthorization(): AuthorizationService {
+  async function run<T>(
+    context: AuthorizationContext | null,
+    operation: (
+      transaction: OrganizationTransaction,
+      context: ResolvedAuthorizationContext,
+    ) => Promise<T>,
+  ): Promise<AuthorizationResult<T>> {
+    if (!context?.organizationId || !context.membershipId) {
+      return { allowed: false, statusCode: 401, dataScopes: [] };
+    }
+    const resolved: ResolvedAuthorizationContext = {
+      userId: context.userId,
+      sessionId: context.sessionId,
+      organizationId: context.organizationId,
+      membershipId: context.membershipId,
+      branchId: context.branchId,
+      branch: null,
+      branchAccessMode: "ALL",
+      roles: [],
+      platformRoles: [],
+      permissions: [],
+    };
+    const value = await database.transaction(async (transaction) => {
+      await transaction.execute(sql`SET LOCAL ROLE onecore_app`);
+      await transaction.execute(
+        sql`SELECT set_config('app.current_user_id', ${resolved.userId}, true)`,
+      );
+      await transaction.execute(
+        sql`SELECT set_config('app.current_organization_id', ${resolved.organizationId}, true)`,
+      );
+      if (resolved.branchId) {
+        await transaction.execute(
+          sql`SELECT set_config('app.current_branch_id', ${resolved.branchId}, true)`,
+        );
+      }
+      return operation(
+        transaction as unknown as OrganizationTransaction,
+        resolved,
+      );
+    });
+    return { allowed: true, value, context: resolved };
+  }
+
+  return {
+    authorize: async (context) =>
+      context
+        ? {
+            allowed: true,
+            statusCode: 200,
+            context: {
+              ...eventWorkerContext(
+                context.organizationId ?? crypto.randomUUID(),
+                context.userId,
+              ),
+              membershipId: context.membershipId ?? crypto.randomUUID(),
+              branchId: context.branchId,
+            },
+            dataScopes: [],
+          }
+        : { allowed: false, statusCode: 401, dataScopes: [] },
+    hasPermission: async (context) => context !== null,
+    withPermission: (context, _permission, _metadata, operation) =>
+      run(context, operation),
+    withAllPermissions: (context, _permissions, _metadata, operation) =>
+      run(context, operation),
+    withAnyPermission: (context, _permissions, _metadata, operation) =>
+      run(context, operation),
+  };
+}
+
+function testAuthorizationContext(
+  userId: string,
+  organizationId: string,
+  membershipId: string,
+  branchId: string | null = null,
+): AuthorizationContext {
+  return {
+    userId,
+    sessionId: crypto.randomUUID(),
+    organizationId,
+    membershipId,
+    branchId,
   };
 }
 
@@ -2274,5 +2369,290 @@ describe("PostgreSQL persistence foundation", () => {
       },
     );
     expect(missingTenantContext.rows).toEqual([]);
+  });
+
+  it("creates user-scoped notifications and tenant-filtered PostgreSQL search", async () => {
+    const organization = await createOrganization("Platform Inbox and Search");
+    const [user] = await database
+      .insert(schema.users)
+      .values({
+        email: `inbox-search-${crypto.randomUUID()}@example.test`,
+        displayName: "Inbox Search User",
+      })
+      .returning();
+    if (!user) throw new Error("Inbox/search user was not created");
+    const [membership] = await database
+      .insert(schema.organizationMemberships)
+      .values({
+        organizationId: organization.id,
+        userId: user.id,
+        status: "ACTIVE",
+        branchAccessMode: "ALL",
+      })
+      .returning();
+    if (!membership) throw new Error("Inbox/search membership was not created");
+
+    const context = testAuthorizationContext(
+      user.id,
+      organization.id,
+      membership.id,
+    );
+    const metadata = { requestId: crypto.randomUUID() };
+    const services = createPlatformServices(platformTestAuthorization());
+    const notification = await services.createNotification(context, metadata, {
+      recipientUserId: user.id,
+      notificationType: "platform.notice",
+      title: "Platform notice",
+      body: "A durable in-app notification.",
+    });
+    expect(notification.allowed).toBe(true);
+    if (!notification.allowed || !notification.value) {
+      throw new Error("Notification creation was denied");
+    }
+    const inbox = await services.listNotifications(context, metadata);
+    expect(inbox.allowed).toBe(true);
+    if (!inbox.allowed) throw new Error("Inbox read was denied");
+    expect(inbox.value).toHaveLength(1);
+    expect(inbox.value[0]?.id).toBe(notification.value.id);
+    expect(
+      await services.setNotificationReadState(
+        context,
+        metadata,
+        notification.value.id,
+        true,
+      ),
+    ).toMatchObject({ allowed: true, value: true });
+
+    const indexing = await services.indexSearchDocument(context, metadata, {
+      indexName: "platform_documents",
+      documentId: "guide-1",
+      title: "Tenant onboarding guide",
+      body: "Operators can find the onboarding guide in platform search.",
+    });
+    expect(indexing).toMatchObject({ allowed: true, value: true });
+    const search = await services.search(context, metadata, {
+      indexName: "platform_documents",
+      query: "onboarding guide",
+      limit: 10,
+    });
+    expect(search.allowed).toBe(true);
+    if (!search.allowed) throw new Error("Platform search was denied");
+    expect(search.value.map(({ documentId }) => documentId)).toEqual([
+      "guide-1",
+    ]);
+
+    const eventRows = await asTenant(organization.id, (transaction) =>
+      transaction.query<{ event_type: string }>(
+        "SELECT event_type FROM outbox_events WHERE event_type IN ('NOTIFICATION_CREATED', 'SEARCH_DOCUMENT_INDEXED') ORDER BY event_type",
+      ),
+    );
+    expect(eventRows.rows.map(({ event_type }) => event_type)).toEqual([
+      "NOTIFICATION_CREATED",
+      "SEARCH_DOCUMENT_INDEXED",
+    ]);
+  });
+
+  it("enqueues idempotent jobs and executes a retry under tenant-scoped worker context", async () => {
+    const organizationA = await createOrganization("Job Service Tenant A");
+    const organizationB = await createOrganization("Job Service Tenant B");
+    const [user] = await database
+      .insert(schema.users)
+      .values({
+        email: `job-service-${crypto.randomUUID()}@example.test`,
+        displayName: "Job Service User",
+      })
+      .returning();
+    if (!user) throw new Error("Job service user was not created");
+    const [membership] = await database
+      .insert(schema.organizationMemberships)
+      .values({
+        organizationId: organizationA.id,
+        userId: user.id,
+        status: "ACTIVE",
+      })
+      .returning();
+    if (!membership) throw new Error("Job service membership was not created");
+
+    let executions = 0;
+    const handler: JobHandler<{ taskId: string }> = {
+      jobType: "tests.retry",
+      owningModule: "core.jobs",
+      requiredModuleEntitlement: null,
+      payloadSchema: z.object({ taskId: z.uuid() }).strict(),
+      execute: async (transaction, _payload, jobContext) => {
+        executions += 1;
+        if (executions === 1) {
+          throw new JobExecutionError("TEMPORARY_FAILURE", true);
+        }
+        await transaction.insert(schema.auditLogs).values({
+          organizationId: jobContext.organizationId,
+          actorUserId: null,
+          action: "TEST_JOB_EFFECT",
+          resource: "job",
+          resourceId: jobContext.jobId,
+          result: "SUCCESS",
+          requestMetadata: { correlationId: jobContext.correlationId },
+        });
+      },
+    };
+    const runtimeDatabase = {
+      transaction: <T>(
+        operation: (transaction: OrganizationTransaction) => Promise<T>,
+      ) =>
+        database.transaction(async (transaction) => {
+          await transaction.execute(sql`SET LOCAL ROLE onecore_app`);
+          return operation(transaction as unknown as OrganizationTransaction);
+        }),
+    } as unknown as Database;
+    const jobs = createJobService(
+      runtimeDatabase,
+      platformTestAuthorization(),
+      createJobHandlerRegistry([handler]),
+    );
+    const context = testAuthorizationContext(
+      user.id,
+      organizationA.id,
+      membership.id,
+    );
+    const input = {
+      jobType: "tests.retry",
+      payload: { taskId: crypto.randomUUID() },
+      idempotencyKey: "retry-once",
+      maxAttempts: 2,
+    };
+    const firstEnqueue = await jobs.enqueue(
+      context,
+      { requestId: crypto.randomUUID() },
+      input,
+    );
+    expect(firstEnqueue.allowed).toBe(true);
+    if (!firstEnqueue.allowed || !firstEnqueue.value) {
+      throw new Error("Job enqueue was denied");
+    }
+    expect(
+      await jobs.enqueue(context, { requestId: crypto.randomUUID() }, input),
+    ).toMatchObject({ allowed: true, value: { id: firstEnqueue.value.id } });
+
+    expect(
+      await jobs.processTenantBatch(organizationA.id, null, "worker-retry", {
+        retryBaseMilliseconds: 100,
+      }),
+    ).toMatchObject({ claimed: 1, succeeded: 0, retrying: 1, failed: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(
+      await jobs.processTenantBatch(organizationA.id, null, "worker-retry"),
+    ).toMatchObject({ claimed: 1, succeeded: 1, retrying: 0, failed: 0 });
+    expect(executions).toBe(2);
+    expect(
+      await jobs.processTenantBatch(organizationB.id, null, "worker-other"),
+    ).toEqual({ claimed: 0, succeeded: 0, retrying: 0, failed: 0 });
+
+    const result = await database
+      .select({
+        status: schema.jobs.status,
+        attempts: schema.jobs.attempts,
+        error: schema.jobs.lastErrorCode,
+      })
+      .from(schema.jobs)
+      .where(eq(schema.jobs.id, firstEnqueue.value.id));
+    expect(result).toEqual([
+      { status: "SUCCEEDED", attempts: 2, error: "TEMPORARY_FAILURE" },
+    ]);
+    const attemptOutcomes = await database
+      .select({ outcome: schema.jobAttempts.outcome })
+      .from(schema.jobAttempts)
+      .where(eq(schema.jobAttempts.jobId, firstEnqueue.value.id))
+      .orderBy(schema.jobAttempts.attempt);
+    expect(attemptOutcomes.map(({ outcome }) => outcome)).toEqual([
+      "RETRY_WAIT",
+      "SUCCEEDED",
+    ]);
+  });
+
+  it("fails closed and prevents forged cross-tenant platform object writes", async () => {
+    const organizationA = await createOrganization("Storage RLS Tenant A");
+    const organizationB = await createOrganization("Storage RLS Tenant B");
+    const [branchA] = await database
+      .insert(schema.branches)
+      .values({
+        organizationId: organizationA.id,
+        name: "Storage branch A",
+        code: `STORAGE-A-${crypto.randomUUID().slice(0, 8)}`,
+      })
+      .returning();
+    const [branchB] = await database
+      .insert(schema.branches)
+      .values({
+        organizationId: organizationB.id,
+        name: "Storage branch B",
+        code: `STORAGE-B-${crypto.randomUUID().slice(0, 8)}`,
+      })
+      .returning();
+    if (!branchA || !branchB) {
+      throw new Error("Storage RLS branches were not created");
+    }
+
+    const objectId = crypto.randomUUID();
+    await client.transaction(async (transaction) => {
+      await transaction.exec("SET LOCAL ROLE onecore_app");
+      await transaction.query(
+        "SELECT set_config('app.current_organization_id', $1, true)",
+        [organizationA.id],
+      );
+      await transaction.query(
+        "SELECT set_config('app.current_branch_id', $1, true)",
+        [branchA.id],
+      );
+      await transaction.query(
+        "INSERT INTO stored_objects (id, organization_id, branch_id, original_filename, storage_key, mime_type, byte_size, checksum_sha256, provider) VALUES ($1, $2, $3, 'report.pdf', $4, 'application/pdf', 20, $5, 'LOCAL')",
+        [
+          objectId,
+          organizationA.id,
+          branchA.id,
+          crypto.randomUUID(),
+          "a".repeat(64),
+        ],
+      );
+    });
+
+    const visibleInOtherTenant = await asTenant(
+      organizationB.id,
+      (transaction) =>
+        transaction.query("SELECT id FROM stored_objects WHERE id = $1", [
+          objectId,
+        ]),
+    );
+    expect(visibleInOtherTenant.rows).toEqual([]);
+    const visibleWithoutContext = await client.transaction(
+      async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_app");
+        return transaction.query("SELECT id FROM stored_objects");
+      },
+    );
+    expect(visibleWithoutContext.rows).toEqual([]);
+    await expect(
+      asTenant(organizationA.id, (transaction) =>
+        transaction.query(
+          "INSERT INTO stored_objects (organization_id, branch_id, original_filename, storage_key, mime_type, byte_size, checksum_sha256, provider) VALUES ($1, $2, 'forged.pdf', $3, 'application/pdf', 20, $4, 'LOCAL')",
+          [organizationB.id, branchB.id, crypto.randomUUID(), "b".repeat(64)],
+        ),
+      ),
+    ).rejects.toThrow();
+
+    const visibleFromOtherBranch = await client.transaction(
+      async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_app");
+        await transaction.query(
+          "SELECT set_config('app.current_organization_id', $1, true)",
+          [organizationA.id],
+        );
+        await transaction.query(
+          "SELECT set_config('app.current_branch_id', $1, true)",
+          [crypto.randomUUID()],
+        );
+        return transaction.query("SELECT id FROM stored_objects");
+      },
+    );
+    expect(visibleFromOtherBranch.rows).toEqual([]);
   });
 });

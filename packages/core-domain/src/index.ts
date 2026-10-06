@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export * from "./events.js";
+export * from "./platform-services.js";
 
 export const deploymentTypes = [
   "SAAS",
@@ -278,6 +279,60 @@ export const permissionCatalog = [
     resource: "notifications",
     action: "manage",
     description: "Manage organization notification preferences.",
+  },
+  {
+    module: "core.organization",
+    resource: "notification_inbox",
+    action: "read",
+    description: "Read the current user's organization notifications.",
+  },
+  {
+    module: "core.organization",
+    resource: "notification_inbox",
+    action: "manage",
+    description: "Create and update organization notifications.",
+  },
+  {
+    module: "core.organization",
+    resource: "jobs",
+    action: "enqueue",
+    description: "Enqueue authorized organization platform jobs.",
+  },
+  {
+    module: "core.organization",
+    resource: "jobs",
+    action: "process",
+    description: "Process authorized organization platform jobs.",
+  },
+  {
+    module: "core.organization",
+    resource: "jobs",
+    action: "manage",
+    description: "Retry and cancel authorized organization platform jobs.",
+  },
+  {
+    module: "core.organization",
+    resource: "storage",
+    action: "read",
+    description: "Read tenant-owned object metadata and content.",
+  },
+  {
+    module: "core.organization",
+    resource: "storage",
+    action: "manage",
+    description: "Create and delete tenant-owned objects.",
+  },
+  {
+    module: "core.organization",
+    resource: "search",
+    action: "read",
+    description: "Search documents in the authorized organization.",
+  },
+  {
+    module: "core.organization",
+    resource: "search",
+    action: "manage",
+    description: "Index and remove tenant-owned search documents.",
   },
   {
     module: "core.organization",

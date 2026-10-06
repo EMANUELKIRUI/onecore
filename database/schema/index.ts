@@ -46,6 +46,11 @@ import {
   workflowStatuses,
   workflowVersionStatuses,
   type FeatureFlagScope,
+  jobStatuses,
+  notificationChannels,
+  notificationDeliveryStatuses,
+  storedObjectProviders,
+  storedObjectStatuses,
 } from "@onecore/core-domain";
 import { sql } from "drizzle-orm";
 
@@ -117,6 +122,23 @@ export const customDevelopmentStatus = pgEnum(
 );
 export const auditResult = pgEnum("audit_result", auditResults);
 export const outboxStatus = pgEnum("outbox_status", outboxStatuses);
+export const jobStatus = pgEnum("job_status", jobStatuses);
+export const notificationChannel = pgEnum(
+  "notification_channel",
+  notificationChannels,
+);
+export const notificationDeliveryStatus = pgEnum(
+  "notification_delivery_status",
+  notificationDeliveryStatuses,
+);
+export const storedObjectProvider = pgEnum(
+  "stored_object_provider",
+  storedObjectProviders,
+);
+export const storedObjectStatus = pgEnum(
+  "stored_object_status",
+  storedObjectStatuses,
+);
 
 export const organizations = pgTable(
   "organizations",
@@ -1905,6 +1927,320 @@ export const eventDeadLetters = pgTable(
     check(
       "event_dead_letters_attempts_nonnegative",
       sql`${table.attempts} >= 0 and ${table.replayCount} >= 0`,
+    ),
+  ],
+);
+
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    branchId: uuid("branch_id"),
+    createdByUserId: uuid("created_by_user_id"),
+    jobType: varchar("job_type", { length: 100 }).notNull(),
+    payload: jsonb("payload").$type<unknown>().notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 200 }),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    correlationId: uuid("correlation_id").notNull(),
+    causationId: uuid("causation_id"),
+    status: jobStatus("status").notNull().default("QUEUED"),
+    priority: integer("priority").notNull().default(0),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    leaseOwner: varchar("lease_owner", { length: 150 }),
+    leaseToken: uuid("lease_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+    lastErrorCode: varchar("last_error_code", { length: 100 }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    unique("jobs_org_id_unique").on(table.organizationId, table.id),
+    uniqueIndex("jobs_idempotency_unique")
+      .on(table.organizationId, table.jobType, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
+    index("jobs_claim_idx").on(
+      table.organizationId,
+      table.status,
+      table.nextAttemptAt,
+      table.priority,
+      table.createdAt,
+    ),
+    index("jobs_lease_idx").on(
+      table.organizationId,
+      table.status,
+      table.leaseExpiresAt,
+    ),
+    check(
+      "jobs_attempt_limits_check",
+      sql`${table.attempts} >= 0 and ${table.maxAttempts} between 1 and 20 and ${table.attempts} <= ${table.maxAttempts}`,
+    ),
+    check("jobs_priority_check", sql`${table.priority} between 0 and 100`),
+    check(
+      "jobs_payload_size_check",
+      sql`octet_length(${table.payload}::text) <= 65536`,
+    ),
+    check(
+      "jobs_request_hash_check",
+      sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "jobs_lease_state_check",
+      sql`(${table.status} = 'RUNNING' and ${table.leaseOwner} is not null and ${table.leaseToken} is not null and ${table.leaseExpiresAt} is not null)
+        or (${table.status} <> 'RUNNING' and ${table.leaseOwner} is null and ${table.leaseToken} is null and ${table.leaseExpiresAt} is null)`,
+    ),
+    foreignKey({
+      name: "jobs_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "jobs_creator_membership_fk",
+      columns: [table.organizationId, table.createdByUserId],
+      foreignColumns: [
+        organizationMemberships.organizationId,
+        organizationMemberships.userId,
+      ],
+    }).onDelete("restrict"),
+  ],
+);
+
+export const jobAttempts = pgTable(
+  "job_attempts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    jobId: uuid("job_id").notNull(),
+    attempt: integer("attempt").notNull(),
+    workerId: varchar("worker_id", { length: 150 }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    outcome: varchar("outcome", { length: 20 }).notNull().default("RUNNING"),
+    errorCode: varchar("error_code", { length: 100 }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    foreignKey({
+      name: "job_attempts_job_fk",
+      columns: [table.organizationId, table.jobId],
+      foreignColumns: [jobs.organizationId, jobs.id],
+    }).onDelete("cascade"),
+    unique("job_attempts_job_attempt_unique").on(
+      table.organizationId,
+      table.jobId,
+      table.attempt,
+    ),
+    index("job_attempts_org_job_idx").on(
+      table.organizationId,
+      table.jobId,
+      table.attempt,
+    ),
+    check(
+      "job_attempts_outcome_check",
+      sql`${table.outcome} in ('RUNNING', 'SUCCEEDED', 'RETRY_WAIT', 'FAILED', 'ABANDONED')`,
+    ),
+    check("job_attempts_attempt_positive", sql`${table.attempt} > 0`),
+  ],
+);
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    branchId: uuid("branch_id"),
+    recipientUserId: uuid("recipient_user_id").notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    notificationType: varchar("notification_type", { length: 100 }).notNull(),
+    title: varchar("title", { length: 200 }).notNull(),
+    body: text("body").notNull(),
+    metadata: jsonObject("metadata"),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    unique("notifications_org_id_unique").on(table.organizationId, table.id),
+    foreignKey({
+      name: "notifications_recipient_membership_fk",
+      columns: [table.organizationId, table.recipientUserId],
+      foreignColumns: [
+        organizationMemberships.organizationId,
+        organizationMemberships.userId,
+      ],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "notifications_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "notifications_creator_membership_fk",
+      columns: [table.organizationId, table.createdByUserId],
+      foreignColumns: [
+        organizationMemberships.organizationId,
+        organizationMemberships.userId,
+      ],
+    }).onDelete("restrict"),
+    index("notifications_recipient_read_idx").on(
+      table.organizationId,
+      table.recipientUserId,
+      table.readAt,
+      table.createdAt,
+    ),
+    check(
+      "notifications_body_size_check",
+      sql`octet_length(${table.body}) <= 16384 and octet_length(${table.metadata}::text) <= 16384`,
+    ),
+  ],
+);
+
+export const notificationDeliveries = pgTable(
+  "notification_deliveries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    notificationId: uuid("notification_id").notNull(),
+    channel: notificationChannel("channel").notNull(),
+    status: notificationDeliveryStatus("status").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    lastErrorCode: varchar("last_error_code", { length: 100 }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    foreignKey({
+      name: "notification_deliveries_notification_fk",
+      columns: [table.organizationId, table.notificationId],
+      foreignColumns: [notifications.organizationId, notifications.id],
+    }).onDelete("cascade"),
+    unique("notification_deliveries_channel_unique").on(
+      table.organizationId,
+      table.notificationId,
+      table.channel,
+    ),
+    index("notification_deliveries_queue_idx").on(
+      table.organizationId,
+      table.status,
+      table.nextAttemptAt,
+      table.createdAt,
+    ),
+    check(
+      "notification_deliveries_attempts_nonnegative",
+      sql`${table.attempts} >= 0`,
+    ),
+  ],
+);
+
+export const storedObjects = pgTable(
+  "stored_objects",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    branchId: uuid("branch_id"),
+    createdByUserId: uuid("created_by_user_id"),
+    originalFilename: varchar("original_filename", { length: 255 }).notNull(),
+    storageKey: varchar("storage_key", { length: 100 }).notNull(),
+    mimeType: varchar("mime_type", { length: 127 }).notNull(),
+    byteSize: integer("byte_size").notNull(),
+    checksumSha256: varchar("checksum_sha256", { length: 64 }).notNull(),
+    provider: storedObjectProvider("provider").notNull(),
+    status: storedObjectStatus("status").notNull().default("ACTIVE"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    unique("stored_objects_org_id_unique").on(table.organizationId, table.id),
+    unique("stored_objects_key_unique").on(
+      table.organizationId,
+      table.storageKey,
+    ),
+    foreignKey({
+      name: "stored_objects_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "stored_objects_creator_membership_fk",
+      columns: [table.organizationId, table.createdByUserId],
+      foreignColumns: [
+        organizationMemberships.organizationId,
+        organizationMemberships.userId,
+      ],
+    }).onDelete("restrict"),
+    index("stored_objects_org_status_idx").on(
+      table.organizationId,
+      table.status,
+      table.createdAt,
+    ),
+    check(
+      "stored_objects_size_check",
+      sql`${table.byteSize} between 1 and 10485760`,
+    ),
+    check(
+      "stored_objects_checksum_check",
+      sql`${table.checksumSha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);
+
+export const searchDocuments = pgTable(
+  "search_documents",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    branchId: uuid("branch_id"),
+    indexName: varchar("index_name", { length: 100 }).notNull(),
+    documentId: varchar("document_id", { length: 200 }).notNull(),
+    title: varchar("title", { length: 500 }).notNull(),
+    body: text("body").notNull(),
+    metadata: jsonObject("metadata"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    unique("search_documents_org_id_unique").on(table.organizationId, table.id),
+    unique("search_documents_identity_unique").on(
+      table.organizationId,
+      table.indexName,
+      table.documentId,
+    ),
+    foreignKey({
+      name: "search_documents_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+    index("search_documents_owner_idx").on(
+      table.organizationId,
+      table.indexName,
+      table.documentId,
+    ),
+    index("search_documents_fts_idx").using(
+      "gin",
+      sql`to_tsvector('simple', coalesce(${table.title}, '') || ' ' || coalesce(${table.body}, ''))`,
+    ),
+    check(
+      "search_documents_size_check",
+      sql`octet_length(${table.body}) <= 65536 and octet_length(${table.metadata}::text) <= 16384`,
     ),
   ],
 );

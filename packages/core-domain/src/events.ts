@@ -148,6 +148,100 @@ const eventDefinitions = {
       })
       .strict(),
   },
+  JOB_ENQUEUED: {
+    version: 1,
+    owningModule: "core.jobs",
+    description: "A tenant-scoped platform job was queued.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        jobId: z.uuid(),
+        jobType: z.string().trim().min(1).max(100),
+      })
+      .strict(),
+  },
+  JOB_COMPLETED: {
+    version: 1,
+    owningModule: "core.jobs",
+    description: "A tenant-scoped platform job completed.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        jobId: z.uuid(),
+        jobType: z.string().trim().min(1).max(100),
+      })
+      .strict(),
+  },
+  JOB_FAILED: {
+    version: 1,
+    owningModule: "core.jobs",
+    description: "A tenant-scoped platform job exhausted its attempts.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        jobId: z.uuid(),
+        jobType: z.string().trim().min(1).max(100),
+        failureKind: z.enum(["PERMANENT", "RETRIES_EXHAUSTED"]),
+      })
+      .strict(),
+  },
+  NOTIFICATION_CREATED: {
+    version: 1,
+    owningModule: "core.organization",
+    description: "An in-app notification was created for an organization user.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        notificationId: z.uuid(),
+        recipientUserId: z.uuid(),
+        notificationType: z.string().trim().min(1).max(100),
+      })
+      .strict(),
+  },
+  STORAGE_OBJECT_CREATED: {
+    version: 1,
+    owningModule: "core.organization",
+    description: "A tenant-owned object was stored.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        objectId: z.uuid(),
+        byteSize: z.number().int().nonnegative(),
+        provider: z.enum(["LOCAL"]),
+      })
+      .strict(),
+  },
+  STORAGE_OBJECT_DELETED: {
+    version: 1,
+    owningModule: "core.organization",
+    description: "A tenant-owned object was marked deleted.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z.object({ objectId: z.uuid() }).strict(),
+  },
+  SEARCH_DOCUMENT_INDEXED: {
+    version: 1,
+    owningModule: "core.organization",
+    description: "A tenant-owned document was indexed for search.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        indexName: z.string().trim().min(1).max(100),
+        documentId: z.string().trim().min(1).max(200),
+      })
+      .strict(),
+  },
+  SEARCH_DOCUMENT_DELETED: {
+    version: 1,
+    owningModule: "core.organization",
+    description: "A tenant-owned search document was removed.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        indexName: z.string().trim().min(1).max(100),
+        documentId: z.string().trim().min(1).max(200),
+      })
+      .strict(),
+  },
 } as const;
 
 export const eventRegistry = eventDefinitions;

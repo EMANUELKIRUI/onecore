@@ -20,6 +20,10 @@ import {
   createDomainEvent,
   eventRegistry,
   parseDomainEvent,
+  enqueueJobSchema,
+  notificationInputSchema,
+  searchRequestSchema,
+  storageUploadMetadataSchema,
 } from "../src/index.js";
 
 describe("platform domain values", () => {
@@ -35,6 +39,14 @@ describe("platform domain values", () => {
         "MODULE_DISABLED",
         "CONFIGURATION_CHANGED",
         "FEATURE_FLAG_CHANGED",
+        "JOB_ENQUEUED",
+        "JOB_COMPLETED",
+        "JOB_FAILED",
+        "NOTIFICATION_CREATED",
+        "STORAGE_OBJECT_CREATED",
+        "STORAGE_OBJECT_DELETED",
+        "SEARCH_DOCUMENT_INDEXED",
+        "SEARCH_DOCUMENT_DELETED",
       ].sort(),
     );
     expect(
@@ -43,6 +55,50 @@ describe("platform domain values", () => {
           version === 1 && compatibilityPolicy === "ADDITIVE_ONLY",
       ),
     ).toBe(true);
+  });
+
+  it("validates bounded platform-service inputs and excludes secret keys", () => {
+    expect(
+      enqueueJobSchema.safeParse({
+        jobType: "reports.rebuild",
+        payload: { reportId: "daily" },
+      }).success,
+    ).toBe(true);
+    expect(
+      enqueueJobSchema.safeParse({
+        jobType: "reports.rebuild",
+        payload: { nested: { access_token: "must-not-persist" } },
+      }).success,
+    ).toBe(false);
+    expect(
+      enqueueJobSchema.safeParse({
+        jobType: "reports.rebuild",
+        payload: { value: "x".repeat(70_000) },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      notificationInputSchema.safeParse({
+        recipientUserId: "11111111-1111-4111-8111-111111111111",
+        notificationType: "system.notice",
+        title: "Notice",
+        body: "This is an in-app notice.",
+      }).success,
+    ).toBe(true);
+    expect(
+      storageUploadMetadataSchema.safeParse({
+        originalFilename: "../private.txt",
+        mimeType: "text/plain",
+        byteSize: 12,
+      }).success,
+    ).toBe(false);
+    expect(
+      searchRequestSchema.safeParse({
+        indexName: "documents",
+        query: "quarterly report",
+        limit: 101,
+      }).success,
+    ).toBe(false);
   });
 
   it("creates and validates versioned tenant event envelopes", () => {

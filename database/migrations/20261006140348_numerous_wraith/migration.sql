@@ -1,0 +1,6 @@
+ALTER TABLE "jobs" DROP CONSTRAINT "jobs_created_by_user_id_users_id_fkey";--> statement-breakpoint
+ALTER TABLE "notifications" DROP CONSTRAINT "notifications_created_by_user_id_users_id_fkey";--> statement-breakpoint
+ALTER TABLE "stored_objects" DROP CONSTRAINT "stored_objects_created_by_user_id_users_id_fkey";--> statement-breakpoint
+ALTER TABLE "jobs" ADD CONSTRAINT "jobs_creator_membership_fk" FOREIGN KEY ("organization_id","created_by_user_id") REFERENCES "organization_memberships"("organization_id","user_id") ON DELETE RESTRICT;--> statement-breakpoint
+ALTER TABLE "notifications" ADD CONSTRAINT "notifications_creator_membership_fk" FOREIGN KEY ("organization_id","created_by_user_id") REFERENCES "organization_memberships"("organization_id","user_id") ON DELETE RESTRICT;--> statement-breakpoint
+ALTER TABLE "stored_objects" ADD CONSTRAINT "stored_objects_creator_membership_fk" FOREIGN KEY ("organization_id","created_by_user_id") REFERENCES "organization_memberships"("organization_id","user_id") ON DELETE RESTRICT;

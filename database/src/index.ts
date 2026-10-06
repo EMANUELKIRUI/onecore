@@ -85,6 +85,34 @@ export {
   type OrganizationModuleAccess,
   type OrganizationModuleCandidate,
 } from "./module-entitlements.js";
+export {
+  createPlatformServices,
+  type PlatformServices,
+  type SearchResult,
+} from "./platform-services.js";
+export {
+  calculateJobRetryDelay,
+  createJobHandlerRegistry,
+  createJobService,
+  IdempotencyConflictError,
+  JobExecutionError,
+  type JobClaim,
+  type JobHandler,
+  type JobHandlerContext,
+  type JobHandlerRegistry,
+  type JobService,
+  type JobWorkerOptions,
+} from "./jobs.js";
+export {
+  createLocalStorageProvider,
+  createStorageService,
+  type LocalStorageOptions,
+  type PlatformStorageObject,
+  type StorageProvider,
+  type StorageService,
+  type StoredObjectRecord,
+  type StorageUploadInput,
+} from "./storage.js";
 
 export type Database = PostgresJsDatabase;
 
