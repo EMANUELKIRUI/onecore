@@ -59,7 +59,9 @@ bucket updates; the migration role remains the table owner. See
 The runtime-role grants migration consolidates the documented identity, RBAC,
 and configuration privileges into forward-only SQL. Identity updates and
 session creation/update are column-scoped; role creation/update is limited to
-the fields accepted by the RBAC API. No runtime grants are added for unused
-organization, branch, or membership timestamp updates. Create the
-`onecore_app` role as non-owner and `NOBYPASSRLS` before applying migrations;
-do not provision its table access with ad-hoc grants.
+the fields accepted by the RBAC API. Narrow timestamp-column update privileges
+support the `SELECT ... FOR SHARE` locks used to validate membership,
+organization, branch, and branch-assignment context; table-level update
+privileges remain absent. Create the `onecore_app` role as non-owner and
+`NOBYPASSRLS` before applying migrations; do not provision its table access
+with ad-hoc grants.

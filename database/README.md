@@ -22,27 +22,23 @@ npm run db:migrate
 ```
 
 Create the non-owner `onecore_app` role before applying migrations. The
-migrations grant its reviewed table privileges; do not use ad-hoc table grants.
-The following legacy bootstrap example is retained for reference only and is
-not the current provisioning workflow. The API role must never receive
-`BYPASSRLS`:
+migrations grant its reviewed table and column privileges; do not use ad-hoc
+table grants. The API role must never receive `BYPASSRLS`:
 
 ```sh
 psql "$ADMIN_DATABASE_URL" -d onecore_dev -v ON_ERROR_STOP=1 <<'SQL'
 CREATE ROLE onecore_app LOGIN NOBYPASSRLS PASSWORD 'replace-with-a-local-only-password';
 GRANT CONNECT ON DATABASE onecore_dev TO onecore_app;
-GRANT USAGE ON SCHEMA public TO onecore_app;
-GRANT SELECT, UPDATE ON users TO onecore_app;
-GRANT SELECT, INSERT, UPDATE ON sessions TO onecore_app;
-GRANT SELECT ON organization_memberships, organizations TO onecore_app;
-GRANT SELECT ON branches, membership_branches TO onecore_app;
-GRANT UPDATE (updated_at) ON organization_memberships, organizations, branches TO onecore_app;
-GRANT UPDATE (created_at) ON membership_branches TO onecore_app;
-GRANT INSERT ON audit_logs TO onecore_app;
 SQL
 ```
 
-The narrow timestamp-column `UPDATE` grants are required by PostgreSQL for the `SELECT ... FOR SHARE` row locks in the trusted organization/branch context helpers. They grant no table-level `UPDATE` or write access to domain/key columns. Set the API `DATABASE_URL` to this role after migrations. Expand grants only as new trusted services require them; never grant table ownership, schema-management privileges, or RLS bypass to an API.
+The runtime-role migration grants only the access used by the services. Narrow
+timestamp-column `UPDATE` privileges on membership, organization, branch, and
+branch-assignment tables support the trusted context helpers' `SELECT ... FOR
+SHARE` row locks; they do not grant table-level `UPDATE` or access to
+domain/key columns. Set the API `DATABASE_URL` to this role after migrations.
+Expand grants only as new trusted services require them; never grant table
+ownership, schema-management privileges, or RLS bypass to an API.
 
 For development seeding only, provision a separate local `onecore_seed` role with `BYPASSRLS`, schema usage, and DML access after migrations have created the tables. Use a throwaway local password and never create this role in staging or production:
 

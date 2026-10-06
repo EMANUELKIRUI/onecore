@@ -35,6 +35,11 @@ GRANT UPDATE (
 GRANT SELECT ON "organization_memberships", "organizations", "branches",
   "membership_branches" TO onecore_app;
 --> statement-breakpoint
+GRANT UPDATE ("updated_at") ON "organization_memberships", "organizations",
+  "branches" TO onecore_app;
+--> statement-breakpoint
+GRANT UPDATE ("created_at") ON "membership_branches" TO onecore_app;
+--> statement-breakpoint
 GRANT INSERT ON "audit_logs" TO onecore_app;
 --> statement-breakpoint
 GRANT SELECT ON "roles" TO onecore_app;
