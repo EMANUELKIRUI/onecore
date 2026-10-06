@@ -4,7 +4,6 @@ import { PGlite } from "@electric-sql/pglite";
 import type { Transaction } from "@electric-sql/pglite";
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
-import { migrate } from "drizzle-orm/pglite/migrator";
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -20,6 +19,7 @@ import {
   createPlatformServices,
   createJobHandlerRegistry,
   createJobService,
+  createDatabaseRateLimiter,
   JobExecutionError,
   recordOutboxEvent,
   type JobHandler,
@@ -38,12 +38,16 @@ import {
 import { withActiveOrganizationTransaction } from "../src/tenant-context.js";
 import type { Database } from "../src/index.js";
 import * as schema from "../schema/index.js";
+import { applyTestMigrations } from "./migration-fixture.js";
 
 const migrationsDirectory = fileURLToPath(
   new URL("../migrations/", import.meta.url),
 );
 let client: PGlite;
 let database: PgliteDatabase;
+let initialApplicationPrivileges = new Set<string>();
+let initialApplicationColumnPrivileges = new Set<string>();
+let initialApplicationSchemaCreate = false;
 
 async function asTenant<T>(
   organizationId: string,
@@ -211,7 +215,41 @@ describe("PostgreSQL persistence foundation", () => {
       CREATE ROLE onecore_app NOLOGIN NOBYPASSRLS;
       CREATE ROLE onecore_migrator NOLOGIN NOSUPERUSER NOBYPASSRLS;
     `);
-    await migrate(database, { migrationsFolder: migrationsDirectory });
+    await applyTestMigrations(client, migrationsDirectory);
+
+    const grants = await client.query<{
+      table_name: string;
+      privilege_type: string;
+    }>(`
+      SELECT table_name, privilege_type
+      FROM information_schema.role_table_grants
+      WHERE grantee = 'onecore_app'
+    `);
+    initialApplicationPrivileges = new Set(
+      grants.rows.map(
+        ({ table_name, privilege_type }) => `${table_name}:${privilege_type}`,
+      ),
+    );
+    const columnGrants = await client.query<{
+      table_name: string;
+      column_name: string;
+      privilege_type: string;
+    }>(`
+      SELECT table_name, column_name, privilege_type
+      FROM information_schema.role_column_grants
+      WHERE grantee = 'onecore_app'
+    `);
+    initialApplicationColumnPrivileges = new Set(
+      columnGrants.rows.map(
+        ({ table_name, column_name, privilege_type }) =>
+          `${table_name}:${privilege_type}:${column_name}`,
+      ),
+    );
+    const schemaPrivileges = await client.query<{ can_create: boolean }>(
+      `SELECT has_schema_privilege('onecore_app', 'public', 'CREATE') AS can_create`,
+    );
+    initialApplicationSchemaCreate =
+      schemaPrivileges.rows[0]?.can_create ?? true;
 
     await client.exec(`
       GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO onecore_app;
@@ -220,6 +258,80 @@ describe("PostgreSQL persistence foundation", () => {
 
   afterAll(async () => {
     await client.close();
+  });
+
+  it("migrates only the documented least-privilege runtime table grants", () => {
+    const required = [
+      "users:SELECT",
+      "sessions:SELECT",
+      "organization_memberships:SELECT",
+      "branches:SELECT",
+      "roles:SELECT",
+      "permissions:SELECT",
+      "feature_flags:SELECT",
+      "feature_flag_assignments:INSERT",
+      "organization_settings:UPDATE",
+      "jobs:SELECT",
+      "rate_limit_buckets:INSERT",
+      "rate_limit_buckets:UPDATE",
+    ];
+    for (const privilege of required) {
+      expect(initialApplicationPrivileges.has(privilege), privilege).toBe(true);
+    }
+
+    const requiredColumnPrivileges = [
+      "users:UPDATE:status",
+      "users:UPDATE:failed_login_attempts",
+      "users:UPDATE:failed_login_window_started_at",
+      "users:UPDATE:locked_until",
+      "users:UPDATE:last_login_at",
+      "users:UPDATE:updated_at",
+      "sessions:INSERT:secret_hash",
+      "sessions:INSERT:user_id",
+      "sessions:INSERT:organization_id",
+      "sessions:INSERT:branch_id",
+      "sessions:INSERT:created_at",
+      "sessions:INSERT:expires_at",
+      "sessions:INSERT:last_used_at",
+      "sessions:INSERT:ip_address",
+      "sessions:INSERT:user_agent",
+      "sessions:UPDATE:organization_id",
+      "sessions:UPDATE:branch_id",
+      "sessions:UPDATE:last_used_at",
+      "sessions:UPDATE:revoked_at",
+      "roles:INSERT:organization_id",
+      "roles:INSERT:name",
+      "roles:INSERT:description",
+      "roles:UPDATE:name",
+      "roles:UPDATE:description",
+      "roles:UPDATE:status",
+      "roles:UPDATE:updated_at",
+    ];
+    for (const privilege of requiredColumnPrivileges) {
+      expect(initialApplicationColumnPrivileges.has(privilege), privilege).toBe(
+        true,
+      );
+    }
+
+    const forbidden = [
+      "users:INSERT",
+      "users:UPDATE",
+      "users:DELETE",
+      "sessions:INSERT",
+      "sessions:UPDATE",
+      "roles:INSERT",
+      "roles:UPDATE",
+      "audit_logs:SELECT",
+      "audit_logs:DELETE",
+      "custom_field_values:SELECT",
+      "custom_field_values:INSERT",
+    ];
+    for (const privilege of forbidden) {
+      expect(initialApplicationPrivileges.has(privilege), privilege).toBe(
+        false,
+      );
+    }
+    expect(initialApplicationSchemaCreate).toBe(false);
   });
 
   it("migrates a clean database and keeps organizations and branches tenant-isolated", async () => {
@@ -428,11 +540,253 @@ describe("PostgreSQL persistence foundation", () => {
       .query<{
         superuser: boolean;
         bypassRls: boolean;
+        createRoles: boolean;
+        createDatabases: boolean;
       }>(
-        "SELECT rolsuper AS superuser, rolbypassrls AS \"bypassRls\" FROM pg_roles WHERE rolname = 'onecore_app'",
+        `SELECT rolsuper AS superuser,
+                rolbypassrls AS "bypassRls",
+                rolcreaterole AS "createRoles",
+                rolcreatedb AS "createDatabases"
+         FROM pg_roles WHERE rolname = 'onecore_app'`,
       )
       .then((result) => result.rows);
-    expect(applicationRole).toEqual({ superuser: false, bypassRls: false });
+    expect(applicationRole).toEqual({
+      superuser: false,
+      bypassRls: false,
+      createRoles: false,
+      createDatabases: false,
+    });
+  });
+
+  it("enforces atomic database-backed rate limits with tenant-separated keys", async () => {
+    const rateLimiter = createDatabaseRateLimiter(
+      database as unknown as Database,
+    );
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    const base = {
+      scope: "authentication.login",
+      subject: "test-client",
+      requestId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      limit: 2,
+      windowMs: 60_000,
+      now,
+    };
+    expect(await rateLimiter.consume(base)).toMatchObject({
+      allowed: true,
+      remaining: 1,
+    });
+    expect(await rateLimiter.consume(base)).toMatchObject({
+      allowed: true,
+      remaining: 0,
+    });
+    expect(await rateLimiter.consume(base)).toMatchObject({
+      allowed: false,
+      remaining: 0,
+    });
+    const rateLimitEvents = await database
+      .select({
+        id: schema.auditLogs.id,
+        requestMetadata: schema.auditLogs.requestMetadata,
+      })
+      .from(schema.auditLogs)
+      .where(eq(schema.auditLogs.action, "security.rate_limit.triggered"));
+    expect(rateLimitEvents).toHaveLength(1);
+    expect(rateLimitEvents[0]?.requestMetadata).toMatchObject({
+      requestId: base.requestId,
+      correlationId: base.correlationId,
+      reason: "limit_exceeded",
+    });
+    expect(JSON.stringify(rateLimitEvents[0]?.requestMetadata)).not.toContain(
+      base.subject,
+    );
+    expect(
+      await rateLimiter.consume({
+        ...base,
+        now: new Date(now.getTime() + 60_001),
+      }),
+    ).toMatchObject({ allowed: true, remaining: 1 });
+
+    const organizationA = await createOrganization("Rate Limit Tenant A");
+    const organizationB = await createOrganization("Rate Limit Tenant B");
+    const tenantA = { ...base, organizationId: organizationA.id };
+    const tenantB = { ...base, organizationId: organizationB.id };
+    expect(await rateLimiter.consume(tenantA)).toMatchObject({
+      allowed: true,
+      remaining: 1,
+    });
+    expect(await rateLimiter.consume(tenantB)).toMatchObject({
+      allowed: true,
+      remaining: 1,
+    });
+    expect(await rateLimiter.consume(tenantA)).toMatchObject({
+      allowed: true,
+      remaining: 0,
+    });
+    expect(await rateLimiter.consume(tenantB)).toMatchObject({
+      allowed: true,
+      remaining: 0,
+    });
+
+    const [branchA, branchB] = await database
+      .insert(schema.branches)
+      .values([
+        {
+          organizationId: organizationA.id,
+          name: "Rate Branch A",
+          code: "R-A",
+        },
+        {
+          organizationId: organizationA.id,
+          name: "Rate Branch B",
+          code: "R-B",
+        },
+      ])
+      .returning({ id: schema.branches.id });
+    if (!branchA || !branchB) throw new Error("Rate limit branches missing");
+    const branchScoped = { ...tenantA, subject: "branch-client" };
+    expect(
+      await rateLimiter.consume({ ...branchScoped, branchId: branchA.id }),
+    ).toMatchObject({ allowed: true, remaining: 1 });
+    expect(
+      await rateLimiter.consume({ ...branchScoped, branchId: branchA.id }),
+    ).toMatchObject({ allowed: true, remaining: 0 });
+    expect(
+      await rateLimiter.consume({ ...branchScoped, branchId: branchB.id }),
+    ).toMatchObject({ allowed: true, remaining: 1 });
+    await expect(
+      rateLimiter.consume({
+        ...base,
+        subject: "branch-client-without-tenant",
+        branchId: branchA.id,
+      }),
+    ).rejects.toThrow(/branch requires an organization/i);
+
+    const concurrent = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        rateLimiter.consume({
+          ...base,
+          scope: "test.concurrent",
+          subject: "parallel-client",
+        }),
+      ),
+    );
+    expect(concurrent.filter(({ allowed }) => allowed)).toHaveLength(2);
+    expect(concurrent.filter(({ allowed }) => !allowed)).toHaveLength(4);
+  });
+
+  it("keeps tenant rate-limit buckets inaccessible without matching RLS context", async () => {
+    const organizationA = await createOrganization("Rate RLS Tenant A");
+    const organizationB = await createOrganization("Rate RLS Tenant B");
+    const [branchA, branchB] = await database
+      .insert(schema.branches)
+      .values([
+        { organizationId: organizationA.id, name: "RLS Branch A", code: "L-A" },
+        { organizationId: organizationA.id, name: "RLS Branch B", code: "L-B" },
+      ])
+      .returning({ id: schema.branches.id });
+    if (!branchA || !branchB) throw new Error("Rate limit branches missing");
+    const rateLimiter = createDatabaseRateLimiter(
+      database as unknown as Database,
+    );
+    const branchInput = {
+      scope: "test.branch",
+      subject: "branch-client",
+      organizationId: organizationA.id,
+      limit: 3,
+      windowMs: 60_000,
+    };
+    await rateLimiter.consume({ ...branchInput, branchId: branchA.id });
+    await rateLimiter.consume({ ...branchInput, branchId: branchB.id });
+    const branchBKey = (
+      await database
+        .select({ keyHash: schema.rateLimitBuckets.keyHash })
+        .from(schema.rateLimitBuckets)
+        .where(eq(schema.rateLimitBuckets.branchId, branchB.id))
+        .limit(1)
+    )[0]?.keyHash;
+    if (!branchBKey) throw new Error("Branch rate-limit bucket missing");
+    const branchIsolation = await asTenant(
+      organizationA.id,
+      async (transaction) => {
+        await transaction.query(
+          "SELECT set_config('app.current_branch_id', $1, true)",
+          [branchA.id],
+        );
+        const read = await transaction.query(
+          'SELECT "key_hash" FROM "rate_limit_buckets" WHERE "key_hash" = $1',
+          [branchBKey],
+        );
+        const update = await transaction.query(
+          'UPDATE "rate_limit_buckets" SET "hit_count" = 2 WHERE "key_hash" = $1 RETURNING "key_hash"',
+          [branchBKey],
+        );
+        return { read, update };
+      },
+    );
+    expect(branchIsolation.read.rows).toEqual([]);
+    expect(branchIsolation.update.rows).toEqual([]);
+
+    const foreignKey = createHash("sha256")
+      .update(crypto.randomUUID())
+      .digest("hex");
+    await database.insert(schema.rateLimitBuckets).values({
+      keyHash: foreignKey,
+      organizationId: organizationB.id,
+      hitCount: 1,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const foreignRead = await asTenant(organizationA.id, async (transaction) =>
+      transaction.query(
+        'SELECT "key_hash" FROM "rate_limit_buckets" WHERE "key_hash" = $1',
+        [foreignKey],
+      ),
+    );
+    expect(foreignRead.rows).toEqual([]);
+
+    const missingContextRead = await client.transaction(async (transaction) => {
+      await transaction.exec("SET LOCAL ROLE onecore_app");
+      return transaction.query(
+        'SELECT "key_hash" FROM "rate_limit_buckets" WHERE "key_hash" = $1',
+        [foreignKey],
+      );
+    });
+    expect(missingContextRead.rows).toEqual([]);
+
+    await expect(
+      client.transaction(async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_app");
+        await transaction.query(
+          "SELECT set_config('app.current_organization_id', $1, true)",
+          [organizationA.id],
+        );
+        await transaction.query(
+          `INSERT INTO "rate_limit_buckets" ("key_hash", "organization_id", "hit_count", "expires_at")
+           VALUES ($1, $2, 1, $3)`,
+          [
+            createHash("sha256").update(crypto.randomUUID()).digest("hex"),
+            organizationB.id,
+            new Date(Date.now() + 60_000),
+          ],
+        );
+      }),
+    ).rejects.toThrow();
+
+    await expect(
+      client.transaction(async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_app");
+        await transaction.query(
+          `INSERT INTO "rate_limit_buckets" ("key_hash", "organization_id", "hit_count", "expires_at")
+           VALUES ($1, $2, 1, $3)`,
+          [
+            createHash("sha256").update(crypto.randomUUID()).digest("hex"),
+            organizationA.id,
+            new Date(Date.now() + 60_000),
+          ],
+        );
+      }),
+    ).rejects.toThrow();
   });
 
   it("does not leak transaction-local organization context across concurrent requests", async () => {

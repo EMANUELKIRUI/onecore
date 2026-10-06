@@ -19,7 +19,7 @@ Use separate secret-managed credentials for schema migrations and application ru
 
 Before a release, back up the target database, review and apply the committed migration with the approved migration job, verify schema and application health, and monitor. Use expand → migrate → verify → contract. A failed/unsafe change requires a forward repair or a tested backup restore; do not assume automatic migration rollback. Validate backups and restores against the actual production provider before launch.
 
-The current API health route remains liveness-only. Do not report it as database readiness. No production migration/deploy/rollback workflow exists yet.
+`/health` and `/health/live` are liveness-only. `/health/ready` performs a safe PostgreSQL connectivity check and returns no infrastructure details. No production deploy/rollback workflow exists yet.
 
 ## Identity and session deployment
 
@@ -29,7 +29,7 @@ Organization context requires a current active membership and `ACTIVE` organizat
 
 Terminate TLS at an approved HTTPS ingress and use `Secure` session cookies in production. Set the exact browser origins in `AUTH_ALLOWED_ORIGINS`; do not use wildcard CORS or broad origin patterns. The cookie is host-only, `HttpOnly`, `SameSite=Lax`, and `Path=/`; frontend applications must use same-site/same-origin routing or an explicitly reviewed deployment design.
 
-The default login limiter uses process memory and is not coordinated across API replicas. Before horizontal scaling, configure a shared rate-limit store or enforce a suitable limit at a trusted edge. Define account recovery/lockout operations and monitoring before production; no self-service reset or administrator unlock API exists yet.
+The API login limiter uses PostgreSQL atomic counters and forced RLS so API replicas sharing the database coordinate limits. A database outage fails login throttling closed; this is not volumetric edge protection. Define account recovery/lockout operations and monitoring before production; no self-service reset or administrator unlock API exists yet.
 
 ## Repository governance
 

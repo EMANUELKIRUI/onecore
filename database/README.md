@@ -21,7 +21,11 @@ npm ci
 npm run db:migrate
 ```
 
-Create a separate local API role after migration has created the tables. The API role is not a schema owner and must never receive `BYPASSRLS`:
+Create the non-owner `onecore_app` role before applying migrations. The
+migrations grant its reviewed table privileges; do not use ad-hoc table grants.
+The following legacy bootstrap example is retained for reference only and is
+not the current provisioning workflow. The API role must never receive
+`BYPASSRLS`:
 
 ```sh
 psql "$ADMIN_DATABASE_URL" -d onecore_dev -v ON_ERROR_STOP=1 <<'SQL'

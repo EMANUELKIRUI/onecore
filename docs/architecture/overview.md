@@ -2,6 +2,8 @@
 
 OneCore is organized as a modular monorepo with explicit application, service, shared-package, module, and persistence boundaries. Phase 1 established the engineering foundation. Phase 2 added PostgreSQL/Drizzle domain persistence, organization-aware schema, RLS tenant boundary, and migration/test workflow. Phase 3 adds password authentication, server-side sessions, authenticated request context, organization selection with membership validation, and authentication audit events. Phase 4 adds status-checked organization context, explicit branch access, session-bound branch selection, and tenant integrity tests. Phase 5 adds centralized, server-side organization RBAC and data-scope resolution. Phase 6 adds a validated module registry, lifecycle, dependency and plan checks, organization entitlement APIs, and authorization integration. Business operations, business-row scope policies, controlled support access, and production provisioning remain deferred.
 
+Phase 10 adds validated request/correlation context, structured request completion logs with sensitive-field redaction, stable error classification, liveness/readiness endpoints, restrictive API response headers and body limits, and a PostgreSQL-backed rate limiter using forced RLS and the existing audit log.
+
 ## Dependency direction
 
 ```text

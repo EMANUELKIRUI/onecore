@@ -11,6 +11,7 @@ import type {
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { MemoryIdentityRepository } from "./identity-fixture.js";
+import { getRequestContext } from "@onecore/config";
 
 function allowOnlyTestTenant(organizationId: string): AuthorizationService {
   const withPermission = async (
@@ -69,6 +70,227 @@ describe("API foundation", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ status: "ok" });
+    await app.close();
+  });
+
+  it("keeps liveness independent from database readiness", async () => {
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+      undefined,
+      {
+        readinessCheck: async () => {
+          throw new Error("database connection detail");
+        },
+      },
+    );
+    const live = await app.inject({ method: "GET", url: "/health/live" });
+    const ready = await app.inject({ method: "GET", url: "/health/ready" });
+
+    expect(live.statusCode).toBe(200);
+    expect(ready.statusCode).toBe(503);
+    expect(ready.json()).toEqual({ status: "not_ready" });
+    expect(ready.body).not.toContain("database connection detail");
+    await app.close();
+  });
+
+  it("does not report readiness when no dependency check is configured", async () => {
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+    );
+    const response = await app.inject({
+      method: "GET",
+      url: "/health/ready",
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ status: "not_ready" });
+    await app.close();
+  });
+
+  it("fails closed when the configured database-backed limiter rejects login", async () => {
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+      undefined,
+      {
+        rateLimiter: {
+          consume: async () => ({
+            allowed: false,
+            remaining: 0,
+            resetAt: new Date(Date.now() + 30_000),
+          }),
+        },
+      },
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: { email: "test@example.test", password: "fake-password" },
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toEqual({
+      error: {
+        code: "TOO_MANY_REQUESTS",
+        message: "Too many requests. Try again later.",
+      },
+    });
+    expect(response.headers["retry-after"]).toBeDefined();
+    expect(response.body).not.toContain("fake-password");
+    await app.close();
+  });
+
+  it("refuses production login when the shared limiter is not configured", async () => {
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "production", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: { email: "test@example.test", password: "fake-password" },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      error: {
+        code: "SERVICE_UNAVAILABLE",
+        message: "The service is temporarily unavailable.",
+      },
+    });
+    expect(response.body).not.toContain("fake-password");
+    await app.close();
+  });
+
+  it("fails closed in production when a shared login limiter is not configured", async () => {
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "production", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: { email: "test@example.test", password: "fake-password" },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      error: {
+        code: "SERVICE_UNAVAILABLE",
+        message: "The service is temporarily unavailable.",
+      },
+    });
+    expect(response.body).not.toContain("fake-password");
+    await app.close();
+  });
+
+  it("propagates validated request and correlation IDs without client identity claims", async () => {
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+    );
+    app.get("/context-test", async (request) => ({
+      current: getRequestContext(),
+      request: request.observabilityContext,
+    }));
+    const requestId = crypto.randomUUID();
+    const correlationId = crypto.randomUUID();
+    const valid = await app.inject({
+      method: "GET",
+      url: "/context-test",
+      headers: {
+        "x-request-id": requestId,
+        "x-correlation-id": correlationId,
+      },
+    });
+    const invalid = await app.inject({
+      method: "GET",
+      url: "/context-test",
+      headers: {
+        "x-request-id": "invalid",
+        "x-correlation-id": "invalid",
+      },
+    });
+
+    expect(valid.headers["x-request-id"]).toBe(requestId);
+    expect(valid.headers["x-correlation-id"]).toBe(correlationId);
+    expect(valid.json().current).toMatchObject({
+      requestId,
+      correlationId,
+      userId: null,
+      organizationId: null,
+      branchId: null,
+    });
+    expect(invalid.headers["x-request-id"]).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(invalid.headers["x-correlation-id"]).toBe(
+      invalid.headers["x-request-id"],
+    );
+    expect(valid.headers["x-content-type-options"]).toBe("nosniff");
+    expect(valid.headers["x-frame-options"]).toBe("DENY");
+    expect(valid.headers["access-control-allow-origin"]).toBeUndefined();
+    await app.close();
+  });
+
+  it("adds actor and tenant context only from a validated server-side session", async () => {
+    const userId = crypto.randomUUID();
+    const organizationId = crypto.randomUUID();
+    const sessionSecret = "c".repeat(43);
+    const secretHash = createHash("sha256").update(sessionSecret).digest("hex");
+    const identity = new MemoryIdentityRepository();
+    identity.addUser({
+      id: userId,
+      email: "observability@example.test",
+      displayName: "Observability Test",
+      status: "ACTIVE",
+      passwordHash: null,
+      failedLoginAttempts: 0,
+      failedLoginWindowStartedAt: null,
+      lockedUntil: null,
+      lastLoginAt: null,
+    });
+    identity.addMembership(userId, {
+      organizationId,
+      name: "Verified Organization",
+      slug: "verified-organization",
+    });
+    identity.sessions.set(secretHash, {
+      id: crypto.randomUUID(),
+      secretHash,
+      userId,
+      organizationId,
+      branchId: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      lastUsedAt: new Date(),
+      revokedAt: null,
+      ipAddress: null,
+      userAgent: null,
+    });
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+    );
+    app.get("/context-test", async () => getRequestContext());
+    const response = await app.inject({
+      method: "GET",
+      url: "/context-test",
+      cookies: { onecore_session: sessionSecret },
+      headers: {
+        "x-user-id": crypto.randomUUID(),
+        "x-organization-id": crypto.randomUUID(),
+        "x-branch-id": crypto.randomUUID(),
+      },
+    });
+
+    expect(response.json()).toMatchObject({
+      userId,
+      organizationId,
+      branchId: null,
+    });
     await app.close();
   });
 

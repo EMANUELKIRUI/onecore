@@ -65,6 +65,7 @@ export interface AuthenticationAuditEvent {
   resourceId?: string;
   result: "SUCCESS" | "FAILURE";
   requestId: string;
+  correlationId?: string | undefined;
   reason?: string;
   ipAddress: string;
   userAgent: string;
@@ -80,6 +81,7 @@ export interface IdentityRepository {
     ipAddress: string,
     userAgent: string,
     now: Date,
+    correlationId?: string,
   ): Promise<boolean>;
   recordFailedLogin(
     email: string,
@@ -90,11 +92,13 @@ export interface IdentityRepository {
     requestId: string,
     ipAddress: string,
     userAgent: string,
+    correlationId?: string,
   ): Promise<{ userId: string; locked: boolean } | undefined>;
   createSession(
     session: Omit<IdentitySession, "id" | "lastUsedAt" | "revokedAt">,
     requestId: string,
     now: Date,
+    correlationId?: string,
   ): Promise<IdentitySession>;
   findActiveSession(
     secretHash: string,
@@ -123,6 +127,7 @@ export interface IdentityRepository {
     ipAddress: string,
     userAgent: string,
     now: Date,
+    correlationId?: string,
   ): Promise<void>;
   listActiveMemberships(userId: string): Promise<IdentityMembership[]>;
   listAuthorizedBranches(
@@ -195,6 +200,7 @@ function writeAuthenticationEvent(
     occurredAt: event.occurredAt,
     requestMetadata: {
       requestId: event.requestId,
+      correlationId: event.correlationId ?? null,
       reason: event.reason ?? null,
       ipAddress: event.ipAddress,
       userAgent: event.userAgent,
@@ -233,7 +239,14 @@ export function createIdentityRepository(
       );
       return user ? toIdentityUser(user) : undefined;
     },
-    async activateExpiredLock(userId, requestId, ipAddress, userAgent, now) {
+    async activateExpiredLock(
+      userId,
+      requestId,
+      ipAddress,
+      userAgent,
+      now,
+      correlationId,
+    ) {
       return withAuthenticatedUserTransaction(
         database,
         userId,
@@ -261,6 +274,7 @@ export function createIdentityRepository(
               actorUserId: user.id,
               result: "SUCCESS",
               requestId,
+              correlationId,
               ipAddress,
               userAgent,
               occurredAt: now,
@@ -280,6 +294,7 @@ export function createIdentityRepository(
       requestId,
       ipAddress,
       userAgent,
+      correlationId,
     ) {
       const windowStart = new Date(now.getTime() - windowMs);
       const shouldReset = sql`
@@ -327,6 +342,7 @@ export function createIdentityRepository(
             actorUserId: user.id,
             result: "FAILURE",
             requestId,
+            correlationId,
             ipAddress,
             userAgent,
             occurredAt: now,
@@ -338,6 +354,7 @@ export function createIdentityRepository(
               actorUserId: user.id,
               result: "SUCCESS",
               requestId,
+              correlationId,
               ipAddress,
               userAgent,
               occurredAt: now,
@@ -349,7 +366,7 @@ export function createIdentityRepository(
       );
       return failedLogin;
     },
-    async createSession(session, requestId, now) {
+    async createSession(session, requestId, now, correlationId) {
       return withAuthenticatedUserTransaction(
         database,
         session.userId,
@@ -389,6 +406,7 @@ export function createIdentityRepository(
             organizationId: session.organizationId,
             result: "SUCCESS",
             requestId,
+            correlationId,
             ipAddress: session.ipAddress ?? "",
             userAgent: session.userAgent ?? "",
             occurredAt: now,
@@ -398,6 +416,7 @@ export function createIdentityRepository(
             actorUserId: session.userId,
             result: "SUCCESS",
             requestId,
+            correlationId,
             ipAddress: session.ipAddress ?? "",
             userAgent: session.userAgent ?? "",
             occurredAt: now,
@@ -535,7 +554,14 @@ export function createIdentityRepository(
         },
       );
     },
-    async revokeSession(secretHash, requestId, ipAddress, userAgent, now) {
+    async revokeSession(
+      secretHash,
+      requestId,
+      ipAddress,
+      userAgent,
+      now,
+      correlationId,
+    ) {
       const session = await withSessionTransaction(
         database,
         secretHash,
@@ -556,6 +582,7 @@ export function createIdentityRepository(
             actorUserId: revoked.userId,
             result: "SUCCESS",
             requestId,
+            correlationId,
             ipAddress,
             userAgent,
             occurredAt: now,
@@ -565,6 +592,7 @@ export function createIdentityRepository(
             actorUserId: revoked.userId,
             result: "SUCCESS",
             requestId,
+            correlationId,
             ipAddress,
             userAgent,
             occurredAt: now,

@@ -48,6 +48,7 @@ export type ActiveAuthorizationContext = AuthorizationContext & {
 
 export interface AuthorizationMetadata {
   requestId: string;
+  correlationId?: string;
 }
 
 export interface PermissionGrant {
@@ -162,6 +163,7 @@ async function writeAuthorizationEvent(
     result: allowed ? "SUCCESS" : "FAILURE",
     requestMetadata: {
       requestId: metadata.requestId,
+      correlationId: metadata.correlationId ?? null,
       branchId: context.branchId,
       reason,
     },
@@ -186,6 +188,7 @@ export async function writeAuthorizationMutationEvent(
     result: "SUCCESS",
     requestMetadata: {
       requestId: metadata.requestId,
+      correlationId: metadata.correlationId ?? null,
       branchId: context.branchId,
       ...details,
     },

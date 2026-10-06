@@ -210,7 +210,15 @@ describe("identity and authentication API", () => {
       LOG_LEVEL: "silent",
       AUTH_ALLOWED_ORIGINS: "https://business.example",
     });
-    const app = buildApp(config, identity);
+    const app = buildApp(config, identity, undefined, {
+      rateLimiter: {
+        consume: async () => ({
+          allowed: true,
+          remaining: 4,
+          resetAt: new Date(Date.now() + 60_000),
+        }),
+      },
+    });
 
     const response = await app.inject({
       method: "POST",
@@ -512,7 +520,6 @@ describe("identity and authentication API", () => {
     expect((await request()).statusCode).toBe(401);
     expect((await request()).statusCode).toBe(401);
     const limited = await request();
-    expect(limited.headers["x-ratelimit-limit"]).toBe("2");
     expect(limited.statusCode).toBe(429);
     expect(limited.json().error.code).toBe("TOO_MANY_REQUESTS");
 

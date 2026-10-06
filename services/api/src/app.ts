@@ -3,8 +3,17 @@ import {
   denyAllAuthorizationService,
   type AuthorizationService,
   type IdentityRepository,
+  type RateLimiter,
 } from "@onecore/database";
 import type { ApiErrorResponse, HealthResponse } from "@onecore/contracts";
+import {
+  classifyError,
+  getRequestContext,
+  resolveCorrelationId,
+  runWithRequestContext,
+  sanitizeErrorForLog,
+  type RequestContext,
+} from "@onecore/config";
 import { registerAuthentication } from "./authentication.js";
 import { registerAuthorizationRoutes } from "./authorization.js";
 import { registerConfigurationRoutes } from "./configuration.js";
@@ -13,21 +22,157 @@ import { registerEventRoutes } from "./events.js";
 import { registerModuleRoutes } from "./modules.js";
 import { createApiFastify } from "./fastify-instance.js";
 
+export interface ApiAppOptions {
+  readinessCheck?: () => Promise<void>;
+  rateLimiter?: RateLimiter;
+}
+
+declare module "fastify" {
+  interface FastifyRequest {
+    observabilityContext: RequestContext | null;
+    requestStartedAt: number;
+  }
+}
+
+function withRequestCorrelation(
+  authorization: AuthorizationService,
+): AuthorizationService {
+  const metadataWithContext = (metadata: { requestId: string }) => {
+    const correlationId = getRequestContext()?.correlationId;
+    return correlationId ? { ...metadata, correlationId } : metadata;
+  };
+
+  return {
+    authorize: (context, permissionKey, metadata) =>
+      authorization.authorize(
+        context,
+        permissionKey,
+        metadataWithContext(metadata),
+      ),
+    hasPermission: (context, permissionKey, metadata) =>
+      authorization.hasPermission(
+        context,
+        permissionKey,
+        metadataWithContext(metadata),
+      ),
+    withPermission: (context, permissionKey, metadata, operation) =>
+      authorization.withPermission(
+        context,
+        permissionKey,
+        metadataWithContext(metadata),
+        operation,
+      ),
+    withAllPermissions: (context, permissionKeys, metadata, operation) =>
+      authorization.withAllPermissions(
+        context,
+        permissionKeys,
+        metadataWithContext(metadata),
+        operation,
+      ),
+    withAnyPermission: (context, permissionKeys, metadata, operation) =>
+      authorization.withAnyPermission(
+        context,
+        permissionKeys,
+        metadataWithContext(metadata),
+        operation,
+      ),
+  };
+}
+
 export function buildApp(
   config: RuntimeConfig,
   identityRepository: IdentityRepository,
   authorizationService: AuthorizationService = denyAllAuthorizationService,
+  options: ApiAppOptions = {},
 ) {
   const app = createApiFastify(config);
 
-  registerAuthentication(app, config, identityRepository);
-  registerAuthorizationRoutes(app, authorizationService);
-  registerConfigurationRoutes(app, authorizationService);
-  registerConfigurationResourceRoutes(app, authorizationService);
-  registerEventRoutes(app, authorizationService);
-  registerModuleRoutes(app, authorizationService);
+  app.decorateRequest("observabilityContext", null);
+  app.decorateRequest("requestStartedAt", 0);
+  app.addHook("onRequest", (request, reply, done) => {
+    const correlationId = resolveCorrelationId(
+      request.headers["x-correlation-id"],
+      request.id,
+    );
+    const context: RequestContext = {
+      requestId: request.id,
+      correlationId,
+      userId: null,
+      organizationId: null,
+      branchId: null,
+    };
+    request.observabilityContext = context;
+    request.requestStartedAt = performance.now();
+    reply.header("x-request-id", context.requestId);
+    reply.header("x-correlation-id", context.correlationId);
+    runWithRequestContext(context, done);
+  });
+  app.addHook("onSend", async (request, reply, payload) => {
+    reply.header("x-content-type-options", "nosniff");
+    reply.header("x-frame-options", "DENY");
+    reply.header("referrer-policy", "strict-origin-when-cross-origin");
+    reply.header(
+      "permissions-policy",
+      "camera=(), microphone=(), geolocation=()",
+    );
+    reply.header(
+      "content-security-policy",
+      "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    );
+    if (request.url.startsWith("/health")) {
+      reply.header("cache-control", "no-store");
+    }
+    return payload;
+  });
+  app.addHook("onResponse", (request, reply, done) => {
+    request.log.info(
+      {
+        ...request.observabilityContext,
+        eventType: "http.request.completed",
+        operation: request.routeOptions.url ?? "unmatched",
+        method: request.method,
+        durationMs: Math.max(
+          0,
+          Math.round(performance.now() - request.requestStartedAt),
+        ),
+        status: reply.statusCode,
+      },
+      "HTTP request completed",
+    );
+    done();
+  });
 
-  app.get<{ Reply: HealthResponse }>("/health", async () => ({ status: "ok" }));
+  const correlatedAuthorization = withRequestCorrelation(authorizationService);
+  registerAuthentication(app, config, identityRepository, options.rateLimiter);
+  registerAuthorizationRoutes(app, correlatedAuthorization);
+  registerConfigurationRoutes(app, correlatedAuthorization);
+  registerConfigurationResourceRoutes(app, correlatedAuthorization);
+  registerEventRoutes(app, correlatedAuthorization);
+  registerModuleRoutes(app, correlatedAuthorization);
+
+  const live = async (): Promise<HealthResponse> => ({ status: "ok" });
+  app.get<{ Reply: HealthResponse }>("/health", live);
+  app.get<{ Reply: HealthResponse }>("/health/live", live);
+  app.get("/health/ready", async (request, reply) => {
+    try {
+      if (!options.readinessCheck) {
+        throw new Error("Readiness dependency check is not configured");
+      }
+      await options.readinessCheck();
+      return reply.send({ status: "ready" });
+    } catch (error) {
+      request.log.error(
+        {
+          ...request.observabilityContext,
+          errorCategory: classifyError(error),
+          errorCode: classifyError(error),
+          err: sanitizeErrorForLog(error),
+        },
+        "Readiness dependency check failed",
+      );
+      return reply.status(503).send({ status: "not_ready" });
+    }
+  });
 
   app.setNotFoundHandler((_request, reply) => {
     const body: ApiErrorResponse = {
@@ -47,6 +192,7 @@ export function buildApp(
       typeof error.statusCode === "number"
         ? error.statusCode
         : 500;
+    const category = classifyError(error);
     if (statusCode >= 400 && statusCode < 500) {
       const code =
         statusCode === 401
@@ -72,7 +218,15 @@ export function buildApp(
       return reply.status(statusCode).send(body);
     }
 
-    request.log.error({ err: error }, "Unhandled server error");
+    request.log.error(
+      {
+        ...request.observabilityContext,
+        errorCategory: category,
+        errorCode: category,
+        err: sanitizeErrorForLog(error),
+      },
+      "Unhandled server error",
+    );
     const body: ApiErrorResponse = {
       error: {
         code: "INTERNAL_SERVER_ERROR",

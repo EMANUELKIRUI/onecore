@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { hashRateLimitIdentity } from "@onecore/config";
 import {
   createDomainEvent,
   notificationInputSchema,
@@ -24,6 +24,7 @@ import {
   searchDocuments,
 } from "../schema/index.js";
 import { recordOutboxEvent } from "./outbox.js";
+import { observeServiceOperation } from "./service-telemetry.js";
 
 export interface SearchResult {
   documentId: string;
@@ -81,13 +82,14 @@ function platformEvent<
   aggregateId: string,
   payload: EventPayload<T>,
   requestId: string,
+  correlationId: string,
 ) {
   return createDomainEvent({
     eventType,
     organizationId: context.organizationId,
     ...(context.branchId ? { branchId: context.branchId } : {}),
     actorUserId: context.userId,
-    correlationId: randomUUID(),
+    correlationId,
     aggregateType,
     aggregateId,
     payload,
@@ -145,194 +147,250 @@ export function createPlatformServices(
   return {
     async createNotification(context, metadata, input) {
       const parsed = notificationInputSchema.parse(input);
-      return authorization.withPermission(
-        context,
-        "core.organization.notification_inbox.manage",
-        metadata,
-        async (transaction, resolved) => {
-          if (!branchInputMatches(parsed.branchId, resolved)) return null;
-          const recipientAllowed = await validateRecipientBranch(
-            transaction,
-            resolved,
-            parsed.recipientUserId,
-          );
-          if (!recipientAllowed) return null;
-
-          const [notification] = await transaction
-            .insert(notifications)
-            .values({
-              organizationId: resolved.organizationId,
-              branchId: resolved.branchId,
-              recipientUserId: parsed.recipientUserId,
-              createdByUserId: resolved.userId,
-              notificationType: parsed.notificationType,
-              title: parsed.title,
-              body: parsed.body,
-              metadata: parsed.metadata,
-            })
-            .returning({ id: notifications.id });
-          if (!notification)
-            throw new Error("Notification insert returned no row");
-
-          await transaction.insert(notificationDeliveries).values({
-            organizationId: resolved.organizationId,
-            notificationId: notification.id,
-            channel: "IN_APP",
-            status: "DELIVERED",
-            attempts: 1,
-            deliveredAt: new Date(),
-          });
-          await writeAuthorizationMutationEvent(
-            transaction,
-            resolved,
-            metadata,
-            "NOTIFICATION_CREATED",
-            "notification",
-            notification.id,
-            { recipientUserId: parsed.recipientUserId },
-          );
-          await recordOutboxEvent(
-            transaction,
-            platformEvent(
-              resolved,
-              "NOTIFICATION_CREATED",
-              "notification",
-              notification.id,
-              {
-                notificationId: notification.id,
-                recipientUserId: parsed.recipientUserId,
-                notificationType: parsed.notificationType,
-              },
-              metadata.requestId,
-            ),
-          );
-          return { id: notification.id };
+      return observeServiceOperation(
+        "notification.create",
+        {
+          organizationId: context?.organizationId ?? null,
+          branchId: context?.branchId ?? null,
+          actorUserId: context?.userId ?? null,
+          recipientHash: hashRateLimitIdentity(parsed.recipientUserId),
+          notificationType: parsed.notificationType,
+          channel: "IN_APP",
+          requestId: metadata.requestId,
+          correlationId: metadata.correlationId ?? metadata.requestId,
         },
+        () =>
+          authorization.withPermission(
+            context,
+            "core.organization.notification_inbox.manage",
+            metadata,
+            async (transaction, resolved) => {
+              if (!branchInputMatches(parsed.branchId, resolved)) return null;
+              const recipientAllowed = await validateRecipientBranch(
+                transaction,
+                resolved,
+                parsed.recipientUserId,
+              );
+              if (!recipientAllowed) return null;
+
+              const [notification] = await transaction
+                .insert(notifications)
+                .values({
+                  organizationId: resolved.organizationId,
+                  branchId: resolved.branchId,
+                  recipientUserId: parsed.recipientUserId,
+                  createdByUserId: resolved.userId,
+                  notificationType: parsed.notificationType,
+                  title: parsed.title,
+                  body: parsed.body,
+                  metadata: parsed.metadata,
+                })
+                .returning({ id: notifications.id });
+              if (!notification)
+                throw new Error("Notification insert returned no row");
+
+              await transaction.insert(notificationDeliveries).values({
+                organizationId: resolved.organizationId,
+                notificationId: notification.id,
+                channel: "IN_APP",
+                status: "DELIVERED",
+                attempts: 1,
+                deliveredAt: new Date(),
+              });
+              await writeAuthorizationMutationEvent(
+                transaction,
+                resolved,
+                metadata,
+                "NOTIFICATION_CREATED",
+                "notification",
+                notification.id,
+                { recipientUserId: parsed.recipientUserId },
+              );
+              await recordOutboxEvent(
+                transaction,
+                platformEvent(
+                  resolved,
+                  "NOTIFICATION_CREATED",
+                  "notification",
+                  notification.id,
+                  {
+                    notificationId: notification.id,
+                    recipientUserId: parsed.recipientUserId,
+                    notificationType: parsed.notificationType,
+                  },
+                  metadata.requestId,
+                  metadata.correlationId ?? metadata.requestId,
+                ),
+              );
+              return { id: notification.id };
+            },
+          ),
+        (result) => ({
+          notificationId:
+            result.allowed && result.value ? result.value.id : null,
+        }),
       );
     },
 
     async listNotifications(context, metadata, pagination = {}) {
       const limit = Math.min(Math.max(pagination.limit ?? 20, 1), 100);
       const offset = Math.min(Math.max(pagination.offset ?? 0, 0), 10_000);
-      return authorization.withPermission(
-        context,
-        "core.organization.notification_inbox.read",
-        metadata,
-        async (transaction, resolved) =>
-          transaction
-            .select()
-            .from(notifications)
-            .where(
-              and(
-                eq(notifications.organizationId, resolved.organizationId),
-                eq(notifications.recipientUserId, resolved.userId),
-                resolved.branchId
-                  ? or(
-                      isNull(notifications.branchId),
-                      eq(notifications.branchId, resolved.branchId),
-                    )
-                  : isNull(notifications.branchId),
-              ),
-            )
-            .orderBy(desc(notifications.createdAt), desc(notifications.id))
-            .limit(limit)
-            .offset(offset),
+      return observeServiceOperation(
+        "notification.list",
+        {
+          organizationId: context?.organizationId ?? null,
+          branchId: context?.branchId ?? null,
+          actorUserId: context?.userId ?? null,
+          requestId: metadata.requestId,
+          correlationId: metadata.correlationId ?? metadata.requestId,
+        },
+        () =>
+          authorization.withPermission(
+            context,
+            "core.organization.notification_inbox.read",
+            metadata,
+            async (transaction, resolved) =>
+              transaction
+                .select()
+                .from(notifications)
+                .where(
+                  and(
+                    eq(notifications.organizationId, resolved.organizationId),
+                    eq(notifications.recipientUserId, resolved.userId),
+                    resolved.branchId
+                      ? or(
+                          isNull(notifications.branchId),
+                          eq(notifications.branchId, resolved.branchId),
+                        )
+                      : isNull(notifications.branchId),
+                  ),
+                )
+                .orderBy(desc(notifications.createdAt), desc(notifications.id))
+                .limit(limit)
+                .offset(offset),
+          ),
+        (result) => ({
+          notificationCount:
+            result.allowed && result.value ? result.value.length : 0,
+        }),
       );
     },
 
     async setNotificationReadState(context, metadata, notificationId, read) {
       const id = cryptoUuid(notificationId);
-      return authorization.withPermission(
-        context,
-        "core.organization.notification_inbox.read",
-        metadata,
-        async (transaction, resolved) => {
-          const [updated] = await transaction
-            .update(notifications)
-            .set({ readAt: read ? new Date() : null })
-            .where(
-              and(
-                eq(notifications.id, id),
-                eq(notifications.organizationId, resolved.organizationId),
-                eq(notifications.recipientUserId, resolved.userId),
-                resolved.branchId
-                  ? or(
-                      isNull(notifications.branchId),
-                      eq(notifications.branchId, resolved.branchId),
-                    )
-                  : isNull(notifications.branchId),
-              ),
-            )
-            .returning({ id: notifications.id });
-          return updated !== undefined;
+      return observeServiceOperation(
+        "notification.read_state",
+        {
+          notificationId,
+          organizationId: context?.organizationId ?? null,
+          branchId: context?.branchId ?? null,
+          actorUserId: context?.userId ?? null,
+          requestId: metadata.requestId,
+          correlationId: metadata.correlationId ?? metadata.requestId,
         },
+        () =>
+          authorization.withPermission(
+            context,
+            "core.organization.notification_inbox.read",
+            metadata,
+            async (transaction, resolved) => {
+              const [updated] = await transaction
+                .update(notifications)
+                .set({ readAt: read ? new Date() : null })
+                .where(
+                  and(
+                    eq(notifications.id, id),
+                    eq(notifications.organizationId, resolved.organizationId),
+                    eq(notifications.recipientUserId, resolved.userId),
+                    resolved.branchId
+                      ? or(
+                          isNull(notifications.branchId),
+                          eq(notifications.branchId, resolved.branchId),
+                        )
+                      : isNull(notifications.branchId),
+                  ),
+                )
+                .returning({ id: notifications.id });
+              return updated !== undefined;
+            },
+          ),
       );
     },
 
     async indexSearchDocument(context, metadata, input) {
       const parsed = searchDocumentInputSchema.parse(input);
-      return authorization.withPermission(
-        context,
-        "core.organization.search.manage",
-        metadata,
-        async (transaction, resolved) => {
-          if (!branchInputMatches(parsed.branchId, resolved)) return false;
-          const [document] = await transaction
-            .insert(searchDocuments)
-            .values({
-              organizationId: resolved.organizationId,
-              branchId: resolved.branchId,
-              indexName: parsed.indexName,
-              documentId: parsed.documentId,
-              title: parsed.title,
-              body: parsed.body,
-              metadata: parsed.metadata,
-            })
-            .onConflictDoUpdate({
-              target: [
-                searchDocuments.organizationId,
-                searchDocuments.indexName,
-                searchDocuments.documentId,
-              ],
-              set: {
-                branchId: resolved.branchId,
-                title: parsed.title,
-                body: parsed.body,
-                metadata: parsed.metadata,
-                updatedAt: new Date(),
-              },
-              setWhere: resolved.branchId
-                ? eq(searchDocuments.branchId, resolved.branchId)
-                : isNull(searchDocuments.branchId),
-            })
-            .returning({ id: searchDocuments.id });
-          if (!document) return false;
-
-          await writeAuthorizationMutationEvent(
-            transaction,
-            resolved,
-            metadata,
-            "SEARCH_DOCUMENT_INDEXED",
-            "search_document",
-            document.id,
-            { indexName: parsed.indexName, documentId: parsed.documentId },
-          );
-          await recordOutboxEvent(
-            transaction,
-            platformEvent(
-              resolved,
-              "SEARCH_DOCUMENT_INDEXED",
-              "search_document",
-              document.id,
-              {
-                indexName: parsed.indexName,
-                documentId: parsed.documentId,
-              },
-              metadata.requestId,
-            ),
-          );
-          return true;
+      return observeServiceOperation(
+        "search.index",
+        {
+          backend: "postgresql",
+          requestId: metadata.requestId,
+          correlationId: metadata.correlationId ?? metadata.requestId,
         },
+        () =>
+          authorization.withPermission(
+            context,
+            "core.organization.search.manage",
+            metadata,
+            async (transaction, resolved) => {
+              if (!branchInputMatches(parsed.branchId, resolved)) return false;
+              const [document] = await transaction
+                .insert(searchDocuments)
+                .values({
+                  organizationId: resolved.organizationId,
+                  branchId: resolved.branchId,
+                  indexName: parsed.indexName,
+                  documentId: parsed.documentId,
+                  title: parsed.title,
+                  body: parsed.body,
+                  metadata: parsed.metadata,
+                })
+                .onConflictDoUpdate({
+                  target: [
+                    searchDocuments.organizationId,
+                    searchDocuments.indexName,
+                    searchDocuments.documentId,
+                  ],
+                  set: {
+                    branchId: resolved.branchId,
+                    title: parsed.title,
+                    body: parsed.body,
+                    metadata: parsed.metadata,
+                    updatedAt: new Date(),
+                  },
+                  setWhere: resolved.branchId
+                    ? eq(searchDocuments.branchId, resolved.branchId)
+                    : isNull(searchDocuments.branchId),
+                })
+                .returning({ id: searchDocuments.id });
+              if (!document) return false;
+
+              await writeAuthorizationMutationEvent(
+                transaction,
+                resolved,
+                metadata,
+                "SEARCH_DOCUMENT_INDEXED",
+                "search_document",
+                document.id,
+                { indexName: parsed.indexName, documentId: parsed.documentId },
+              );
+              await recordOutboxEvent(
+                transaction,
+                platformEvent(
+                  resolved,
+                  "SEARCH_DOCUMENT_INDEXED",
+                  "search_document",
+                  document.id,
+                  {
+                    indexName: parsed.indexName,
+                    documentId: parsed.documentId,
+                  },
+                  metadata.requestId,
+                  metadata.correlationId ?? metadata.requestId,
+                ),
+              );
+              return true;
+            },
+          ),
       );
     },
 
@@ -342,96 +400,121 @@ export function createPlatformServices(
         documentId:
           searchDocumentInputSchema.shape.documentId.parse(documentId),
       };
-      return authorization.withPermission(
-        context,
-        "core.organization.search.manage",
-        metadata,
-        async (transaction, resolved) => {
-          const [removed] = await transaction
-            .delete(searchDocuments)
-            .where(
-              and(
-                eq(searchDocuments.organizationId, resolved.organizationId),
-                eq(searchDocuments.indexName, parsed.indexName),
-                eq(searchDocuments.documentId, parsed.documentId),
-                resolved.branchId
-                  ? eq(searchDocuments.branchId, resolved.branchId)
-                  : isNull(searchDocuments.branchId),
-              ),
-            )
-            .returning({ id: searchDocuments.id });
-          if (!removed) return false;
-
-          await writeAuthorizationMutationEvent(
-            transaction,
-            resolved,
-            metadata,
-            "SEARCH_DOCUMENT_DELETED",
-            "search_document",
-            removed.id,
-            parsed,
-          );
-          await recordOutboxEvent(
-            transaction,
-            platformEvent(
-              resolved,
-              "SEARCH_DOCUMENT_DELETED",
-              "search_document",
-              removed.id,
-              parsed,
-              metadata.requestId,
-            ),
-          );
-          return true;
+      return observeServiceOperation(
+        "search.remove",
+        {
+          backend: "postgresql",
+          requestId: metadata.requestId,
+          correlationId: metadata.correlationId ?? metadata.requestId,
         },
+        () =>
+          authorization.withPermission(
+            context,
+            "core.organization.search.manage",
+            metadata,
+            async (transaction, resolved) => {
+              const [removed] = await transaction
+                .delete(searchDocuments)
+                .where(
+                  and(
+                    eq(searchDocuments.organizationId, resolved.organizationId),
+                    eq(searchDocuments.indexName, parsed.indexName),
+                    eq(searchDocuments.documentId, parsed.documentId),
+                    resolved.branchId
+                      ? eq(searchDocuments.branchId, resolved.branchId)
+                      : isNull(searchDocuments.branchId),
+                  ),
+                )
+                .returning({ id: searchDocuments.id });
+              if (!removed) return false;
+
+              await writeAuthorizationMutationEvent(
+                transaction,
+                resolved,
+                metadata,
+                "SEARCH_DOCUMENT_DELETED",
+                "search_document",
+                removed.id,
+                parsed,
+              );
+              await recordOutboxEvent(
+                transaction,
+                platformEvent(
+                  resolved,
+                  "SEARCH_DOCUMENT_DELETED",
+                  "search_document",
+                  removed.id,
+                  parsed,
+                  metadata.requestId,
+                  metadata.correlationId ?? metadata.requestId,
+                ),
+              );
+              return true;
+            },
+          ),
       );
     },
 
     async search(context, metadata, input) {
       const parsed = searchRequestSchema.parse(input);
-      return authorization.withPermission(
-        context,
-        "core.organization.search.read",
-        metadata,
-        async (transaction, resolved) => {
-          if (!branchInputMatches(parsed.branchId, resolved)) return [];
-          const branchCondition = resolved.branchId
-            ? or(
-                isNull(searchDocuments.branchId),
-                eq(searchDocuments.branchId, resolved.branchId),
-              )
-            : isNull(searchDocuments.branchId);
-          const query = sql`websearch_to_tsquery('simple', ${parsed.query})`;
-          const rank = sql<number>`ts_rank(
+      return observeServiceOperation(
+        "search.query",
+        {
+          backend: "postgresql",
+          queryLength: parsed.query.length,
+          limit: parsed.limit,
+          offset: parsed.offset,
+          requestId: metadata.requestId,
+          correlationId: metadata.correlationId ?? metadata.requestId,
+        },
+        () =>
+          authorization.withPermission(
+            context,
+            "core.organization.search.read",
+            metadata,
+            async (transaction, resolved) => {
+              if (!branchInputMatches(parsed.branchId, resolved)) return [];
+              const branchCondition = resolved.branchId
+                ? or(
+                    isNull(searchDocuments.branchId),
+                    eq(searchDocuments.branchId, resolved.branchId),
+                  )
+                : isNull(searchDocuments.branchId);
+              const query = sql`websearch_to_tsquery('simple', ${parsed.query})`;
+              const rank = sql<number>`ts_rank(
             to_tsvector('simple', coalesce(${searchDocuments.title}, '') || ' ' || coalesce(${searchDocuments.body}, '')),
             ${query}
           )`;
-          const rows = await transaction
-            .select({
-              documentId: searchDocuments.documentId,
-              indexName: searchDocuments.indexName,
-              title: searchDocuments.title,
-              body: searchDocuments.body,
-              branchId: searchDocuments.branchId,
-              updatedAt: searchDocuments.updatedAt,
-            })
-            .from(searchDocuments)
-            .where(
-              and(
-                eq(searchDocuments.organizationId, resolved.organizationId),
-                eq(searchDocuments.indexName, parsed.indexName),
-                branchCondition,
-                sql`to_tsvector('simple', coalesce(${searchDocuments.title}, '') || ' ' || coalesce(${searchDocuments.body}, '')) @@ ${query}`,
-              ),
-            )
-            .orderBy(desc(rank), desc(searchDocuments.updatedAt))
-            .limit(parsed.limit)
-            .offset(parsed.offset);
-          return rows.map(({ body, ...row }) => ({
-            ...row,
-            excerpt: body.slice(0, 240),
-          }));
-        },
+              const rows = await transaction
+                .select({
+                  documentId: searchDocuments.documentId,
+                  indexName: searchDocuments.indexName,
+                  title: searchDocuments.title,
+                  body: searchDocuments.body,
+                  branchId: searchDocuments.branchId,
+                  updatedAt: searchDocuments.updatedAt,
+                })
+                .from(searchDocuments)
+                .where(
+                  and(
+                    eq(searchDocuments.organizationId, resolved.organizationId),
+                    eq(searchDocuments.indexName, parsed.indexName),
+                    branchCondition,
+                    sql`to_tsvector('simple', coalesce(${searchDocuments.title}, '') || ' ' || coalesce(${searchDocuments.body}, '')) @@ ${query}`,
+                  ),
+                )
+                .orderBy(desc(rank), desc(searchDocuments.updatedAt))
+                .limit(parsed.limit)
+                .offset(parsed.offset);
+              return rows.map(({ body, ...row }) => ({
+                ...row,
+                excerpt: body.slice(0, 240),
+              }));
+            },
+          ),
+        (result) => ({
+          resultCount: result.allowed ? (result.value?.length ?? 0) : 0,
+        }),
       );
     },
   };

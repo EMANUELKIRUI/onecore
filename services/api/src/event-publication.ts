@@ -1,3 +1,4 @@
+import { getRequestContext } from "@onecore/config";
 import {
   createDomainEvent,
   eventTypeSchema,
@@ -9,6 +10,10 @@ import {
   type OrganizationTransaction,
   type ResolvedAuthorizationContext,
 } from "@onecore/database";
+
+function correlationId(requestId: string): string {
+  return getRequestContext()?.correlationId ?? requestId;
+}
 
 export async function recordConfigurationChangedEvent(
   transaction: OrganizationTransaction,
@@ -25,6 +30,7 @@ export async function recordConfigurationChangedEvent(
       organizationId: context.organizationId,
       ...(context.branch ? { branchId: context.branch.branchId } : {}),
       actorUserId: context.userId,
+      correlationId: correlationId(requestId),
       aggregateType: resource,
       aggregateId: resourceId,
       payload: {
@@ -55,6 +61,7 @@ export async function recordFeatureFlagChangedEvent(
         ? { branchId: context.branch.branchId }
         : {}),
       actorUserId: context.userId,
+      correlationId: correlationId(requestId),
       aggregateType: "feature_flag",
       aggregateId: flagId,
       payload: { flagKey, valueType, scope },
@@ -79,6 +86,7 @@ export async function recordUserRoleChangedEvent(
       organizationId: context.organizationId,
       ...(context.branch ? { branchId: context.branch.branchId } : {}),
       actorUserId: context.userId,
+      correlationId: correlationId(requestId),
       aggregateType: "membership_role",
       aggregateId: membershipId,
       payload: { userId, membershipId, roleId, change },
@@ -103,6 +111,7 @@ export async function recordModuleEntitlementEvent(
       organizationId: context.organizationId,
       ...(context.branch ? { branchId: context.branch.branchId } : {}),
       actorUserId: context.userId,
+      correlationId: correlationId(requestId),
       aggregateType: "module_entitlement",
       aggregateId: moduleId,
       payload: { moduleKey, source },

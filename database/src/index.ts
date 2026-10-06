@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 export * from "../schema/index.js";
@@ -113,8 +114,21 @@ export {
   type StoredObjectRecord,
   type StorageUploadInput,
 } from "./storage.js";
+export {
+  createDatabaseRateLimiter,
+  type RateLimitDecision,
+  type RateLimiter,
+  type RateLimitInput,
+} from "./rate-limiter.js";
+export { createServiceTelemetry, observeServiceOperation } from "./service-telemetry.js";
 
 export type Database = PostgresJsDatabase;
+
+export async function checkDatabaseConnectivity(
+  database: Database,
+): Promise<void> {
+  await database.execute(sql`select 1`);
+}
 
 export function createDatabase(connectionString: string): {
   db: Database;

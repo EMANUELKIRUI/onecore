@@ -2,7 +2,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { migrate } from "drizzle-orm/pglite/migrator";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -19,6 +18,7 @@ import {
   calculateJobRetryDelay,
 } from "../src/index.js";
 import * as schema from "../schema/index.js";
+import { applyTestMigrations } from "./migration-fixture.js";
 
 const migrationsDirectory = fileURLToPath(
   new URL("../migrations/", import.meta.url),
@@ -297,17 +297,17 @@ beforeAll(async () => {
   await client.exec(
     `CREATE ROLE onecore_app NOLOGIN NOBYPASSRLS; CREATE ROLE onecore_migrator NOLOGIN NOSUPERUSER NOBYPASSRLS;`,
   );
-  await migrate(database, { migrationsFolder: migrationsDirectory });
+  await applyTestMigrations(client, migrationsDirectory);
   await client.exec(
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO onecore_app;`,
   );
   authorization = createAuthorizationService(database as never);
   root = await mkdtemp(join(tmpdir(), "onecore-storage-"));
-});
+}, 30_000);
 
 afterAll(async () => {
-  await client.close();
-  await rm(root, { recursive: true, force: true });
+  if (client) await client.close();
+  if (root) await rm(root, { recursive: true, force: true });
 });
 
 describe("durable job handler contracts", () => {

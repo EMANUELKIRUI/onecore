@@ -19,6 +19,7 @@
     "db:seed": "tsx seeds/seed.ts"
   },
   "dependencies": {
+    "@onecore/config": "^0.1.0",
     "@onecore/core-domain": "*",
     "drizzle-orm": "1.0.0-rc.5-5935859",
     "postgres": "^3.4.9",

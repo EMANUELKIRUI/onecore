@@ -19,6 +19,7 @@ import { auditLogs, branches, jobAttempts, jobs } from "../schema/index.js";
 import { loadOrganizationModuleAccess } from "./module-entitlements.js";
 import { recordOutboxEvent } from "./outbox.js";
 import type { Database } from "./index.js";
+import { observeServiceOperation } from "./service-telemetry.js";
 
 export interface JobHandlerContext {
   organizationId: string;
@@ -230,7 +231,11 @@ async function claimBatch(
   now: Date,
   batchSize: number,
   leaseMilliseconds: number,
-): Promise<JobClaim[]> {
+): Promise<{
+  claims: JobClaim[];
+  leaseRecoveries: number;
+  exhausted: number;
+}> {
   const rows = await transaction
     .select()
     .from(jobs)
@@ -255,8 +260,11 @@ async function claimBatch(
     .for("update", { skipLocked: true });
 
   const claims: JobClaim[] = [];
+  let leaseRecoveries = 0;
+  let exhausted = 0;
   for (const job of rows) {
     if (job.status === "RUNNING" && job.attempts > 0) {
+      leaseRecoveries += 1;
       await transaction
         .update(jobAttempts)
         .set({ outcome: "ABANDONED", completedAt: now })
@@ -268,9 +276,22 @@ async function claimBatch(
             eq(jobAttempts.outcome, "RUNNING"),
           ),
         );
+      await transaction.insert(auditLogs).values({
+        organizationId,
+        actorUserId: null,
+        action: "JOB_LEASE_RECOVERED",
+        resource: "job",
+        resourceId: job.id,
+        result: "SUCCESS",
+        requestMetadata: {
+          correlationId: job.correlationId,
+          attempt: job.attempts,
+        },
+      });
     }
 
     if (job.attempts >= job.maxAttempts) {
+      exhausted += 1;
       await transaction
         .update(jobs)
         .set({
@@ -290,7 +311,10 @@ async function claimBatch(
         resource: "job",
         resourceId: job.id,
         result: "FAILURE",
-        requestMetadata: { reason: "ATTEMPTS_EXHAUSTED" },
+        requestMetadata: {
+          correlationId: job.correlationId,
+          reason: "ATTEMPTS_EXHAUSTED",
+        },
       });
       await recordOutboxEvent(
         transaction,
@@ -345,7 +369,7 @@ async function claimBatch(
       causationId: job.causationId,
     });
   }
-  return claims;
+  return { claims, leaseRecoveries, exhausted };
 }
 
 async function handleClaim(
@@ -391,17 +415,30 @@ async function handleClaim(
 
     if (!failure) {
       try {
-        await transaction.transaction(async (savepoint) => {
-          await handler.execute(savepoint, payload.data, {
+        await observeServiceOperation(
+          "job.execute",
+          {
+            jobId: job.id,
+            jobType: job.jobType,
             organizationId: job.organizationId,
             branchId: job.branchId,
-            jobId: job.id,
-            workerId: claim.workerId,
             attempt: job.attempts,
+            workerId: claim.workerId,
             correlationId: job.correlationId,
-            causationId: job.causationId,
-          });
-        });
+          },
+          () =>
+            transaction.transaction(async (savepoint) => {
+              await handler.execute(savepoint, payload.data, {
+                organizationId: job.organizationId,
+                branchId: job.branchId,
+                jobId: job.id,
+                workerId: claim.workerId,
+                attempt: job.attempts,
+                correlationId: job.correlationId,
+                causationId: job.causationId,
+              });
+            }),
+        );
       } catch (error) {
         failure =
           error instanceof JobExecutionError
@@ -441,7 +478,10 @@ async function handleClaim(
       resource: "job",
       resourceId: job.id,
       result: "SUCCESS",
-      requestMetadata: { workerId: claim.workerId },
+      requestMetadata: {
+        workerId: claim.workerId,
+        correlationId: job.correlationId,
+      },
     });
     await recordOutboxEvent(
       transaction,
@@ -502,6 +542,7 @@ async function handleClaim(
     result: "FAILURE",
     requestMetadata: {
       workerId: claim.workerId,
+      correlationId: job.correlationId,
       errorCode: failure.code,
       attempt: job.attempts,
       nextAttemptAt: retrying ? nextAttemptAt.toISOString() : null,
@@ -536,207 +577,256 @@ export function createJobService(
       if (!registry.get(parsed.jobType)) {
         throw new JobExecutionError("HANDLER_NOT_REGISTERED", false);
       }
-      return authorization.withPermission(
-        context,
-        "core.organization.jobs.enqueue",
-        metadata,
-        async (transaction, resolved: ResolvedAuthorizationContext) => {
-          if (
-            parsed.branchId !== undefined &&
-            parsed.branchId !== resolved.branchId
-          ) {
-            return null;
-          }
-          const now = new Date();
-          const id = randomUUID();
-          const correlationId = randomUUID();
-          const requestHash = createHash("sha256")
-            .update(
-              stableJson({
-                jobType: parsed.jobType,
-                payload: parsed.payload,
-                branchId: resolved.branchId,
-                scheduledAt: parsed.scheduledAt ?? null,
-                priority: parsed.priority,
-                maxAttempts: parsed.maxAttempts,
-              }),
-            )
-            .digest("hex");
-          const inserted = await transaction
-            .insert(jobs)
-            .values({
-              id,
-              organizationId: resolved.organizationId,
-              branchId: resolved.branchId,
-              createdByUserId: resolved.userId,
-              jobType: parsed.jobType,
-              payload: parsed.payload,
-              idempotencyKey: parsed.idempotencyKey ?? null,
-              requestHash,
-              correlationId,
-              status: "QUEUED",
-              priority: parsed.priority,
-              maxAttempts: parsed.maxAttempts,
-              scheduledAt: parsed.scheduledAt
-                ? new Date(parsed.scheduledAt)
-                : now,
-              nextAttemptAt: parsed.scheduledAt
-                ? new Date(parsed.scheduledAt)
-                : now,
-            })
-            .onConflictDoNothing()
-            .returning({ id: jobs.id });
-
-          if (!inserted.length && parsed.idempotencyKey) {
-            const [existing] = await transaction
-              .select({ id: jobs.id, requestHash: jobs.requestHash })
-              .from(jobs)
-              .where(
-                and(
-                  eq(jobs.organizationId, resolved.organizationId),
-                  eq(jobs.jobType, parsed.jobType),
-                  eq(jobs.idempotencyKey, parsed.idempotencyKey),
-                ),
-              )
-              .limit(1);
-            if (!existing) return null;
-            if (existing.requestHash !== requestHash) {
-              throw new IdempotencyConflictError();
-            }
-            return { id: existing.id };
-          }
-          if (!inserted.length) throw new Error("Job insert returned no row");
-
-          await transaction.insert(auditLogs).values({
-            organizationId: resolved.organizationId,
-            actorUserId: resolved.userId,
-            action: "JOB_ENQUEUED",
-            resource: "job",
-            resourceId: id,
-            result: "SUCCESS",
-            requestMetadata: {
-              requestId: metadata.requestId,
-              jobType: parsed.jobType,
-            },
-          });
-          await recordOutboxEvent(
-            transaction,
-            eventForJob(
-              "JOB_ENQUEUED",
-              resolved.organizationId,
-              resolved.branchId,
-              id,
-              parsed.jobType,
-              correlationId,
-              resolved.userId,
-            ),
-          );
-          return { id };
+      return observeServiceOperation(
+        "job.enqueue",
+        {
+          jobType: parsed.jobType,
+          organizationId: context?.organizationId ?? null,
+          branchId: context?.branchId ?? null,
+          actorUserId: context?.userId ?? null,
+          requestId: metadata.requestId,
+          correlationId: metadata.correlationId ?? metadata.requestId,
         },
+        () =>
+          authorization.withPermission(
+            context,
+            "core.organization.jobs.enqueue",
+            metadata,
+            async (transaction, resolved: ResolvedAuthorizationContext) => {
+              if (
+                parsed.branchId !== undefined &&
+                parsed.branchId !== resolved.branchId
+              ) {
+                return null;
+              }
+              const now = new Date();
+              const id = randomUUID();
+              const correlationId = metadata.correlationId ?? randomUUID();
+              const requestHash = createHash("sha256")
+                .update(
+                  stableJson({
+                    jobType: parsed.jobType,
+                    payload: parsed.payload,
+                    branchId: resolved.branchId,
+                    scheduledAt: parsed.scheduledAt ?? null,
+                    priority: parsed.priority,
+                    maxAttempts: parsed.maxAttempts,
+                  }),
+                )
+                .digest("hex");
+              const inserted = await transaction
+                .insert(jobs)
+                .values({
+                  id,
+                  organizationId: resolved.organizationId,
+                  branchId: resolved.branchId,
+                  createdByUserId: resolved.userId,
+                  jobType: parsed.jobType,
+                  payload: parsed.payload,
+                  idempotencyKey: parsed.idempotencyKey ?? null,
+                  requestHash,
+                  correlationId,
+                  status: "QUEUED",
+                  priority: parsed.priority,
+                  maxAttempts: parsed.maxAttempts,
+                  scheduledAt: parsed.scheduledAt
+                    ? new Date(parsed.scheduledAt)
+                    : now,
+                  nextAttemptAt: parsed.scheduledAt
+                    ? new Date(parsed.scheduledAt)
+                    : now,
+                })
+                .onConflictDoNothing()
+                .returning({ id: jobs.id });
+
+              if (!inserted.length && parsed.idempotencyKey) {
+                const [existing] = await transaction
+                  .select({ id: jobs.id, requestHash: jobs.requestHash })
+                  .from(jobs)
+                  .where(
+                    and(
+                      eq(jobs.organizationId, resolved.organizationId),
+                      eq(jobs.jobType, parsed.jobType),
+                      eq(jobs.idempotencyKey, parsed.idempotencyKey),
+                    ),
+                  )
+                  .limit(1);
+                if (!existing) return null;
+                if (existing.requestHash !== requestHash) {
+                  throw new IdempotencyConflictError();
+                }
+                return { id: existing.id };
+              }
+              if (!inserted.length)
+                throw new Error("Job insert returned no row");
+
+              await transaction.insert(auditLogs).values({
+                organizationId: resolved.organizationId,
+                actorUserId: resolved.userId,
+                action: "JOB_ENQUEUED",
+                resource: "job",
+                resourceId: id,
+                result: "SUCCESS",
+                requestMetadata: {
+                  requestId: metadata.requestId,
+                  correlationId: metadata.correlationId ?? correlationId,
+                  jobType: parsed.jobType,
+                },
+              });
+              await recordOutboxEvent(
+                transaction,
+                eventForJob(
+                  "JOB_ENQUEUED",
+                  resolved.organizationId,
+                  resolved.branchId,
+                  id,
+                  parsed.jobType,
+                  correlationId,
+                  resolved.userId,
+                ),
+              );
+              return { id };
+            },
+          ),
+        (result) => ({
+          jobId: result.allowed ? (result.value?.id ?? null) : null,
+        }),
       );
     },
 
     async retry(context, metadata, jobId) {
       const id = z.uuid().parse(jobId);
-      return authorization.withPermission(
-        context,
-        "core.organization.jobs.manage",
-        metadata,
-        async (transaction, resolved) => {
-          const [job] = await transaction
-            .select()
-            .from(jobs)
-            .where(
-              and(
-                eq(jobs.id, id),
-                eq(jobs.organizationId, resolved.organizationId),
-                resolved.branchId
-                  ? or(
-                      isNull(jobs.branchId),
-                      eq(jobs.branchId, resolved.branchId),
-                    )
-                  : isNull(jobs.branchId),
-                eq(jobs.status, "FAILED"),
-              ),
-            )
-            .limit(1)
-            .for("update");
-          if (!job) return false;
-          if (job.attempts >= job.maxAttempts) {
-            return false;
-          }
-          await transaction
-            .update(jobs)
-            .set({
-              status: "QUEUED",
-              nextAttemptAt: new Date(),
-              failedAt: null,
-              lastErrorCode: null,
-              updatedAt: new Date(),
-            })
-            .where(eq(jobs.id, job.id));
-          await transaction.insert(auditLogs).values({
-            organizationId: resolved.organizationId,
-            actorUserId: resolved.userId,
-            action: "JOB_REQUEUED",
-            resource: "job",
-            resourceId: job.id,
-            result: "SUCCESS",
-            requestMetadata: { requestId: metadata.requestId },
-          });
-          return true;
+      return observeServiceOperation(
+        "job.retry",
+        {
+          jobId: id,
+          organizationId: context?.organizationId ?? null,
+          branchId: context?.branchId ?? null,
+          actorUserId: context?.userId ?? null,
+          requestId: metadata.requestId,
+          correlationId: metadata.correlationId ?? metadata.requestId,
         },
+        () =>
+          authorization.withPermission(
+            context,
+            "core.organization.jobs.manage",
+            metadata,
+            async (transaction, resolved) => {
+              const [job] = await transaction
+                .select()
+                .from(jobs)
+                .where(
+                  and(
+                    eq(jobs.id, id),
+                    eq(jobs.organizationId, resolved.organizationId),
+                    resolved.branchId
+                      ? or(
+                          isNull(jobs.branchId),
+                          eq(jobs.branchId, resolved.branchId),
+                        )
+                      : isNull(jobs.branchId),
+                    eq(jobs.status, "FAILED"),
+                  ),
+                )
+                .limit(1)
+                .for("update");
+              if (!job) return false;
+              if (job.attempts >= job.maxAttempts) {
+                return false;
+              }
+              await transaction
+                .update(jobs)
+                .set({
+                  status: "QUEUED",
+                  nextAttemptAt: new Date(),
+                  failedAt: null,
+                  lastErrorCode: null,
+                  updatedAt: new Date(),
+                })
+                .where(eq(jobs.id, job.id));
+              await transaction.insert(auditLogs).values({
+                organizationId: resolved.organizationId,
+                actorUserId: resolved.userId,
+                action: "JOB_REQUEUED",
+                resource: "job",
+                resourceId: job.id,
+                result: "SUCCESS",
+                requestMetadata: {
+                  requestId: metadata.requestId,
+                  correlationId: metadata.correlationId ?? metadata.requestId,
+                },
+              });
+              return true;
+            },
+          ),
+        (result) => ({ jobId: result.allowed && result.value ? id : null }),
       );
     },
 
     async cancel(context, metadata, jobId) {
       const id = z.uuid().parse(jobId);
-      return authorization.withPermission(
-        context,
-        "core.organization.jobs.manage",
-        metadata,
-        async (transaction, resolved) => {
-          const [job] = await transaction
-            .select()
-            .from(jobs)
-            .where(
-              and(
-                eq(jobs.id, id),
-                eq(jobs.organizationId, resolved.organizationId),
-                resolved.branchId
-                  ? or(
-                      isNull(jobs.branchId),
-                      eq(jobs.branchId, resolved.branchId),
-                    )
-                  : isNull(jobs.branchId),
-                inArray(jobs.status, ["QUEUED", "RETRY_WAIT", "RUNNING"]),
-              ),
-            )
-            .limit(1)
-            .for("update");
-          if (!job) return false;
-          await transaction
-            .update(jobs)
-            .set({
-              status: "CANCELLED",
-              failedAt: new Date(),
-              leaseOwner: null,
-              leaseToken: null,
-              leaseExpiresAt: null,
-              updatedAt: new Date(),
-            })
-            .where(eq(jobs.id, job.id));
-          await transaction.insert(auditLogs).values({
-            organizationId: resolved.organizationId,
-            actorUserId: resolved.userId,
-            action: "JOB_CANCELLED",
-            resource: "job",
-            resourceId: job.id,
-            result: "SUCCESS",
-            requestMetadata: { requestId: metadata.requestId },
-          });
-          return true;
+      return observeServiceOperation(
+        "job.cancel",
+        {
+          jobId: id,
+          organizationId: context?.organizationId ?? null,
+          branchId: context?.branchId ?? null,
+          actorUserId: context?.userId ?? null,
+          requestId: metadata.requestId,
+          correlationId: metadata.correlationId ?? metadata.requestId,
         },
+        () =>
+          authorization.withPermission(
+            context,
+            "core.organization.jobs.manage",
+            metadata,
+            async (transaction, resolved) => {
+              const [job] = await transaction
+                .select()
+                .from(jobs)
+                .where(
+                  and(
+                    eq(jobs.id, id),
+                    eq(jobs.organizationId, resolved.organizationId),
+                    resolved.branchId
+                      ? or(
+                          isNull(jobs.branchId),
+                          eq(jobs.branchId, resolved.branchId),
+                        )
+                      : isNull(jobs.branchId),
+                    inArray(jobs.status, ["QUEUED", "RETRY_WAIT", "RUNNING"]),
+                  ),
+                )
+                .limit(1)
+                .for("update");
+              if (!job) return false;
+              await transaction
+                .update(jobs)
+                .set({
+                  status: "CANCELLED",
+                  failedAt: new Date(),
+                  leaseOwner: null,
+                  leaseToken: null,
+                  leaseExpiresAt: null,
+                  updatedAt: new Date(),
+                })
+                .where(eq(jobs.id, job.id));
+              await transaction.insert(auditLogs).values({
+                organizationId: resolved.organizationId,
+                actorUserId: resolved.userId,
+                action: "JOB_CANCELLED",
+                resource: "job",
+                resourceId: job.id,
+                result: "SUCCESS",
+                requestMetadata: {
+                  requestId: metadata.requestId,
+                  correlationId: metadata.correlationId ?? metadata.requestId,
+                },
+              });
+              return true;
+            },
+          ),
+        (result) => ({ jobId: result.allowed && result.value ? id : null }),
       );
     },
 
@@ -765,7 +855,7 @@ export function createJobService(
           86_400_000,
         ),
       };
-      const claims = await withOrganizationTransaction(
+      const batch = await withOrganizationTransaction(
         database,
         organizationId,
         async (transaction) => {
@@ -778,19 +868,34 @@ export function createJobService(
           ) {
             return undefined;
           }
-          return claimBatch(
-            transaction,
-            organizationId,
-            branchId,
-            safeWorkerId,
-            new Date(),
-            options.batchSize,
-            options.leaseMilliseconds,
+          return observeServiceOperation(
+            "job.claim_batch",
+            {
+              organizationId,
+              branchId,
+              workerId: safeWorkerId,
+            },
+            () =>
+              claimBatch(
+                transaction,
+                organizationId,
+                branchId,
+                safeWorkerId,
+                new Date(),
+                options.batchSize,
+                options.leaseMilliseconds,
+              ),
+            (result) => ({
+              claimed: result.claims.length,
+              leaseRecoveries: result.leaseRecoveries,
+              exhausted: result.exhausted,
+            }),
           );
         },
       );
-      if (claims === undefined) return undefined;
+      if (batch === undefined) return undefined;
 
+      const { claims } = batch;
       const result = {
         claimed: claims.length,
         succeeded: 0,
@@ -798,21 +903,35 @@ export function createJobService(
         failed: 0,
       };
       for (const claim of claims) {
-        const outcome = await withOrganizationTransaction(
-          database,
-          organizationId,
-          async (transaction) => {
-            if (
-              !(await establishWorkerBranch(
-                transaction,
-                organizationId,
-                claim.branchId,
-              ))
-            ) {
-              return "STALE" as const;
-            }
-            return handleClaim(transaction, claim, registry, options);
+        const outcome = await observeServiceOperation(
+          "job.attempt",
+          {
+            jobId: claim.id,
+            jobType: claim.jobType,
+            organizationId,
+            branchId: claim.branchId,
+            attempt: claim.attempts,
+            workerId: safeWorkerId,
+            correlationId: claim.correlationId,
           },
+          () =>
+            withOrganizationTransaction(
+              database,
+              organizationId,
+              async (transaction) => {
+                if (
+                  !(await establishWorkerBranch(
+                    transaction,
+                    organizationId,
+                    claim.branchId,
+                  ))
+                ) {
+                  return "STALE" as const;
+                }
+                return handleClaim(transaction, claim, registry, options);
+              },
+            ),
+          (result) => ({ attemptResult: result ?? "STALE" }),
         );
         if (outcome === "SUCCEEDED") result.succeeded += 1;
         else if (outcome === "RETRYING") result.retrying += 1;

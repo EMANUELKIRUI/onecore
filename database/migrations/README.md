@@ -11,18 +11,8 @@ structured permission fields, role and permission lifecycle, data scope on
 role grants, and reusable permission catalog entries. Roles, role grants,
 membership-role assignments, and membership data scopes remain organization
 scoped with the existing composite foreign keys and forced RLS. Apply through
-the migration role, then provision the runtime role's least-privilege RBAC
-access (these statements are additive to the identity, branch, and audit
-grants already required by the API):
-
-```sql
-GRANT SELECT, INSERT, UPDATE ON public.roles TO onecore_app;
-GRANT SELECT, INSERT, DELETE ON public.role_permissions TO onecore_app;
-GRANT SELECT, INSERT, DELETE ON public.membership_roles TO onecore_app;
-GRANT SELECT ON public.permissions, public.membership_data_scopes,
-  public.modules, public.organization_modules, public.platform_user_roles
-  TO onecore_app;
-```
+the migration role. Least-privilege RBAC and identity grants are applied by
+the forward-only runtime-role grants migration.
 
 The permission catalog is global and read-only to the API. Never make
 `onecore_app` an owner or grant it `BYPASSRLS`.
@@ -47,30 +37,29 @@ before granting deployment roles.
 
 ## Phase 7 configuration grants
 
-After applying the configuration migration, grant the runtime role only the
-required configuration operations. Keep the grants additive and review them
-against the active API surface before deployment:
-
-```sql
-GRANT SELECT ON public.feature_flags TO onecore_app;
-GRANT SELECT, INSERT, UPDATE ON public.feature_flag_assignments TO onecore_app;
-GRANT SELECT, INSERT, UPDATE ON public.organization_settings,
-  public.business_settings, public.organization_branding,
-  public.notification_configurations TO onecore_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.custom_field_definitions,
-  public.integrations, public.custom_domains TO onecore_app;
-GRANT SELECT, INSERT, UPDATE ON public.workflow_definitions,
-  public.workflow_versions, public.workflow_steps,
-  public.workflow_triggers, public.workflow_conditions,
-  public.workflow_actions, public.workflow_transitions TO onecore_app;
-```
+Configuration grants are also applied by the forward-only runtime-role grants
+migration. Custom-field record values are not exposed by these APIs and must
+not be granted until an authorized business-record service needs them.
 
 The standard identity, audit, RBAC, and Phase 6 entitlement grants above are
-still required. Custom-field record values are not exposed by these APIs and
-must not be granted until an authorized business-record service needs them.
-Never grant table ownership, schema `CREATE`, `BYPASSRLS`, or `GRANT ALL` to
+still applied cumulatively. Never grant table ownership, schema `CREATE`,
+`BYPASSRLS`, or `GRANT ALL` to
 `onecore_app`. All listed tenant tables have forced RLS; verify their owner is
-the migrator role and test tenant isolation using the runtime role after
-provisioning grants.
+the migrator role and test tenant isolation using the runtime role.
 
 Phase 4 adds a typed branch lifecycle, fail-closed membership branch-access mode, and a session branch ID constrained to the selected organization. The branch status migration normalizes existing status casing and rejects values outside the typed lifecycle; review existing production branch status values before applying it.
+
+Phase 10 adds PostgreSQL-backed rate-limit buckets. The migration enables and
+forces RLS, permits global buckets only when no organization or branch GUC is
+active, and scopes tenant buckets to the exact transaction-local organization
+and branch. It grants the API role only the DML operations needed for atomic
+bucket updates; the migration role remains the table owner. See
+[observability and security operations](../../docs/security/observability.md).
+
+The runtime-role grants migration consolidates the documented identity, RBAC,
+and configuration privileges into forward-only SQL. Identity updates and
+session creation/update are column-scoped; role creation/update is limited to
+the fields accepted by the RBAC API. No runtime grants are added for unused
+organization, branch, or membership timestamp updates. Create the
+`onecore_app` role as non-owner and `NOBYPASSRLS` before applying migrations;
+do not provision its table access with ad-hoc grants.

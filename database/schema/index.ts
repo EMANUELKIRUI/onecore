@@ -1763,6 +1763,26 @@ export const auditLogs = pgTable(
   ],
 );
 
+export const rateLimitBuckets = pgTable(
+  "rate_limit_buckets",
+  {
+    keyHash: varchar("key_hash", { length: 64 }).primaryKey(),
+    organizationId: uuid("organization_id"),
+    branchId: uuid("branch_id"),
+    hitCount: integer("hit_count").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    index("rate_limit_buckets_expiry_idx").on(table.expiresAt),
+    check(
+      "rate_limit_buckets_hash_check",
+      sql`${table.keyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check("rate_limit_buckets_hits_check", sql`${table.hitCount} > 0`),
+  ],
+);
+
 export const outboxEvents = pgTable(
   "outbox_events",
   {

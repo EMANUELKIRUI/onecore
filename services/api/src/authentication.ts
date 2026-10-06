@@ -6,11 +6,12 @@ import {
 } from "@node-rs/argon2";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
-import type { RuntimeConfig } from "@onecore/config";
+import { hashRateLimitIdentity, type RuntimeConfig } from "@onecore/config";
 import type {
   AuthenticationAuditEvent,
   IdentityRepository,
   IdentityUser,
+  RateLimiter,
 } from "@onecore/database";
 import type {
   FastifyReply,
@@ -71,6 +72,7 @@ function sessionDigest(secret: string): string {
 function requestMetadata(request: FastifyRequest) {
   return {
     requestId: request.id,
+    correlationId: request.observabilityContext?.correlationId ?? request.id,
     ipAddress: request.ip.slice(0, 45),
     userAgent: (request.headers["user-agent"] ?? "").slice(0, 512),
   };
@@ -173,6 +175,7 @@ export function registerAuthentication(
   app: ReturnType<typeof Fastify>,
   config: RuntimeConfig,
   identity: IdentityRepository,
+  rateLimiter?: RateLimiter,
 ): void {
   app.register(cookie);
   app.register(rateLimit, { global: false });
@@ -188,6 +191,14 @@ export function registerAuthentication(
         return;
       }
       if (!sessionSecretSchema.test(secret)) {
+        request.log.warn(
+          {
+            ...request.observabilityContext,
+            eventType: "session.invalid",
+            reason: "malformed_cookie",
+          },
+          "Invalid session cookie rejected",
+        );
         clearSessionCookie(reply, config);
         request.auth = null;
         return;
@@ -196,6 +207,14 @@ export function registerAuthentication(
       const secretHash = sessionDigest(secret);
       const resolved = await identity.findActiveSession(secretHash, new Date());
       if (!resolved) {
+        request.log.info(
+          {
+            ...request.observabilityContext,
+            eventType: "session.invalid",
+            reason: "inactive_or_expired",
+          },
+          "Inactive session rejected",
+        );
         clearSessionCookie(reply, config);
         request.auth = null;
         return;
@@ -261,6 +280,13 @@ export function registerAuthentication(
         membershipId,
         branchId,
       };
+      if (request.observabilityContext) {
+        Object.assign(request.observabilityContext, {
+          userId: resolved.user.id,
+          organizationId,
+          branchId,
+        });
+      }
     },
   );
   const avoidAuthResponseCaching: onSendAsyncHookHandler = async (
@@ -280,18 +306,77 @@ export function registerAuthentication(
     "/auth/login",
     {
       preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
-        const limiter = (loginRateLimit ??= app.rateLimit({
-          max: config.AUTH_LOGIN_RATE_LIMIT_MAX,
-          timeWindow: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
-          onExceeded: (request: FastifyRequest) => {
+        if (rateLimiter) {
+          const decision = await rateLimiter.consume({
+            scope: "authentication.login",
+            subject: request.ip,
+            requestId: request.id,
+            correlationId:
+              request.observabilityContext?.correlationId ?? request.id,
+            limit: config.AUTH_LOGIN_RATE_LIMIT_MAX,
+            windowMs: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
+          });
+          if (!decision.allowed) {
             request.log.warn(
-              { requestId: request.id, ipAddress: request.ip },
+              {
+                ...request.observabilityContext,
+                eventType: "rate_limit_triggered",
+                scope: "authentication.login",
+                subjectHash: hashRateLimitIdentity(request.ip),
+                resetAt: decision.resetAt.toISOString(),
+              },
               "Authentication rate limit exceeded",
             );
-          },
-        }));
-        await limiter(request, reply);
-        if (reply.sent) return reply;
+            reply.header(
+              "retry-after",
+              Math.max(
+                1,
+                Math.ceil((decision.resetAt.getTime() - Date.now()) / 1_000),
+              ),
+            );
+            return reply.status(429).send({
+              error: {
+                code: "TOO_MANY_REQUESTS",
+                message: "Too many requests. Try again later.",
+              },
+            });
+          }
+        } else {
+          if (config.NODE_ENV === "production") {
+            request.log.error(
+              {
+                ...request.observabilityContext,
+                eventType: "rate_limit_unavailable",
+                scope: "authentication.login",
+              },
+              "Shared authentication rate limiter is not configured",
+            );
+            return reply.status(503).send({
+              error: {
+                code: "SERVICE_UNAVAILABLE",
+                message: "The service is temporarily unavailable.",
+              },
+            });
+          }
+
+          const limiter = (loginRateLimit ??= app.rateLimit({
+            max: config.AUTH_LOGIN_RATE_LIMIT_MAX,
+            timeWindow: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
+            onExceeded: (request: FastifyRequest) => {
+              request.log.warn(
+                {
+                  ...request.observabilityContext,
+                  eventType: "rate_limit_triggered",
+                  scope: "authentication.login",
+                  subjectHash: hashRateLimitIdentity(request.ip),
+                },
+                "Authentication rate limit exceeded",
+              );
+            },
+          }));
+          await limiter(request, reply);
+          if (reply.sent) return reply;
+        }
         if (!validateMutationOrigin(request, reply, config)) return reply;
       },
     },
@@ -316,6 +401,7 @@ export function registerAuthentication(
           metadata.ipAddress,
           metadata.userAgent,
           now,
+          metadata.correlationId,
         );
         if (unlocked) {
           user = await identity.findUserByEmail(email);
@@ -343,6 +429,7 @@ export function registerAuthentication(
                 request.id,
                 request.ip.slice(0, 45),
                 (request.headers["user-agent"] ?? "").slice(0, 512),
+                request.observabilityContext?.correlationId ?? request.id,
               )
             : undefined;
         if (!failed) {
@@ -370,6 +457,7 @@ export function registerAuthentication(
           request.ip,
           request.headers["user-agent"] ?? "",
           now,
+          request.observabilityContext?.correlationId ?? request.id,
         );
       }
 
@@ -389,6 +477,7 @@ export function registerAuthentication(
         },
         request.id,
         now,
+        request.observabilityContext?.correlationId ?? request.id,
       );
       reply.setCookie(SESSION_COOKIE, secret, {
         ...cookieOptions(config),
@@ -423,6 +512,7 @@ export function registerAuthentication(
           request.ip,
           request.headers["user-agent"] ?? "",
           now,
+          request.observabilityContext?.correlationId ?? request.id,
         );
       }
       clearSessionCookie(reply, config);
