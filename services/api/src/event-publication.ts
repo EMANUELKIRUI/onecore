@@ -1,5 +1,6 @@
 import {
   createDomainEvent,
+  eventTypeSchema,
   type EventType,
   type FeatureFlagType,
 } from "@onecore/core-domain";
@@ -62,6 +63,30 @@ export async function recordFeatureFlagChangedEvent(
   );
 }
 
+export async function recordUserRoleChangedEvent(
+  transaction: OrganizationTransaction,
+  context: ResolvedAuthorizationContext,
+  requestId: string,
+  userId: string,
+  membershipId: string,
+  roleId: string,
+  change: "ASSIGNED" | "REMOVED",
+): Promise<void> {
+  await recordOutboxEvent(
+    transaction,
+    createDomainEvent({
+      eventType: "USER_ROLE_CHANGED",
+      organizationId: context.organizationId,
+      ...(context.branch ? { branchId: context.branch.branchId } : {}),
+      actorUserId: context.userId,
+      aggregateType: "membership_role",
+      aggregateId: membershipId,
+      payload: { userId, membershipId, roleId, change },
+      metadata: { requestId },
+    }),
+  );
+}
+
 export async function recordModuleEntitlementEvent(
   transaction: OrganizationTransaction,
   context: ResolvedAuthorizationContext,
@@ -86,16 +111,8 @@ export async function recordModuleEntitlementEvent(
   );
 }
 
-export function eventTypeIsRegistered(eventType: string): eventType is EventType {
-  return [
-    "ORGANIZATION_CREATED",
-    "ORGANIZATION_ACTIVATED",
-    "USER_CREATED",
-    "USER_INVITED",
-    "USER_ROLE_CHANGED",
-    "MODULE_ENABLED",
-    "MODULE_DISABLED",
-    "FEATURE_FLAG_CHANGED",
-    "CONFIGURATION_CHANGED",
-  ].includes(eventType);
+export function eventTypeIsRegistered(
+  eventType: string,
+): eventType is EventType {
+  return eventTypeSchema.safeParse(eventType).success;
 }

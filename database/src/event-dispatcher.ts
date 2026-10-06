@@ -1,5 +1,4 @@
 import {
-  eventFailureKindSchema,
   eventRegistry,
   parseDomainEvent,
   type EventEnvelope,
@@ -7,21 +6,13 @@ import {
   type EventProcessingStatus,
   type EventType,
 } from "@onecore/core-domain";
-import {
-  and,
-  asc,
-  eq,
-  inArray,
-  isNull,
-  lte,
-  or,
-  sql,
-} from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   auditLogs,
   eventDeadLetters,
   eventProcessingRecords,
+  organizations,
   outboxEvents,
   type AuthorizationContext,
   type AuthorizationMetadata,
@@ -144,7 +135,10 @@ function validateOptions(options: EventDispatchOptions) {
   return { batchSize, maxAttempts, baseDelayMs, maxDelayMs };
 }
 
-function safeFailureReason(error: unknown, fallback: EventFailureKind): {
+function safeFailureReason(
+  error: unknown,
+  fallback: EventFailureKind,
+): {
   kind: EventFailureKind;
   reason: string;
   retryable: boolean;
@@ -170,7 +164,9 @@ function safeFailureReason(error: unknown, fallback: EventFailureKind): {
   };
 }
 
-function eventEnvelopeFromRow(row: typeof outboxEvents.$inferSelect): EventEnvelope {
+function eventEnvelopeFromRow(
+  row: typeof outboxEvents.$inferSelect,
+): EventEnvelope {
   return parseDomainEvent({
     eventId: row.id,
     eventType: row.eventType,
@@ -292,15 +288,25 @@ async function writeInvalidEventDeadLetter(
       updatedAt: now,
     })
     .where(eq(outboxEvents.id, row.id));
-  await writeEventAudit(transaction, context, "EVENT_DEAD_LETTERED", {
-    eventId: row.id,
-    eventType: row.eventType,
-    eventVersion: row.version,
-    aggregateType: row.aggregateType,
-    aggregateId: row.aggregateId,
-    correlationId: row.correlationId,
-    causationId: row.causationId,
-  }, { handlerName: "platform.event-contract", failureKind: "INVALID_EVENT", reason });
+  await writeEventAudit(
+    transaction,
+    context,
+    "EVENT_DEAD_LETTERED",
+    {
+      eventId: row.id,
+      eventType: row.eventType,
+      eventVersion: row.version,
+      aggregateType: row.aggregateType,
+      aggregateId: row.aggregateId,
+      correlationId: row.correlationId,
+      causationId: row.causationId,
+    },
+    {
+      handlerName: "platform.event-contract",
+      failureKind: "INVALID_EVENT",
+      reason,
+    },
+  );
 }
 
 async function processHandler(
@@ -371,7 +377,9 @@ async function processHandler(
     };
   } else if (
     handler.requiredPermissionKey !== null &&
-    !context.permissions.some((grant) => grant.key === handler.requiredPermissionKey)
+    !context.permissions.some(
+      (grant) => grant.key === handler.requiredPermissionKey,
+    )
   ) {
     failure = {
       kind: "AUTHORIZATION_FAILURE",
@@ -409,10 +417,16 @@ async function processHandler(
           eq(eventProcessingRecords.handlerName, handler.handlerName),
         ),
       );
-    await writeEventAudit(transaction, context, "EVENT_HANDLER_SUCCEEDED", event, {
-      handlerName: handler.handlerName,
-      owningModule: handler.owningModule,
-    });
+    await writeEventAudit(
+      transaction,
+      context,
+      "EVENT_HANDLER_SUCCEEDED",
+      event,
+      {
+        handlerName: handler.handlerName,
+        owningModule: handler.owningModule,
+      },
+    );
     return "SUCCEEDED";
   }
 
@@ -537,9 +551,79 @@ function validateHandlers(handlers: readonly EventHandler[]): void {
       throw new TypeError("Handler declares an unsupported event type/version");
     }
     const key = `${handler.eventType}:${handler.eventVersion}:${handler.handlerName}`;
-    if (registered.has(key)) throw new TypeError("Duplicate event handler registration");
+    if (registered.has(key))
+      throw new TypeError("Duplicate event handler registration");
     registered.add(key);
   }
+}
+
+async function assertEventTenantContext(
+  transaction: OrganizationTransaction,
+  context: ResolvedAuthorizationContext,
+): Promise<void> {
+  const verifiedBranchId = context.branch?.branchId ?? null;
+  if (
+    !z.uuid().safeParse(context.organizationId).success ||
+    (context.branchId === null) !== (verifiedBranchId === null) ||
+    (context.branchId !== null &&
+      (!z.uuid().safeParse(context.branchId).success ||
+        context.branchId.toLowerCase() !== verifiedBranchId?.toLowerCase()))
+  ) {
+    throw new EventDispatchError(
+      "AUTHORIZATION_FAILURE",
+      "TENANT_CONTEXT_MISSING_OR_INVALID",
+      false,
+    );
+  }
+
+  const [databaseContext] = await transaction
+    .select({
+      organizationId: sql<
+        string | null
+      >`nullif(current_setting('app.current_organization_id', true), '')`,
+      branchId: sql<
+        string | null
+      >`nullif(current_setting('app.current_branch_id', true), '')`,
+    })
+    .from(organizations)
+    .where(eq(organizations.id, context.organizationId))
+    .limit(1);
+  if (
+    databaseContext?.organizationId !== context.organizationId ||
+    databaseContext?.branchId !== context.branchId
+  ) {
+    throw new EventDispatchError(
+      "AUTHORIZATION_FAILURE",
+      "TENANT_CONTEXT_MISSING_OR_INVALID",
+      false,
+    );
+  }
+}
+
+export interface EventHandlerRegistry {
+  resolve(eventType: EventType, eventVersion: number): readonly EventHandler[];
+}
+
+export function createEventHandlerRegistry(
+  additionalHandlers: readonly EventHandler[] = [],
+): EventHandlerRegistry {
+  const handlers = [
+    ...platformAuditEventHandlers,
+    ...additionalHandlers,
+  ] as const;
+  validateHandlers(handlers);
+  const handlersByContract = new Map<string, EventHandler[]>();
+  for (const handler of handlers) {
+    const key = `${handler.eventType}:${handler.eventVersion}`;
+    const registered = handlersByContract.get(key) ?? [];
+    registered.push(handler);
+    handlersByContract.set(key, registered);
+  }
+  return {
+    resolve(eventType, eventVersion) {
+      return handlersByContract.get(`${eventType}:${eventVersion}`) ?? [];
+    },
+  };
 }
 
 export async function dispatchOutboxBatch(
@@ -549,8 +633,8 @@ export async function dispatchOutboxBatch(
   dispatchOptions: EventDispatchOptions = {},
 ): Promise<EventDispatchResult> {
   const options = validateOptions(dispatchOptions);
-  const handlers = [...platformAuditEventHandlers, ...additionalHandlers];
-  validateHandlers(handlers);
+  await assertEventTenantContext(transaction, context);
+  const handlerRegistry = createEventHandlerRegistry(additionalHandlers);
   const now = dispatchOptions.now ?? new Date();
   const branchPredicate = context.branch
     ? or(
@@ -581,7 +665,10 @@ export async function dispatchOutboxBatch(
     skipped: 0,
   };
   const moduleAccess = new Map<string, { allowed: boolean; reason?: string }>();
-  for (const handler of handlers) {
+  for (const handler of [
+    ...platformAuditEventHandlers,
+    ...additionalHandlers,
+  ]) {
     if (
       handler.requiredModuleEntitlement &&
       !moduleAccess.has(handler.requiredModuleEntitlement)
@@ -623,16 +710,15 @@ export async function dispatchOutboxBatch(
           false,
         );
       }
-    } catch (error) {
+    } catch {
       await writeInvalidEventDeadLetter(transaction, context, row, now);
       result.deadLettered += 1;
       continue;
     }
 
-    const matchingHandlers = handlers.filter(
-      (handler) =>
-        handler.eventType === event.eventType &&
-        handler.eventVersion === event.eventVersion,
+    const matchingHandlers = handlerRegistry.resolve(
+      event.eventType,
+      event.eventVersion,
     );
     if (matchingHandlers.length === 0) {
       await writeInvalidEventDeadLetter(transaction, context, row, now);
@@ -658,7 +744,10 @@ export async function dispatchOutboxBatch(
       if (outcome === "FAILED") {
         hadFailure = true;
         const [record] = await transaction
-          .select({ nextAttemptAt: eventProcessingRecords.nextAttemptAt, lastError: eventProcessingRecords.lastError })
+          .select({
+            nextAttemptAt: eventProcessingRecords.nextAttemptAt,
+            lastError: eventProcessingRecords.lastError,
+          })
           .from(eventProcessingRecords)
           .where(
             and(
@@ -766,7 +855,10 @@ export async function listEventDeadLetters(
     })
     .from(eventDeadLetters)
     .where(eq(eventDeadLetters.organizationId, context.organizationId))
-    .orderBy(asc(eventDeadLetters.replayedAt), asc(eventDeadLetters.deadLetteredAt))
+    .orderBy(
+      asc(eventDeadLetters.replayedAt),
+      asc(eventDeadLetters.deadLetteredAt),
+    )
     .limit(limit);
 }
 

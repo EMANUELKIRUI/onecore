@@ -21,6 +21,7 @@ import {
 } from "@onecore/core-domain";
 import { z } from "zod";
 import type { ApiFastifyInstance } from "./fastify-instance.js";
+import { recordUserRoleChangedEvent } from "./event-publication.js";
 
 const pathSchema = z.object({ roleId: z.uuid() });
 const permissionPathSchema = pathSchema.extend({ permissionId: z.uuid() });
@@ -819,7 +820,10 @@ export function registerAuthorizationRoutes(
           });
         }
         const [targetMembership] = await transaction
-          .select({ id: organizationMemberships.id })
+          .select({
+            id: organizationMemberships.id,
+            userId: organizationMemberships.userId,
+          })
           .from(organizationMemberships)
           .innerJoin(users, eq(organizationMemberships.userId, users.id))
           .where(
@@ -920,6 +924,15 @@ export function registerAuthorizationRoutes(
           "membership.role.assigned",
           "membership_role",
           `${parsedBody.data.membershipId}:${membership.id}`,
+        );
+        await recordUserRoleChangedEvent(
+          transaction,
+          context,
+          request.id,
+          targetMembership.userId,
+          parsedBody.data.membershipId,
+          membership.id,
+          "ASSIGNED",
         );
         return response(201, {
           membershipId: parsedBody.data.membershipId,
@@ -1024,6 +1037,28 @@ export function registerAuthorizationRoutes(
               },
             });
           }
+          const [targetMembership] = await transaction
+            .select({ userId: organizationMemberships.userId })
+            .from(organizationMemberships)
+            .where(
+              and(
+                eq(
+                  organizationMemberships.organizationId,
+                  context.organizationId,
+                ),
+                eq(organizationMemberships.id, parsedParams.data.membershipId),
+              ),
+            )
+            .for("share")
+            .limit(1);
+          if (!targetMembership) {
+            return response(404, {
+              error: {
+                code: "NOT_FOUND",
+                message: "The requested assignment was not found.",
+              },
+            });
+          }
           const [removed] = await transaction
             .delete(membershipRoles)
             .where(
@@ -1052,6 +1087,15 @@ export function registerAuthorizationRoutes(
             "membership.role.removed",
             "membership_role",
             `${parsedParams.data.membershipId}:${removed.roleId}`,
+          );
+          await recordUserRoleChangedEvent(
+            transaction,
+            context,
+            request.id,
+            targetMembership.userId,
+            parsedParams.data.membershipId,
+            removed.roleId,
+            "REMOVED",
           );
           return response(200, { removed: true });
         },

@@ -1291,7 +1291,14 @@ export function registerConfigurationResourceRoutes(
             request.id,
             "workflow_version",
             version.id,
-            ["version", "steps", "triggers", "conditions", "actions", "transitions"],
+            [
+              "version",
+              "steps",
+              "triggers",
+              "conditions",
+              "actions",
+              "transitions",
+            ],
           );
           return response(201, { version });
         },

@@ -1,6 +1,7 @@
 # Documentation
 
 - [Architecture](architecture/overview.md)
+- [Events and transactional outbox](architecture/events.md)
 - [Database](database/README.md)
 - [Multi-tenancy](multi-tenancy/README.md)
 - [Configuration](configuration/README.md)

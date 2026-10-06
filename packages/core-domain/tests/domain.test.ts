@@ -18,15 +18,41 @@ import {
   parseCustomFieldValue,
   resolveConfigurationCapabilities,
   createDomainEvent,
+  eventRegistry,
   parseDomainEvent,
 } from "../src/index.js";
 
 describe("platform domain values", () => {
+  it("registers the required versioned platform event contracts", () => {
+    expect(Object.keys(eventRegistry).sort()).toEqual(
+      [
+        "ORGANIZATION_CREATED",
+        "ORGANIZATION_ACTIVATED",
+        "USER_CREATED",
+        "USER_INVITED",
+        "USER_ROLE_CHANGED",
+        "MODULE_ENABLED",
+        "MODULE_DISABLED",
+        "CONFIGURATION_CHANGED",
+        "FEATURE_FLAG_CHANGED",
+      ].sort(),
+    );
+    expect(
+      Object.values(eventRegistry).every(
+        ({ version, compatibilityPolicy }) =>
+          version === 1 && compatibilityPolicy === "ADDITIVE_ONLY",
+      ),
+    ).toBe(true);
+  });
+
   it("creates and validates versioned tenant event envelopes", () => {
     const event = createDomainEvent({
       eventType: "CONFIGURATION_CHANGED",
       organizationId: "11111111-1111-4111-8111-111111111111",
+      branchId: "33333333-3333-4333-8333-333333333333",
       actorUserId: "22222222-2222-4222-8222-222222222222",
+      correlationId: "44444444-4444-4444-8444-444444444444",
+      causationId: "55555555-5555-4555-8555-555555555555",
       aggregateType: "organization_configuration",
       aggregateId: "11111111-1111-4111-8111-111111111111",
       payload: {
@@ -38,7 +64,9 @@ describe("platform domain values", () => {
     });
 
     expect(event.eventId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(event.correlationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(event.branchId).toBe("33333333-3333-4333-8333-333333333333");
+    expect(event.correlationId).toBe("44444444-4444-4444-8444-444444444444");
+    expect(event.causationId).toBe("55555555-5555-4555-8555-555555555555");
     expect(event.eventVersion).toBe(1);
     expect(parseDomainEvent(event)).toEqual(event);
     expect(() =>
@@ -55,12 +83,21 @@ describe("platform domain values", () => {
         } as never,
       }),
     ).toThrow();
-    expect(() =>
-      parseDomainEvent({ ...event, eventVersion: 99 }),
-    ).toThrow(/Unsupported/);
+    expect(() => parseDomainEvent({ ...event, eventVersion: 99 })).toThrow(
+      /Unsupported/,
+    );
     expect(() =>
       parseDomainEvent({ ...event, metadata: { script: "execute()" } }),
     ).toThrow(/inert/);
+    expect(() =>
+      parseDomainEvent({ ...event, metadata: { access_token: "sensitive" } }),
+    ).toThrow(/inert/);
+    expect(() =>
+      parseDomainEvent({
+        ...event,
+        payload: { ...event.payload, password: "sensitive" },
+      }),
+    ).toThrow();
     expect(() =>
       parseDomainEvent({
         ...event,

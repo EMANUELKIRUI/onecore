@@ -131,6 +131,23 @@ describe("API foundation", () => {
       url: `/organizations/${crypto.randomUUID()}/workflows`,
     });
     expect(anonymousWorkflows.statusCode).toBe(401);
+    const anonymousEventDispatch = await app.inject({
+      method: "POST",
+      url: `/organizations/${crypto.randomUUID()}/events/dispatch`,
+      payload: {},
+    });
+    expect(anonymousEventDispatch.statusCode).toBe(401);
+    const anonymousEventReplay = await app.inject({
+      method: "POST",
+      url: `/organizations/${crypto.randomUUID()}/events/dead-letters/${crypto.randomUUID()}/platform.audit.configuration_changed/replay`,
+    });
+    expect(anonymousEventReplay.statusCode).toBe(401);
+    const arbitraryEventPublish = await app.inject({
+      method: "POST",
+      url: `/organizations/${crypto.randomUUID()}/events`,
+      payload: { eventType: "ORGANIZATION_CREATED", payload: {} },
+    });
+    expect(arbitraryEventPublish.statusCode).toBe(404);
     const anonymousDomains = await app.inject({
       method: "GET",
       url: `/organizations/${crypto.randomUUID()}/domains`,
@@ -240,6 +257,12 @@ describe("API foundation", () => {
       cookies: { onecore_session: sessionSecret },
     });
     expect(moduleDenied.statusCode).toBe(403);
+    const eventReplayDenied = await authenticatedApp.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/events/dead-letters/${crypto.randomUUID()}/platform.audit.configuration_changed/replay`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(eventReplayDenied.statusCode).toBe(403);
     const configurationDenied = await authenticatedApp.inject({
       method: "GET",
       url: `/organizations/${organizationId}/configuration`,
@@ -315,6 +338,20 @@ describe("API foundation", () => {
       });
       expect(response.statusCode, url).toBe(404);
     }
+
+    const forgedOrganizationDispatch = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationB}/events/dispatch`,
+      cookies: { onecore_session: sessionSecret },
+      payload: {},
+    });
+    expect(forgedOrganizationDispatch.statusCode).toBe(404);
+    const forgedOrganizationReplay = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationB}/events/dead-letters/${crypto.randomUUID()}/platform.audit.configuration_changed/replay`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(forgedOrganizationReplay.statusCode).toBe(404);
 
     const foreignBranch = await app.inject({
       method: "PATCH",

@@ -1801,10 +1801,7 @@ export const outboxEvents = pgTable(
       table.eventType,
       table.createdAt,
     ),
-    check(
-      "outbox_events_attempts_nonnegative",
-      sql`${table.attempts} >= 0`,
-    ),
+    check("outbox_events_attempts_nonnegative", sql`${table.attempts} >= 0`),
     check(
       "outbox_events_delivery_status_check",
       sql`${table.deliveryStatus} in ('PENDING', 'PROCESSING', 'PUBLISHED', 'FAILED', 'DEAD_LETTERED')`,
@@ -1835,8 +1832,9 @@ export const eventProcessingRecords = pgTable(
     attempts: integer("attempts").notNull().default(0),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
     processedAt: timestamp("processed_at", { withTimezone: true }),
-    failureKind: varchar("failure_kind", { length: 40 })
-      .$type<EventFailureKind>(),
+    failureKind: varchar("failure_kind", {
+      length: 40,
+    }).$type<EventFailureKind>(),
     lastError: varchar("last_error", { length: 2_000 }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

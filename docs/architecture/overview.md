@@ -26,7 +26,7 @@ Credentials and sessions are scoped by transaction-local identity GUCs under for
 - Module manifests declare identity, semantic version, dependencies, permissions, features, lifecycle, and configuration. The registry, organization entitlement APIs, subscription/plan compatibility, and runtime authorization checks are implemented; business modules and the full billing lifecycle remain later work.
 - Feature flags will progress through developer, QA, internal, selected-organization, percentage, and general-availability cohorts. Evaluation must be server-side for protected behavior.
 - Localization starts with English and Kiswahili, with message keys separated from UI text. Currency values must retain transaction currency, original amount, and the applicable historical exchange-rate facts; never silently recalculate historical transactions at today's rate.
-- Domain/application events provide loose coupling for workflows. A transactional outbox persistence foundation exists; event publication, delivery guarantees, retries, and consumers remain deferred.
+- Domain/application events provide loose coupling for workflows. Versioned contracts, transactional outbox publication, PostgreSQL dispatch, retry/dead-letter handling, and tenant-scoped idempotency are implemented; business-domain consumers remain deferred. See [event architecture](events.md) and [ADR 0009](adr/0009-postgresql-transactional-events.md).
 - AI must use authorized data services after user, permission, and organization-scope checks. Models never receive unrestricted database access.
 - PWA/offline behavior is app-specific and must define conflict resolution and secure local-data handling before implementation.
 

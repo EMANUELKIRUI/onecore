@@ -2,16 +2,26 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import type { Transaction } from "@electric-sql/pglite";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  createDomainEvent,
   moduleManifestSchema,
   parseCustomFieldValue,
   parseFeatureFlagValue,
 } from "@onecore/core-domain";
+import {
+  dispatchOutboxBatch,
+  EventDispatchError,
+  recordOutboxEvent,
+  type EventDispatchOptions,
+  type EventHandler,
+  type OrganizationTransaction,
+  type ResolvedAuthorizationContext,
+} from "../src/index.js";
 import {
   evaluateFeatureFlag,
   resolveFeatureFlag,
@@ -53,6 +63,49 @@ async function createOrganization(name: string) {
     .returning();
   if (!organization) throw new Error("Test organization was not created");
   return organization;
+}
+
+function eventWorkerContext(
+  organizationId: string,
+  userId: string,
+): ResolvedAuthorizationContext {
+  return {
+    userId,
+    sessionId: crypto.randomUUID(),
+    organizationId,
+    membershipId: crypto.randomUUID(),
+    branchId: null,
+    branch: null,
+    branchAccessMode: "ALL",
+    roles: [],
+    platformRoles: [],
+    permissions: [],
+  };
+}
+
+async function dispatchAsTenant(
+  organizationId: string,
+  context: ResolvedAuthorizationContext,
+  handlers: readonly EventHandler[],
+  options: EventDispatchOptions = {},
+) {
+  return database.transaction(async (transaction) => {
+    await transaction.execute(sql`SET LOCAL ROLE onecore_app`);
+    await transaction.execute(
+      sql`SELECT set_config('app.current_organization_id', ${organizationId}, true)`,
+    );
+    if (context.branchId) {
+      await transaction.execute(
+        sql`SELECT set_config('app.current_branch_id', ${context.branchId}, true)`,
+      );
+    }
+    return dispatchOutboxBatch(
+      transaction as unknown as OrganizationTransaction,
+      context,
+      handlers,
+      options,
+    );
+  });
 }
 
 describe("PostgreSQL persistence foundation", () => {
@@ -773,15 +826,32 @@ describe("PostgreSQL persistence foundation", () => {
 
   it("keeps module availability, organization entitlement, features, and flags distinct", async () => {
     const organization = await createOrganization("Entitlement Tenant");
+    const moduleKey = `core.test.m${crypto.randomUUID().replaceAll("-", "")}`;
+    const manifest = moduleManifestSchema.parse({
+      name: moduleKey,
+      version: "1.0.0",
+      displayName: "Test Platform Module",
+      dependencies: [],
+      permissions: [],
+      features: [],
+      lifecycle: "AVAILABLE",
+    });
     const [module] = await database
       .insert(schema.modules)
       .values({
-        key: `test-${crypto.randomUUID()}`,
-        name: "Test Platform Module",
+        key: moduleKey,
+        name: manifest.displayName,
+        lifecycle: "AVAILABLE",
         isAvailable: true,
       })
       .returning();
     if (!module) throw new Error("Test module was not created");
+    await database.insert(schema.moduleVersions).values({
+      moduleId: module.id,
+      version: manifest.version,
+      status: manifest.lifecycle,
+      manifest,
+    });
     const [feature] = await database
       .insert(schema.features)
       .values({
@@ -1450,42 +1520,759 @@ describe("PostgreSQL persistence foundation", () => {
     ).rejects.toThrow();
   });
 
-  it("rolls back domain changes and outbox events as one transaction", async () => {
-    const organization = await createOrganization(
-      "Transactional Outbox Tenant",
+  it("commits and rolls back state, mutation audit, and canonical outbox together", async () => {
+    const committedOrganization = await createOrganization(
+      "Committed Outbox Tenant",
     );
-    const eventId = crypto.randomUUID();
+    const rolledBackOrganization = await createOrganization(
+      "Rolled Back Outbox Tenant",
+    );
+    const committedEvent = createDomainEvent({
+      eventType: "CONFIGURATION_CHANGED",
+      organizationId: committedOrganization.id,
+      aggregateType: "organization_configuration",
+      aggregateId: committedOrganization.id,
+      payload: {
+        resource: "organization_configuration",
+        resourceId: committedOrganization.id,
+        changedFields: ["transaction-test"],
+      },
+      metadata: { requestId: "outbox-commit-test" },
+    });
+    const rolledBackEvent = createDomainEvent({
+      ...committedEvent,
+      eventId: crypto.randomUUID(),
+      organizationId: rolledBackOrganization.id,
+      aggregateId: rolledBackOrganization.id,
+      payload: {
+        ...committedEvent.payload,
+        resourceId: rolledBackOrganization.id,
+      },
+    });
+
+    await database.transaction(async (transaction) => {
+      await transaction.insert(schema.organizationConfigurations).values({
+        organizationId: committedOrganization.id,
+        key: "transaction-test",
+        value: { committed: true },
+      });
+      await transaction.insert(schema.auditLogs).values({
+        organizationId: committedOrganization.id,
+        action: "organization_configuration.updated",
+        resource: "organization_configuration",
+        resourceId: committedOrganization.id,
+        result: "SUCCESS",
+      });
+      await recordOutboxEvent(
+        transaction as unknown as OrganizationTransaction,
+        committedEvent,
+      );
+    });
 
     await expect(
       database.transaction(async (transaction) => {
         await transaction.insert(schema.organizationConfigurations).values({
-          organizationId: organization.id,
+          organizationId: rolledBackOrganization.id,
           key: "transaction-test",
           value: { committed: false },
         });
-        await transaction.insert(schema.outboxEvents).values({
-          id: eventId,
-          eventType: "ConfigurationChanged",
-          aggregateId: organization.id,
-          organizationId: organization.id,
-          payload: { configurationKey: "transaction-test" },
-          version: 1,
+        await transaction.insert(schema.auditLogs).values({
+          organizationId: rolledBackOrganization.id,
+          action: "organization_configuration.updated",
+          resource: "organization_configuration",
+          resourceId: rolledBackOrganization.id,
+          result: "SUCCESS",
         });
+        await recordOutboxEvent(
+          transaction as unknown as OrganizationTransaction,
+          rolledBackEvent,
+        );
         throw new Error("Force transaction rollback");
       }),
     ).rejects.toThrow("Force transaction rollback");
 
-    const [configuration] = await database
+    const committedConfiguration = await database
+      .select()
+      .from(schema.organizationConfigurations)
+      .where(
+        eq(
+          schema.organizationConfigurations.organizationId,
+          committedOrganization.id,
+        ),
+      );
+    const committedOutbox = await database
+      .select()
+      .from(schema.outboxEvents)
+      .where(eq(schema.outboxEvents.id, committedEvent.eventId));
+    const committedAudits = await database
+      .select()
+      .from(schema.auditLogs)
+      .where(eq(schema.auditLogs.organizationId, committedOrganization.id));
+    expect(committedConfiguration).toHaveLength(1);
+    expect(committedOutbox).toHaveLength(1);
+    expect(committedOutbox[0]?.eventType).toBe("CONFIGURATION_CHANGED");
+    expect(committedAudits.map(({ action }) => action).sort()).toEqual([
+      "EVENT_CREATED",
+      "organization_configuration.updated",
+    ]);
+
+    const rolledBackConfiguration = await database
+      .select()
+      .from(schema.organizationConfigurations)
+      .where(
+        eq(
+          schema.organizationConfigurations.organizationId,
+          rolledBackOrganization.id,
+        ),
+      );
+    const rolledBackOutbox = await database
+      .select()
+      .from(schema.outboxEvents)
+      .where(eq(schema.outboxEvents.id, rolledBackEvent.eventId));
+    const rolledBackAudits = await database
+      .select()
+      .from(schema.auditLogs)
+      .where(eq(schema.auditLogs.organizationId, rolledBackOrganization.id));
+    expect(rolledBackConfiguration).toEqual([]);
+    expect(rolledBackOutbox).toEqual([]);
+    expect(rolledBackAudits).toEqual([]);
+  });
+
+  it("executes a handler once for duplicate delivery under tenant context", async () => {
+    const organization = await createOrganization("Event Idempotency Tenant");
+    const [worker] = await database
+      .insert(schema.users)
+      .values({
+        email: `event-worker-${crypto.randomUUID()}@example.test`,
+        displayName: "Event Worker",
+      })
+      .returning({ id: schema.users.id });
+    if (!worker) throw new Error("Event worker was not created");
+    const context = eventWorkerContext(organization.id, worker.id);
+    const event = createDomainEvent({
+      eventType: "FEATURE_FLAG_CHANGED",
+      organizationId: organization.id,
+      aggregateType: "feature_flag",
+      aggregateId: organization.id,
+      payload: {
+        flagKey: "REPORTING",
+        valueType: "BOOLEAN",
+        scope: "ORGANIZATION",
+      },
+    });
+    await database.transaction((transaction) =>
+      recordOutboxEvent(
+        transaction as unknown as OrganizationTransaction,
+        event,
+      ),
+    );
+
+    const handler: EventHandler = {
+      handlerName: "test.idempotent-effect",
+      eventType: "FEATURE_FLAG_CHANGED",
+      eventVersion: 1,
+      owningModule: "core.test",
+      requiredModuleEntitlement: null,
+      requiredPermissionKey: null,
+      handle: async (transaction, deliveredEvent) => {
+        await transaction
+          .insert(schema.organizationConfigurations)
+          .values({
+            organizationId: deliveredEvent.organizationId,
+            key: "event-handler-effect",
+            value: { count: 1 },
+          })
+          .onConflictDoUpdate({
+            target: [
+              schema.organizationConfigurations.organizationId,
+              schema.organizationConfigurations.key,
+            ],
+            set: {
+              value: sql`jsonb_build_object('count', COALESCE((${schema.organizationConfigurations.value}->>'count')::int, 0) + 1)`,
+            },
+          });
+      },
+    };
+    const dispatchTime = new Date(Date.now() + 60_000);
+    const firstDelivery = await dispatchAsTenant(
+      organization.id,
+      context,
+      [handler],
+      { now: dispatchTime },
+    );
+    expect(firstDelivery).toMatchObject({ claimed: 1, published: 1 });
+
+    await database
+      .update(schema.outboxEvents)
+      .set({
+        status: "PENDING",
+        deliveryStatus: "PENDING",
+        nextAttemptAt: dispatchTime,
+      })
+      .where(eq(schema.outboxEvents.id, event.eventId));
+    const duplicateDelivery = await dispatchAsTenant(
+      organization.id,
+      context,
+      [handler],
+      { now: dispatchTime },
+    );
+    const [effect] = await database
       .select()
       .from(schema.organizationConfigurations)
       .where(
         eq(schema.organizationConfigurations.organizationId, organization.id),
       );
-    const [event] = await database
+    expect(duplicateDelivery.skipped).toBe(2);
+    expect(effect?.value).toEqual({ count: 1 });
+  });
+
+  it("fails closed for missing or forged dispatch tenant and branch context", async () => {
+    const organizationA = await createOrganization("Event Context Tenant A");
+    const organizationB = await createOrganization("Event Context Tenant B");
+    const [workerA] = await database
+      .insert(schema.users)
+      .values({
+        email: `event-context-a-${crypto.randomUUID()}@example.test`,
+        displayName: "Event Context Worker A",
+      })
+      .returning({ id: schema.users.id });
+    const [workerB] = await database
+      .insert(schema.users)
+      .values({
+        email: `event-context-b-${crypto.randomUUID()}@example.test`,
+        displayName: "Event Context Worker B",
+      })
+      .returning({ id: schema.users.id });
+    if (!workerA || !workerB) throw new Error("Event context worker missing");
+
+    const event = createDomainEvent({
+      eventType: "CONFIGURATION_CHANGED",
+      organizationId: organizationA.id,
+      aggregateType: "organization_configuration",
+      aggregateId: organizationA.id,
+      payload: {
+        resource: "organization_configuration",
+        resourceId: organizationA.id,
+        changedFields: ["timezone"],
+      },
+    });
+    await database.transaction((transaction) =>
+      recordOutboxEvent(
+        transaction as unknown as OrganizationTransaction,
+        event,
+      ),
+    );
+
+    let executions = 0;
+    const handler: EventHandler = {
+      handlerName: "test.tenant-context",
+      eventType: "CONFIGURATION_CHANGED",
+      eventVersion: 1,
+      owningModule: "core.test",
+      requiredModuleEntitlement: null,
+      requiredPermissionKey: null,
+      handle: async () => {
+        executions += 1;
+      },
+    };
+    const contextA = eventWorkerContext(organizationA.id, workerA.id);
+    const contextB = eventWorkerContext(organizationB.id, workerB.id);
+    const forgedOrganizationContext = {
+      ...contextB,
+      platformRoles: [...contextB.platformRoles, "SUPERADMIN" as const],
+    };
+    const forgedBranchContext = {
+      ...contextA,
+      branchId: crypto.randomUUID(),
+    };
+
+    await expect(
+      dispatchAsTenant(organizationA.id, forgedOrganizationContext, [handler]),
+    ).rejects.toMatchObject({
+      kind: "AUTHORIZATION_FAILURE",
+      reasonCode: "TENANT_CONTEXT_MISSING_OR_INVALID",
+    });
+    await expect(
+      dispatchAsTenant(organizationA.id, forgedBranchContext, [handler]),
+    ).rejects.toMatchObject({
+      kind: "AUTHORIZATION_FAILURE",
+      reasonCode: "TENANT_CONTEXT_MISSING_OR_INVALID",
+    });
+    await expect(
+      database.transaction(async (transaction) => {
+        await transaction.execute(sql`SET LOCAL ROLE onecore_app`);
+        return dispatchOutboxBatch(
+          transaction as unknown as OrganizationTransaction,
+          contextA,
+          [handler],
+        );
+      }),
+    ).rejects.toMatchObject({
+      kind: "AUTHORIZATION_FAILURE",
+      reasonCode: "TENANT_CONTEXT_MISSING_OR_INVALID",
+    });
+    expect(executions).toBe(0);
+  });
+
+  it("does not dispatch branch events to another authorized branch", async () => {
+    const organization = await createOrganization("Branch Event Tenant");
+    const [branchA, branchB] = await database
+      .insert(schema.branches)
+      .values([
+        {
+          organizationId: organization.id,
+          name: "Branch Event A",
+          code: `EVENT-A-${crypto.randomUUID()}`,
+        },
+        {
+          organizationId: organization.id,
+          name: "Branch Event B",
+          code: `EVENT-B-${crypto.randomUUID()}`,
+        },
+      ])
+      .returning();
+    const [worker] = await database
+      .insert(schema.users)
+      .values({
+        email: `event-branch-worker-${crypto.randomUUID()}@example.test`,
+        displayName: "Branch Event Worker",
+      })
+      .returning({ id: schema.users.id });
+    if (!branchA || !branchB || !worker) {
+      throw new Error("Branch event fixture was not created");
+    }
+
+    const event = createDomainEvent({
+      eventType: "CONFIGURATION_CHANGED",
+      organizationId: organization.id,
+      branchId: branchB.id,
+      aggregateType: "organization_configuration",
+      aggregateId: organization.id,
+      payload: {
+        resource: "organization_configuration",
+        resourceId: organization.id,
+        changedFields: ["timezone"],
+      },
+    });
+    await database.transaction((transaction) =>
+      recordOutboxEvent(
+        transaction as unknown as OrganizationTransaction,
+        event,
+      ),
+    );
+
+    let executions = 0;
+    const handler: EventHandler = {
+      handlerName: "test.branch-event",
+      eventType: "CONFIGURATION_CHANGED",
+      eventVersion: 1,
+      owningModule: "core.test",
+      requiredModuleEntitlement: null,
+      requiredPermissionKey: null,
+      handle: async () => {
+        executions += 1;
+      },
+    };
+    const baseContext = eventWorkerContext(organization.id, worker.id);
+    const contextForBranch = (branch: typeof branchA) => ({
+      ...baseContext,
+      branchId: branch.id,
+      branch: { branchId: branch.id, name: branch.name, code: branch.code },
+    });
+
+    const otherBranchResult = await dispatchAsTenant(
+      organization.id,
+      contextForBranch(branchA),
+      [handler],
+    );
+    expect(otherBranchResult.claimed).toBe(0);
+    expect(executions).toBe(0);
+
+    const owningBranchResult = await dispatchAsTenant(
+      organization.id,
+      contextForBranch(branchB),
+      [handler],
+    );
+    expect(owningBranchResult).toMatchObject({ claimed: 1, published: 1 });
+    expect(executions).toBe(1);
+  });
+
+  it("does not execute optional handlers without an enabled module entitlement", async () => {
+    const organization = await createOrganization(
+      "Event Optional Module Tenant",
+    );
+    const [worker] = await database
+      .insert(schema.users)
+      .values({
+        email: `event-optional-module-worker-${crypto.randomUUID()}@example.test`,
+        displayName: "Optional Module Event Worker",
+      })
+      .returning({ id: schema.users.id });
+    if (!worker)
+      throw new Error("Optional module event worker was not created");
+    const moduleKey = `core.test.m${crypto.randomUUID().replaceAll("-", "")}`;
+    const manifest = moduleManifestSchema.parse({
+      name: moduleKey,
+      version: "1.0.0",
+      displayName: "Optional Event Handler Module",
+      dependencies: [],
+      permissions: [],
+      features: [],
+      lifecycle: "AVAILABLE",
+    });
+    const [module] = await database
+      .insert(schema.modules)
+      .values({
+        key: moduleKey,
+        name: manifest.displayName,
+        lifecycle: "AVAILABLE",
+        isAvailable: true,
+      })
+      .returning();
+    if (!module) throw new Error("Optional event module was not created");
+    await database.insert(schema.moduleVersions).values({
+      moduleId: module.id,
+      version: manifest.version,
+      status: manifest.lifecycle,
+      manifest,
+    });
+
+    const event = createDomainEvent({
+      eventType: "CONFIGURATION_CHANGED",
+      organizationId: organization.id,
+      aggregateType: "organization_configuration",
+      aggregateId: organization.id,
+      payload: {
+        resource: "organization_configuration",
+        resourceId: organization.id,
+        changedFields: ["timezone"],
+      },
+    });
+    await database.transaction((transaction) =>
+      recordOutboxEvent(
+        transaction as unknown as OrganizationTransaction,
+        event,
+      ),
+    );
+
+    let executions = 0;
+    const handler: EventHandler = {
+      handlerName: "test.optional-module-handler",
+      eventType: "CONFIGURATION_CHANGED",
+      eventVersion: 1,
+      owningModule: moduleKey,
+      requiredModuleEntitlement: moduleKey,
+      requiredPermissionKey: null,
+      handle: async () => {
+        executions += 1;
+      },
+    };
+    const result = await dispatchAsTenant(
+      organization.id,
+      eventWorkerContext(organization.id, worker.id),
+      [handler],
+      { now: new Date(Date.now() + 60_000) },
+    );
+    const processingRecords = await database
+      .select({
+        handlerName: schema.eventProcessingRecords.handlerName,
+        status: schema.eventProcessingRecords.status,
+        failureKind: schema.eventProcessingRecords.failureKind,
+      })
+      .from(schema.eventProcessingRecords)
+      .where(eq(schema.eventProcessingRecords.eventId, event.eventId));
+
+    expect(result.deadLettered).toBe(1);
+    expect(executions).toBe(0);
+    expect(processingRecords).toContainEqual(
+      expect.objectContaining({
+        handlerName: handler.handlerName,
+        status: "DEAD_LETTERED",
+        failureKind: "MODULE_UNAVAILABLE",
+      }),
+    );
+    expect(processingRecords).toContainEqual(
+      expect.objectContaining({
+        handlerName: "platform.audit.configuration_changed",
+        status: "SUCCEEDED",
+      }),
+    );
+  });
+
+  it("claims concurrent deliveries once using row-lock idempotency", async () => {
+    const organization = await createOrganization(
+      "Concurrent Event Delivery Tenant",
+    );
+    const [worker] = await database
+      .insert(schema.users)
+      .values({
+        email: `event-concurrent-worker-${crypto.randomUUID()}@example.test`,
+        displayName: "Concurrent Event Worker",
+      })
+      .returning({ id: schema.users.id });
+    if (!worker) throw new Error("Concurrent event worker was not created");
+    const event = createDomainEvent({
+      eventType: "CONFIGURATION_CHANGED",
+      organizationId: organization.id,
+      aggregateType: "organization_configuration",
+      aggregateId: organization.id,
+      payload: {
+        resource: "organization_configuration",
+        resourceId: organization.id,
+        changedFields: ["timezone"],
+      },
+    });
+    await database.transaction((transaction) =>
+      recordOutboxEvent(
+        transaction as unknown as OrganizationTransaction,
+        event,
+      ),
+    );
+
+    let executions = 0;
+    const handler: EventHandler = {
+      handlerName: "test.concurrent-delivery",
+      eventType: "CONFIGURATION_CHANGED",
+      eventVersion: 1,
+      owningModule: "core.test",
+      requiredModuleEntitlement: null,
+      requiredPermissionKey: null,
+      handle: async () => {
+        executions += 1;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      },
+    };
+    const context = eventWorkerContext(organization.id, worker.id);
+    const outcomes = await Promise.all([
+      dispatchAsTenant(organization.id, context, [handler]),
+      dispatchAsTenant(organization.id, context, [handler]),
+    ]);
+
+    expect(
+      outcomes.reduce((claimed, outcome) => claimed + outcome.claimed, 0),
+    ).toBe(1);
+    expect(
+      outcomes.reduce((published, outcome) => published + outcome.published, 0),
+    ).toBe(1);
+    expect(executions).toBe(1);
+  });
+
+  it("retries transient handler failures with backoff and dead-letters at the limit", async () => {
+    const organization = await createOrganization("Event Retry Tenant");
+    const [worker] = await database
+      .insert(schema.users)
+      .values({
+        email: `event-retry-worker-${crypto.randomUUID()}@example.test`,
+        displayName: "Event Retry Worker",
+      })
+      .returning({ id: schema.users.id });
+    if (!worker) throw new Error("Event retry worker was not created");
+    const context = eventWorkerContext(organization.id, worker.id);
+    const event = createDomainEvent({
+      eventType: "CONFIGURATION_CHANGED",
+      organizationId: organization.id,
+      aggregateType: "organization_configuration",
+      aggregateId: organization.id,
+      payload: {
+        resource: "organization_configuration",
+        resourceId: organization.id,
+        changedFields: ["timezone"],
+      },
+    });
+    await database.transaction((transaction) =>
+      recordOutboxEvent(
+        transaction as unknown as OrganizationTransaction,
+        event,
+      ),
+    );
+    const handler: EventHandler = {
+      handlerName: "test.transient-failure",
+      eventType: "CONFIGURATION_CHANGED",
+      eventVersion: 1,
+      owningModule: "core.test",
+      requiredModuleEntitlement: null,
+      requiredPermissionKey: null,
+      handle: async () => {
+        throw new EventDispatchError(
+          "TRANSIENT_INFRASTRUCTURE",
+          "TEST_TRANSIENT_FAILURE",
+        );
+      },
+    };
+    const firstAttemptAt = new Date(Date.now() + 60_000);
+    const firstResult = await dispatchAsTenant(
+      organization.id,
+      context,
+      [handler],
+      { now: firstAttemptAt, maxAttempts: 2, baseDelayMs: 1_000 },
+    );
+    const [retryRecord] = await database
       .select()
-      .from(schema.outboxEvents)
-      .where(eq(schema.outboxEvents.id, eventId));
-    expect(configuration).toBeUndefined();
-    expect(event).toBeUndefined();
+      .from(schema.eventProcessingRecords)
+      .where(
+        and(
+          eq(schema.eventProcessingRecords.eventId, event.eventId),
+          eq(schema.eventProcessingRecords.handlerName, handler.handlerName),
+        ),
+      );
+    expect(firstResult.failed).toBe(1);
+    expect(retryRecord).toMatchObject({
+      handlerName: handler.handlerName,
+      status: "FAILED",
+      attempts: 1,
+      failureKind: "TRANSIENT_INFRASTRUCTURE",
+      lastError: "TEST_TRANSIENT_FAILURE",
+      nextAttemptAt: new Date(firstAttemptAt.getTime() + 1_000),
+    });
+
+    const secondResult = await dispatchAsTenant(
+      organization.id,
+      context,
+      [handler],
+      {
+        now: new Date(firstAttemptAt.getTime() + 2_000),
+        maxAttempts: 2,
+        baseDelayMs: 1_000,
+      },
+    );
+    const [deadLetter] = await database
+      .select()
+      .from(schema.eventDeadLetters)
+      .where(eq(schema.eventDeadLetters.eventId, event.eventId));
+    expect(secondResult.deadLettered).toBe(1);
+    expect(deadLetter).toMatchObject({
+      handlerName: handler.handlerName,
+      failureKind: "TRANSIENT_INFRASTRUCTURE",
+      failureReason: "TEST_TRANSIENT_FAILURE",
+      attempts: 2,
+    });
+  });
+
+  it("isolates outbox, processing, and dead-letter rows by tenant", async () => {
+    const organizationA = await createOrganization("Event Tenant A");
+    const organizationB = await createOrganization("Event Tenant B");
+    const [foreignBranch] = await database
+      .insert(schema.branches)
+      .values({
+        organizationId: organizationB.id,
+        name: "Foreign Event Branch",
+        code: `EVENT-${crypto.randomUUID()}`,
+      })
+      .returning();
+    if (!foreignBranch) throw new Error("Foreign branch was not created");
+
+    const [eventA] = await database
+      .insert(schema.outboxEvents)
+      .values({
+        eventType: "CONFIGURATION_CHANGED",
+        aggregateType: "organization_configuration",
+        aggregateId: organizationA.id,
+        organizationId: organizationA.id,
+        payload: { resource: "organization_configuration" },
+      })
+      .returning({ id: schema.outboxEvents.id });
+    const [eventB] = await database
+      .insert(schema.outboxEvents)
+      .values({
+        eventType: "CONFIGURATION_CHANGED",
+        aggregateType: "organization_configuration",
+        aggregateId: organizationB.id,
+        organizationId: organizationB.id,
+        payload: { resource: "organization_configuration" },
+      })
+      .returning({ id: schema.outboxEvents.id });
+    if (!eventA || !eventB) throw new Error("Test events were not created");
+
+    await database.insert(schema.eventProcessingRecords).values([
+      {
+        organizationId: organizationA.id,
+        eventId: eventA.id,
+        eventType: "CONFIGURATION_CHANGED",
+        handlerName: "test.tenant-a",
+        eventVersion: 1,
+      },
+      {
+        organizationId: organizationB.id,
+        eventId: eventB.id,
+        eventType: "CONFIGURATION_CHANGED",
+        handlerName: "test.tenant-b",
+        eventVersion: 1,
+      },
+    ]);
+    await database.insert(schema.eventDeadLetters).values([
+      {
+        organizationId: organizationA.id,
+        eventId: eventA.id,
+        eventType: "CONFIGURATION_CHANGED",
+        handlerName: "test.tenant-a",
+        failureKind: "INVALID_EVENT",
+        failureReason: "TEST_FAILURE",
+        attempts: 1,
+        deadLetteredAt: new Date(),
+      },
+      {
+        organizationId: organizationB.id,
+        eventId: eventB.id,
+        eventType: "CONFIGURATION_CHANGED",
+        handlerName: "test.tenant-b",
+        failureKind: "INVALID_EVENT",
+        failureReason: "TEST_FAILURE",
+        attempts: 1,
+        deadLetteredAt: new Date(),
+      },
+    ]);
+
+    const tenantAEventRows = await asTenant(
+      organizationA.id,
+      async (transaction) => ({
+        outbox: await transaction.query<{ id: string }>(
+          "SELECT id FROM outbox_events ORDER BY id",
+        ),
+        processing: await transaction.query<{ event_id: string }>(
+          "SELECT event_id FROM event_processing_records ORDER BY event_id",
+        ),
+        deadLetters: await transaction.query<{ event_id: string }>(
+          "SELECT event_id FROM event_dead_letters ORDER BY event_id",
+        ),
+      }),
+    );
+    expect(tenantAEventRows.outbox.rows.map(({ id }) => id)).toEqual([
+      eventA.id,
+    ]);
+    expect(
+      tenantAEventRows.processing.rows.map(({ event_id }) => event_id),
+    ).toEqual([eventA.id]);
+    expect(
+      tenantAEventRows.deadLetters.rows.map(({ event_id }) => event_id),
+    ).toEqual([eventA.id]);
+
+    await expect(
+      asTenant(organizationA.id, (transaction) =>
+        transaction.query(
+          "INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, organization_id, payload, metadata, version) VALUES ('CONFIGURATION_CHANGED', 'organization_configuration', $1, $2, '{}'::jsonb, '{}'::jsonb, 1)",
+          [organizationB.id, organizationB.id],
+        ),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      database.insert(schema.outboxEvents).values({
+        eventType: "CONFIGURATION_CHANGED",
+        aggregateType: "organization_configuration",
+        aggregateId: organizationA.id,
+        organizationId: organizationA.id,
+        branchId: foreignBranch.id,
+        payload: { resource: "organization_configuration" },
+      }),
+    ).rejects.toThrow();
+
+    const missingTenantContext = await client.transaction(
+      async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_app");
+        return transaction.query(
+          "SELECT id FROM outbox_events UNION ALL SELECT id FROM event_processing_records UNION ALL SELECT id FROM event_dead_letters",
+        );
+      },
+    );
+    expect(missingTenantContext.rows).toEqual([]);
   });
 });

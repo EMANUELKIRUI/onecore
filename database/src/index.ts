@@ -18,6 +18,7 @@ export {
 export { recordOutboxEvent, type DomainEvent } from "./outbox.js";
 export {
   calculateEventRetryDelay,
+  createEventHandlerRegistry,
   dispatchAuthorizedOutboxBatch,
   dispatchOutboxBatch,
   EventDispatchError,
@@ -32,6 +33,7 @@ export {
   type EventDeadLetterSummary,
   type EventDispatchOptions,
   type EventDispatchResult,
+  type EventHandlerRegistry,
   type EventHandler,
 } from "./event-dispatcher.js";
 export {

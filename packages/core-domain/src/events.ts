@@ -104,7 +104,10 @@ const eventDefinitions = {
     description: "An organization module entitlement was enabled.",
     compatibilityPolicy: "ADDITIVE_ONLY",
     payloadSchema: z
-      .object({ moduleKey: z.string().trim().min(1).max(100), source: entitlementSourceSchema })
+      .object({
+        moduleKey: z.string().trim().min(1).max(100),
+        source: entitlementSourceSchema,
+      })
       .strict(),
   },
   MODULE_DISABLED: {
@@ -113,7 +116,10 @@ const eventDefinitions = {
     description: "An organization module entitlement was disabled.",
     compatibilityPolicy: "ADDITIVE_ONLY",
     payloadSchema: z
-      .object({ moduleKey: z.string().trim().min(1).max(100), source: entitlementSourceSchema })
+      .object({
+        moduleKey: z.string().trim().min(1).max(100),
+        source: entitlementSourceSchema,
+      })
       .strict(),
   },
   FEATURE_FLAG_CHANGED: {
@@ -195,7 +201,12 @@ export const eventEnvelopeSchema = z
     actorUserId: z.uuid().optional(),
     correlationId: z.uuid(),
     causationId: z.uuid().optional(),
-    aggregateType: z.string().trim().min(1).max(100).regex(/^[a-z][a-z0-9_.-]*$/),
+    aggregateType: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(/^[a-z][a-z0-9_.-]*$/),
     aggregateId: z.uuid(),
     payload: z.json(),
     metadata: z.record(z.string(), z.json()),
@@ -237,6 +248,8 @@ export type CreateEventInput<TEventType extends EventType> = {
 };
 
 const forbiddenMetadataKey = /^(code|script|sql|shell|command|exec|evaluate)$/i;
+const sensitiveMetadataKey =
+  /(password|passwd|token|secret|credential|apikey|privatekey)/i;
 
 function metadataIsInert(value: unknown, depth = 0): boolean {
   if (depth > 8) return false;
@@ -244,10 +257,14 @@ function metadataIsInert(value: unknown, depth = 0): boolean {
     return value.every((child) => metadataIsInert(child, depth + 1));
   }
   if (typeof value !== "object" || value === null) return true;
-  return Object.entries(value).every(
-    ([key, child]) =>
-      !forbiddenMetadataKey.test(key) && metadataIsInert(child, depth + 1),
-  );
+  return Object.entries(value).every(([key, child]) => {
+    const normalizedKey = key.replace(/[^a-z]/gi, "");
+    return (
+      !forbiddenMetadataKey.test(key) &&
+      !sensitiveMetadataKey.test(normalizedKey) &&
+      metadataIsInert(child, depth + 1)
+    );
+  });
 }
 
 export function createDomainEvent<TEventType extends EventType>(

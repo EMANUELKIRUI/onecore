@@ -542,7 +542,10 @@ export function registerModuleRoutes(
                 eq(organizationModules.status, "ENABLED"),
               ),
             )
-            .returning({ id: organizationModules.id });
+            .returning({
+              id: organizationModules.id,
+              source: organizationModules.source,
+            });
           if (!disabled) {
             return sendResponse(reply, 409, {
               error: {

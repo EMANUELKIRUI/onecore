@@ -14,7 +14,11 @@ import type { ApiFastifyInstance } from "./fastify-instance.js";
 const organizationPathSchema = z.object({ organizationId: z.uuid() });
 const replayPathSchema = organizationPathSchema.extend({
   eventId: z.uuid(),
-  handlerName: z.string().min(2).max(150).regex(/^[a-z][a-z0-9_.-]+$/),
+  handlerName: z
+    .string()
+    .min(2)
+    .max(150)
+    .regex(/^[a-z][a-z0-9_.-]+$/),
 });
 const dispatchBodySchema = z
   .object({ batchSize: z.number().int().min(1).max(100).optional() })
@@ -97,7 +101,10 @@ export function registerEventRoutes(
       const body = dispatchBodySchema.safeParse(request.body ?? {});
       if (!path.success || !body.success) {
         return reply.status(400).send({
-          error: { code: "BAD_REQUEST", message: "Invalid event dispatch request." },
+          error: {
+            code: "BAD_REQUEST",
+            message: "Invalid event dispatch request.",
+          },
         });
       }
       const result = await authorization.withPermission(
@@ -129,7 +136,8 @@ export function registerEventRoutes(
     async (request, reply) => {
       const path = organizationPathSchema.safeParse(request.params);
       const query = deadLetterQuerySchema.safeParse(request.query);
-      if (!path.success || !query.success) return sendResponse(reply, notFound());
+      if (!path.success || !query.success)
+        return sendResponse(reply, notFound());
       const result = await authorization.withPermission(
         requestContext(request),
         eventDeadLetterReadPermission,
