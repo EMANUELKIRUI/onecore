@@ -4,6 +4,7 @@ import {
   eventDeadLetterReadPermission,
   eventDispatchPermission,
   listEventDeadLetters,
+  platformWebhookEventHandlers,
   replayEventDeadLetter,
   type AuthorizationContext,
   type AuthorizationService,
@@ -118,7 +119,7 @@ export function registerEventRoutes(
           const dispatch = await dispatchOutboxBatch(
             transaction,
             context,
-            [],
+            platformWebhookEventHandlers,
             body.data.batchSize === undefined
               ? {}
               : { batchSize: body.data.batchSize },

@@ -7,6 +7,7 @@ import {
   type RateLimiter,
 } from "@onecore/database";
 import type { ApiErrorResponse, HealthResponse } from "@onecore/contracts";
+import type { SecretStore } from "@onecore/core-domain";
 import {
   classifyError,
   getRequestContext,
@@ -19,15 +20,18 @@ import { registerAuthentication } from "./authentication.js";
 import { registerAuthorizationRoutes } from "./authorization.js";
 import { registerConfigurationRoutes } from "./configuration.js";
 import { registerConfigurationResourceRoutes } from "./configuration-resources.js";
+import { registerIntegrationSecurityRoutes } from "./integration-resources.js";
 import { registerEventRoutes } from "./events.js";
 import { registerModuleRoutes } from "./modules.js";
 import { registerLifecycleRoutes } from "./lifecycle.js";
 import { createApiFastify } from "./fastify-instance.js";
+import { unavailableSecretStore } from "./integration-boundaries.js";
 
 export interface ApiAppOptions {
   readinessCheck?: () => Promise<void>;
   rateLimiter?: RateLimiter;
   lifecycleMutations?: LifecycleMutationService;
+  secretStore?: SecretStore;
 }
 
 declare module "fastify" {
@@ -150,6 +154,11 @@ export function buildApp(
   registerAuthorizationRoutes(app, correlatedAuthorization);
   registerConfigurationRoutes(app, correlatedAuthorization);
   registerConfigurationResourceRoutes(app, correlatedAuthorization);
+  registerIntegrationSecurityRoutes(
+    app,
+    correlatedAuthorization,
+    options.secretStore ?? unavailableSecretStore,
+  );
   registerEventRoutes(app, correlatedAuthorization);
   registerModuleRoutes(app, correlatedAuthorization);
   if (options.lifecycleMutations) {

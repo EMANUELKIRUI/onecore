@@ -476,6 +476,20 @@ function safeIntegrationConfiguration(value: unknown) {
   return parsed.success ? parsed.data : {};
 }
 
+function publicIntegration<
+  T extends {
+    configuration: unknown;
+    secretReference: string | null;
+  },
+>(integration: T) {
+  const { configuration, secretReference, ...metadata } = integration;
+  return {
+    ...metadata,
+    configuration: safeIntegrationConfiguration(configuration),
+    hasCredentials: secretReference !== null,
+  };
+}
+
 export function registerConfigurationResourceRoutes(
   app: ApiFastifyInstance,
   authorization: AuthorizationService = denyAllAuthorizationService,
@@ -1609,6 +1623,7 @@ export function registerConfigurationResourceRoutes(
               provider: integrations.provider,
               status: integrations.status,
               configuration: integrations.configuration,
+              secretReference: integrations.secretReference,
               createdAt: integrations.createdAt,
               updatedAt: integrations.updatedAt,
             })
@@ -1616,12 +1631,7 @@ export function registerConfigurationResourceRoutes(
             .where(eq(integrations.organizationId, context.organizationId))
             .orderBy(asc(integrations.key));
           return response(200, {
-            integrations: records.map((integration) => ({
-              ...integration,
-              configuration: safeIntegrationConfiguration(
-                integration.configuration,
-              ),
-            })),
+            integrations: records.map(publicIntegration),
           });
         },
       );
@@ -1672,6 +1682,7 @@ export function registerConfigurationResourceRoutes(
               provider: integrations.provider,
               status: integrations.status,
               configuration: integrations.configuration,
+              secretReference: integrations.secretReference,
               createdAt: integrations.createdAt,
               updatedAt: integrations.updatedAt,
             });
@@ -1701,12 +1712,7 @@ export function registerConfigurationResourceRoutes(
             ["created", "provider", "configuration"],
           );
           return response(201, {
-            integration: {
-              ...created,
-              configuration: safeIntegrationConfiguration(
-                created.configuration,
-              ),
-            },
+            integration: publicIntegration(created),
           });
         },
       );
@@ -1758,6 +1764,7 @@ export function registerConfigurationResourceRoutes(
               provider: integrations.provider,
               status: integrations.status,
               configuration: integrations.configuration,
+              secretReference: integrations.secretReference,
               createdAt: integrations.createdAt,
               updatedAt: integrations.updatedAt,
             });
@@ -1780,12 +1787,7 @@ export function registerConfigurationResourceRoutes(
             Object.keys(body.data),
           );
           return response(200, {
-            integration: {
-              ...updated,
-              configuration: safeIntegrationConfiguration(
-                updated.configuration,
-              ),
-            },
+            integration: publicIntegration(updated),
           });
         },
       );

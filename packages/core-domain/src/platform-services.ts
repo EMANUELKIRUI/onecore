@@ -1,6 +1,87 @@
 import { z } from "zod";
 import { EVENT_ENVELOPE_MAX_LENGTH } from "./events.js";
 
+declare const secretReferenceBrand: unique symbol;
+
+export type SecretReference = string & {
+  readonly [secretReferenceBrand]: true;
+};
+
+export const secretPurposes = [
+  "INTEGRATION_CREDENTIAL",
+  "WEBHOOK_SIGNING",
+] as const;
+export const secretPurposeSchema = z.enum(secretPurposes);
+export type SecretPurpose = z.infer<typeof secretPurposeSchema>;
+
+export const webhookSubscriptionStatuses = ["ACTIVE", "DISABLED"] as const;
+export const webhookSubscriptionStatusSchema = z.enum(
+  webhookSubscriptionStatuses,
+);
+export type WebhookSubscriptionStatus = z.infer<
+  typeof webhookSubscriptionStatusSchema
+>;
+
+export const webhookDeliveryStatuses = [
+  "PENDING",
+  "PROCESSING",
+  "RETRYING",
+  "DELIVERED",
+  "DEAD_LETTERED",
+  "CANCELLED",
+] as const;
+export const webhookDeliveryStatusSchema = z.enum(webhookDeliveryStatuses);
+export type WebhookDeliveryStatus = z.infer<typeof webhookDeliveryStatusSchema>;
+
+export const webhookAttemptStatuses = [
+  "IN_PROGRESS",
+  "CANCELLED",
+  "DELIVERED",
+  "RETRYING",
+  "FAILED",
+  "DEAD_LETTERED",
+] as const;
+export const webhookAttemptStatusSchema = z.enum(webhookAttemptStatuses);
+export type WebhookAttemptStatus = z.infer<typeof webhookAttemptStatusSchema>;
+
+export interface SecretMetadata {
+  createdAt: Date;
+  updatedAt: Date;
+  version: number;
+}
+
+export interface SecretStore {
+  store(input: {
+    organizationId: string;
+    purpose: SecretPurpose;
+    value: Uint8Array;
+  }): Promise<SecretReference>;
+  rotate(input: {
+    organizationId: string;
+    purpose: SecretPurpose;
+    reference: SecretReference;
+    value: Uint8Array;
+  }): Promise<SecretReference>;
+  withSecret<T>(
+    input: {
+      organizationId: string;
+      purpose: SecretPurpose;
+      reference: SecretReference;
+    },
+    use: (value: Uint8Array) => Promise<T>,
+  ): Promise<T | undefined>;
+  delete(input: {
+    organizationId: string;
+    purpose: SecretPurpose;
+    reference: SecretReference;
+  }): Promise<void>;
+  metadata(input: {
+    organizationId: string;
+    purpose: SecretPurpose;
+    reference: SecretReference;
+  }): Promise<SecretMetadata | undefined>;
+}
+
 export const jobStatuses = [
   "QUEUED",
   "RUNNING",

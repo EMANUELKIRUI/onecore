@@ -15,6 +15,7 @@ import {
 } from "@onecore/core-domain";
 import {
   dispatchOutboxBatch,
+  platformWebhookEventHandlers,
   EventDispatchError,
   createPlatformServices,
   createJobHandlerRegistry,
@@ -1870,18 +1871,115 @@ describe("PostgreSQL persistence foundation", () => {
         name: "Tenant B Flow",
       },
     ]);
-    await database.insert(schema.integrations).values([
+    const [integrationA, integrationB] = await database
+      .insert(schema.integrations)
+      .values([
+        {
+          organizationId: organizationA.id,
+          key: "mail",
+          provider: "EMAIL_PROVIDER",
+          secretReference: "secret/a",
+        },
+        {
+          organizationId: organizationB.id,
+          key: "mail",
+          provider: "EMAIL_PROVIDER",
+          secretReference: "secret/b",
+        },
+      ])
+      .returning();
+    if (!integrationA || !integrationB) {
+      throw new Error("Tenant integrations were not created");
+    }
+    const [eventA] = await database
+      .insert(schema.outboxEvents)
+      .values({
+        eventType: "USER_CREATED",
+        aggregateType: "user",
+        aggregateId: crypto.randomUUID(),
+        organizationId: organizationA.id,
+        payload: {
+          userId: crypto.randomUUID(),
+          email: "webhook-a@example.test",
+          displayName: "Webhook Tenant A",
+        },
+        metadata: {},
+      })
+      .returning();
+    const [eventB] = await database
+      .insert(schema.outboxEvents)
+      .values({
+        eventType: "USER_CREATED",
+        aggregateType: "user",
+        aggregateId: crypto.randomUUID(),
+        organizationId: organizationB.id,
+        payload: {
+          userId: crypto.randomUUID(),
+          email: "webhook-b@example.test",
+          displayName: "Webhook Tenant B",
+        },
+        metadata: {},
+      })
+      .returning();
+    if (!eventA || !eventB) throw new Error("Webhook events were not created");
+    const [subscriptionA, subscriptionB] = await database
+      .insert(schema.webhookSubscriptions)
+      .values([
+        {
+          organizationId: organizationA.id,
+          integrationId: integrationA.id,
+          endpointUrl: "https://hooks-a.example.test/events",
+          eventTypes: ["USER_CREATED"],
+          status: "ACTIVE",
+          signingSecretReference: "test-reference-a",
+        },
+        {
+          organizationId: organizationB.id,
+          integrationId: integrationB.id,
+          endpointUrl: "https://hooks-b.example.test/events",
+          eventTypes: ["USER_CREATED"],
+          status: "ACTIVE",
+          signingSecretReference: "test-reference-b",
+        },
+      ])
+      .returning();
+    if (!subscriptionA || !subscriptionB) {
+      throw new Error("Webhook subscriptions were not created");
+    }
+    const [deliveryA, deliveryB] = await database
+      .insert(schema.webhookDeliveries)
+      .values([
+        {
+          organizationId: organizationA.id,
+          subscriptionId: subscriptionA.id,
+          eventId: eventA.id,
+          eventType: "USER_CREATED",
+        },
+        {
+          organizationId: organizationB.id,
+          subscriptionId: subscriptionB.id,
+          eventId: eventB.id,
+          eventType: "USER_CREATED",
+        },
+      ])
+      .returning();
+    if (!deliveryA || !deliveryB) {
+      throw new Error("Webhook deliveries were not created");
+    }
+    await database.insert(schema.webhookDeliveryAttempts).values([
       {
         organizationId: organizationA.id,
-        key: "mail",
-        provider: "EMAIL_PROVIDER",
-        secretReference: "secret/a",
+        deliveryId: deliveryA.id,
+        attemptNumber: 1,
+        status: "RETRYING",
+        failureCode: "HTTP_503",
       },
       {
         organizationId: organizationB.id,
-        key: "mail",
-        provider: "EMAIL_PROVIDER",
-        secretReference: "secret/b",
+        deliveryId: deliveryB.id,
+        attemptNumber: 1,
+        status: "RETRYING",
+        failureCode: "HTTP_503",
       },
     ]);
     const globallyUniqueDomain = `shared-${crypto.randomUUID()}.example.test`;
@@ -1950,6 +2048,15 @@ describe("PostgreSQL persistence foundation", () => {
       integrations: await transaction.query<{ organization_id: string }>(
         "SELECT organization_id FROM integrations",
       ),
+      webhooks: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM webhook_subscriptions",
+      ),
+      webhookDeliveries: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM webhook_deliveries",
+      ),
+      webhookAttempts: await transaction.query<{ organization_id: string }>(
+        "SELECT organization_id FROM webhook_delivery_attempts",
+      ),
       domains: await transaction.query<{ organization_id: string }>(
         "SELECT organization_id FROM custom_domains",
       ),
@@ -1976,6 +2083,18 @@ describe("PostgreSQL persistence foundation", () => {
         "UPDATE integrations SET configuration = '{\"tampered\":true}' WHERE organization_id = $1 RETURNING id",
         [organizationB.id],
       ),
+      updateWebhook: await transaction.query(
+        "UPDATE webhook_subscriptions SET status = 'DISABLED' WHERE organization_id = $1 RETURNING id",
+        [organizationB.id],
+      ),
+      deleteWebhookDelivery: await transaction.query(
+        "DELETE FROM webhook_deliveries WHERE organization_id = $1 RETURNING id",
+        [organizationB.id],
+      ),
+      updateWebhookAttempt: await transaction.query(
+        "UPDATE webhook_delivery_attempts SET failure_code = 'tampered' WHERE organization_id = $1 RETURNING id",
+        [organizationB.id],
+      ),
       updateDomain: await transaction.query(
         "UPDATE custom_domains SET is_primary = true WHERE organization_id = $1 RETURNING id",
         [organizationB.id],
@@ -1994,6 +2113,9 @@ describe("PostgreSQL persistence foundation", () => {
       visible.fields.rows,
       visible.workflows.rows,
       visible.integrations.rows,
+      visible.webhooks.rows,
+      visible.webhookDeliveries.rows,
+      visible.webhookAttempts.rows,
       visible.domains.rows,
       visible.assignments.rows,
     ]) {
@@ -2005,6 +2127,9 @@ describe("PostgreSQL persistence foundation", () => {
       visible.updateWorkflow.rows,
       visible.updateNotification.rows,
       visible.updateIntegration.rows,
+      visible.updateWebhook.rows,
+      visible.deleteWebhookDelivery.rows,
+      visible.updateWebhookAttempt.rows,
       visible.updateDomain.rows,
       visible.updateAssignment.rows,
     ]) {
@@ -2019,13 +2144,32 @@ describe("PostgreSQL persistence foundation", () => {
       const integrations = await transaction.query(
         "SELECT organization_id FROM integrations",
       );
+      const webhooks = await transaction.query(
+        "SELECT organization_id FROM webhook_subscriptions",
+      );
+      const webhookDeliveries = await transaction.query(
+        "SELECT organization_id FROM webhook_deliveries",
+      );
+      const webhookAttempts = await transaction.query(
+        "SELECT organization_id FROM webhook_delivery_attempts",
+      );
       const deleted = await transaction.query(
         "DELETE FROM custom_domains RETURNING id",
       );
-      return { settings, integrations, deleted };
+      return {
+        settings,
+        integrations,
+        webhooks,
+        webhookDeliveries,
+        webhookAttempts,
+        deleted,
+      };
     });
     expect(missingContext.settings.rows).toEqual([]);
     expect(missingContext.integrations.rows).toEqual([]);
+    expect(missingContext.webhooks.rows).toEqual([]);
+    expect(missingContext.webhookDeliveries.rows).toEqual([]);
+    expect(missingContext.webhookAttempts.rows).toEqual([]);
     expect(missingContext.deleted.rows).toEqual([]);
 
     const [platformSuperadmin] = await database
@@ -2357,6 +2501,110 @@ describe("PostgreSQL persistence foundation", () => {
       );
     expect(duplicateDelivery.skipped).toBe(2);
     expect(effect?.value).toEqual({ count: 1 });
+  });
+
+  it("queues only selected webhook events and keeps delivery IDs stable", async () => {
+    const organization = await createOrganization("Webhook Outbox Tenant");
+    const [worker] = await database
+      .insert(schema.users)
+      .values({
+        email: `webhook-worker-${crypto.randomUUID()}@example.test`,
+        displayName: "Webhook Worker",
+      })
+      .returning({ id: schema.users.id });
+    const [integration] = await database
+      .insert(schema.integrations)
+      .values({
+        organizationId: organization.id,
+        key: "outbound-webhooks",
+        provider: "WEBHOOK",
+      })
+      .returning();
+    if (!worker || !integration) {
+      throw new Error("Webhook dispatch fixtures were not created");
+    }
+    await database.insert(schema.webhookSubscriptions).values({
+      organizationId: organization.id,
+      integrationId: integration.id,
+      endpointUrl: "https://hooks.example.test/events",
+      eventTypes: ["USER_CREATED"],
+      status: "ACTIVE",
+      signingSecretReference: "test-webhook-secret-reference",
+    });
+    const selectedEvent = createDomainEvent({
+      eventType: "USER_CREATED",
+      organizationId: organization.id,
+      aggregateType: "user",
+      aggregateId: crypto.randomUUID(),
+      payload: {
+        userId: crypto.randomUUID(),
+        email: "selected-event@example.test",
+        displayName: "Selected Event",
+      },
+    });
+    const filteredEvent = createDomainEvent({
+      eventType: "CONFIGURATION_CHANGED",
+      organizationId: organization.id,
+      aggregateType: "organization_configuration",
+      aggregateId: organization.id,
+      payload: {
+        resource: "organization_configuration",
+        resourceId: organization.id,
+        changedFields: ["timezone"],
+      },
+    });
+    await database.transaction(async (transaction) => {
+      await recordOutboxEvent(
+        transaction as unknown as OrganizationTransaction,
+        selectedEvent,
+      );
+      await recordOutboxEvent(
+        transaction as unknown as OrganizationTransaction,
+        filteredEvent,
+      );
+    });
+
+    const context = eventWorkerContext(organization.id, worker.id);
+    const dispatchTime = new Date(Date.now() + 60_000);
+    const dispatched = await dispatchAsTenant(
+      organization.id,
+      context,
+      platformWebhookEventHandlers,
+      { now: dispatchTime },
+    );
+    expect(dispatched).toMatchObject({ claimed: 2, published: 2 });
+    const queued = await database
+      .select()
+      .from(schema.webhookDeliveries)
+      .where(eq(schema.webhookDeliveries.organizationId, organization.id));
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({
+      eventId: selectedEvent.eventId,
+      eventType: "USER_CREATED",
+      status: "PENDING",
+    });
+    const deliveryId = queued[0]!.id;
+
+    await database
+      .update(schema.outboxEvents)
+      .set({
+        status: "PENDING",
+        deliveryStatus: "PENDING",
+        nextAttemptAt: dispatchTime,
+      })
+      .where(eq(schema.outboxEvents.id, selectedEvent.eventId));
+    await dispatchAsTenant(
+      organization.id,
+      context,
+      platformWebhookEventHandlers,
+      { now: dispatchTime },
+    );
+    const afterDuplicate = await database
+      .select()
+      .from(schema.webhookDeliveries)
+      .where(eq(schema.webhookDeliveries.organizationId, organization.id));
+    expect(afterDuplicate).toHaveLength(1);
+    expect(afterDuplicate[0]?.id).toBe(deliveryId);
   });
 
   it("fails closed for missing or forged dispatch tenant and branch context", async () => {

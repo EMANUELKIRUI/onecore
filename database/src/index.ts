@@ -6,6 +6,7 @@ export * from "../schema/index.js";
 export {
   withActiveBranchTransaction,
   withActiveOrganizationTransaction,
+  withOrganizationTransaction,
 } from "./tenant-context.js";
 export type {
   OrganizationTransaction,
@@ -44,6 +45,13 @@ export {
   type EventHandlerRegistry,
   type EventHandler,
 } from "./event-dispatcher.js";
+export {
+  calculateWebhookRetryDelay,
+  classifyWebhookHttpStatus,
+  platformWebhookEventHandlers,
+  webhookEventMatches,
+  type WebhookResponseDisposition,
+} from "./webhooks.js";
 export {
   createIdentityRepository,
   type AuthenticationAuditEvent,

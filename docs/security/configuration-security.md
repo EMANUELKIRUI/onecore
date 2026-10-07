@@ -10,7 +10,7 @@ Platform roles do not grant a general customer-data bypass. Configuration access
 
 Custom field metadata and workflow JSON are inert, bounded, allow-listed data. They are never translated into DDL or executed as SQL, shell, or application code. Integration APIs reject secret-shaped fields, store no plaintext credentials, omit secret references from responses, and sanitize legacy configuration JSON.
 
-Configuration writes use append-only `audit_logs`, recording resource identifiers, changed field names, and safe counts rather than secret values. Integration credentials, secret references, notification recipient content, custom field values, and arbitrary configuration values are not copied into audit records.
+Configuration writes use append-only `audit_logs`, recording resource identifiers, changed field names, and safe counts rather than secret values. Integration credentials, secret references, notification recipient content, custom field values, and arbitrary configuration values are not copied into audit records. Credential and signing-secret endpoints require the existing integration manage permission and an injected `SecretStore`; the default implementation fails closed.
 
 ## Database operations
 
@@ -18,4 +18,4 @@ The runtime role must remain `NOSUPERUSER NOBYPASSRLS`, must not own protected t
 
 ## Current limitations
 
-External messaging/provider calls, secret-manager integration, domain verification/DNS automation, SSL provisioning, visual workflow design/execution, personal configuration, and business-module custom-field values remain out of scope. `resolveFeatureFlag` is a policy helper and must be called only with context produced by the trusted authorization transaction; its context booleans are not themselves proof of identity or membership.
+External messaging/provider calls, production secret-manager integration, DNS-aware SSRF protection, webhook delivery activation, domain verification/DNS automation, SSL provisioning, visual workflow design/execution, personal configuration, and business-module custom-field values remain out of scope. The default webhook transport performs no network I/O. `resolveFeatureFlag` is a policy helper and must be called only with context produced by the trusted authorization transaction; its context booleans are not themselves proof of identity or membership.

@@ -38,6 +38,9 @@ import {
   type EventDeliveryStatus,
   type EventFailureKind,
   type EventProcessingStatus,
+  type WebhookAttemptStatus,
+  type WebhookDeliveryStatus,
+  type WebhookSubscriptionStatus,
   permissionStatuses,
   roleStatuses,
   sslStatuses,
@@ -1947,6 +1950,183 @@ export const eventDeadLetters = pgTable(
     check(
       "event_dead_letters_attempts_nonnegative",
       sql`${table.attempts} >= 0 and ${table.replayCount} >= 0`,
+    ),
+  ],
+);
+
+export const webhookSubscriptions = pgTable(
+  "webhook_subscriptions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    integrationId: uuid("integration_id").notNull(),
+    endpointUrl: varchar("endpoint_url", { length: 2_048 }).notNull(),
+    description: varchar("description", { length: 256 }),
+    eventTypes: jsonb("event_types").$type<string[]>().notNull(),
+    status: varchar("status", { length: 20 })
+      .$type<WebhookSubscriptionStatus>()
+      .notNull()
+      .default("DISABLED"),
+    signingSecretReference: varchar("signing_secret_reference", {
+      length: 500,
+    }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    unique("webhook_subscriptions_org_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    foreignKey({
+      name: "webhook_subscriptions_integration_fk",
+      columns: [table.organizationId, table.integrationId],
+      foreignColumns: [integrations.organizationId, integrations.id],
+    }).onDelete("cascade"),
+    index("webhook_subscriptions_org_status_idx").on(
+      table.organizationId,
+      table.status,
+    ),
+    check(
+      "webhook_subscriptions_event_types_check",
+      sql`jsonb_typeof(${table.eventTypes}) = 'array' and jsonb_array_length(${table.eventTypes}) between 1 and 100`,
+    ),
+    check(
+      "webhook_subscriptions_endpoint_https_check",
+      sql`${table.endpointUrl} like 'https://%'`,
+    ),
+    check(
+      "webhook_subscriptions_status_check",
+      sql`${table.status} in ('ACTIVE', 'DISABLED')`,
+    ),
+    check(
+      "webhook_subscriptions_active_secret_check",
+      sql`${table.status} <> 'ACTIVE' or ${table.signingSecretReference} is not null`,
+    ),
+  ],
+);
+
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    subscriptionId: uuid("subscription_id").notNull(),
+    eventId: uuid("event_id").notNull(),
+    eventType: varchar("event_type", { length: 150 }).notNull(),
+    status: varchar("status", { length: 20 })
+      .$type<WebhookDeliveryStatus>()
+      .notNull()
+      .default("PENDING"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(8),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    leaseToken: uuid("lease_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    lastHttpStatus: integer("last_http_status"),
+    lastFailureCode: varchar("last_failure_code", { length: 80 }),
+    responseMetadata: jsonb("response_metadata")
+      .$type<Record<string, string>>()
+      .notNull()
+      .default({}),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    unique("webhook_deliveries_org_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    unique("webhook_deliveries_event_subscription_unique").on(
+      table.eventId,
+      table.subscriptionId,
+    ),
+    foreignKey({
+      name: "webhook_deliveries_subscription_fk",
+      columns: [table.organizationId, table.subscriptionId],
+      foreignColumns: [
+        webhookSubscriptions.organizationId,
+        webhookSubscriptions.id,
+      ],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "webhook_deliveries_outbox_fk",
+      columns: [table.organizationId, table.eventId],
+      foreignColumns: [outboxEvents.organizationId, outboxEvents.id],
+    }).onDelete("restrict"),
+    index("webhook_deliveries_org_status_retry_idx").on(
+      table.organizationId,
+      table.status,
+      table.nextAttemptAt,
+    ),
+    check(
+      "webhook_deliveries_status_check",
+      sql`${table.status} in ('PENDING', 'PROCESSING', 'RETRYING', 'DELIVERED', 'DEAD_LETTERED', 'CANCELLED')`,
+    ),
+    check(
+      "webhook_deliveries_attempts_check",
+      sql`${table.attemptCount} >= 0 and ${table.maxAttempts} between 1 and 20`,
+    ),
+    check(
+      "webhook_deliveries_response_metadata_size_check",
+      sql`octet_length(${table.responseMetadata}::text) <= 4096`,
+    ),
+  ],
+);
+
+export const webhookDeliveryAttempts = pgTable(
+  "webhook_delivery_attempts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    deliveryId: uuid("delivery_id").notNull(),
+    attemptNumber: integer("attempt_number").notNull(),
+    status: varchar("status", { length: 20 })
+      .$type<WebhookAttemptStatus>()
+      .notNull(),
+    httpStatus: integer("http_status"),
+    failureCode: varchar("failure_code", { length: 80 }),
+    responseMetadata: jsonb("response_metadata")
+      .$type<Record<string, string>>()
+      .notNull()
+      .default({}),
+    createdAt: createdAt(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    foreignKey({
+      name: "webhook_delivery_attempts_delivery_fk",
+      columns: [table.organizationId, table.deliveryId],
+      foreignColumns: [webhookDeliveries.organizationId, webhookDeliveries.id],
+    }).onDelete("restrict"),
+    unique("webhook_delivery_attempts_delivery_number_unique").on(
+      table.deliveryId,
+      table.attemptNumber,
+    ),
+    index("webhook_delivery_attempts_org_delivery_idx").on(
+      table.organizationId,
+      table.deliveryId,
+    ),
+    check(
+      "webhook_delivery_attempts_number_check",
+      sql`${table.attemptNumber} > 0`,
+    ),
+    check(
+      "webhook_delivery_attempts_status_check",
+      sql`${table.status} in ('IN_PROGRESS', 'CANCELLED', 'DELIVERED', 'RETRYING', 'FAILED', 'DEAD_LETTERED')`,
+    ),
+    check(
+      "webhook_delivery_attempts_response_metadata_size_check",
+      sql`octet_length(${table.responseMetadata}::text) <= 4096`,
     ),
   ],
 );

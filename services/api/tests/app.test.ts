@@ -8,12 +8,17 @@ import type {
   OrganizationTransaction,
   ResolvedAuthorizationContext,
 } from "@onecore/database";
-import { describe, expect, it } from "vitest";
+import { integrations, webhookSubscriptions } from "@onecore/database";
+import type { SecretReference, SecretStore } from "@onecore/core-domain";
+import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { MemoryIdentityRepository } from "./identity-fixture.js";
 import { getRequestContext } from "@onecore/config";
 
-function allowOnlyTestTenant(organizationId: string): AuthorizationService {
+function allowOnlyTestTenant(
+  organizationId: string,
+  transaction: OrganizationTransaction = {} as OrganizationTransaction,
+): AuthorizationService {
   const withPermission = async (
     context: AuthorizationContext | null,
     _permissionKey: string,
@@ -47,10 +52,7 @@ function allowOnlyTestTenant(organizationId: string): AuthorizationService {
       platformRoles: [],
       permissions: [],
     };
-    const value = await operation(
-      {} as OrganizationTransaction,
-      resolvedContext,
-    );
+    const value = await operation(transaction, resolvedContext);
     return {
       allowed: true,
       value,
@@ -106,6 +108,471 @@ describe("API foundation", () => {
 
     expect(response.statusCode).toBe(503);
     expect(response.json()).toEqual({ status: "not_ready" });
+    await app.close();
+  });
+
+  it("fails closed for unauthenticated credential and webhook operations", async () => {
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+    );
+    const organizationId = crypto.randomUUID();
+    const integrationId = crypto.randomUUID();
+    const webhookId = crypto.randomUUID();
+    const deliveryId = crypto.randomUUID();
+    const fakeSigningValue = "not-a-production-credential-1234567890";
+    const responses = await Promise.all([
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/integrations/${integrationId}/credentials`,
+      }),
+      app.inject({
+        method: "POST",
+        url: `/organizations/${organizationId}/integrations/${integrationId}/credentials`,
+        payload: { secret: fakeSigningValue },
+      }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/webhooks`,
+      }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/webhooks/${webhookId}/deliveries`,
+      }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/webhooks/${webhookId}/deliveries/${deliveryId}/attempts`,
+      }),
+      app.inject({
+        method: "POST",
+        url: `/organizations/${organizationId}/webhooks`,
+        payload: {
+          integrationId,
+          endpointUrl: "https://hooks.example.org/events",
+          eventTypes: ["USER_CREATED"],
+          signingSecret: fakeSigningValue,
+        },
+      }),
+    ]);
+
+    expect(responses.map(({ statusCode }) => statusCode)).toEqual([
+      401, 401, 401, 401, 401, 401,
+    ]);
+    expect(
+      responses.every(({ body }) => !body.includes(fakeSigningValue)),
+    ).toBe(true);
+    await app.close();
+  });
+
+  it("stores an integration credential without returning or auditing secret material", async () => {
+    const userId = crypto.randomUUID();
+    const organizationId = crypto.randomUUID();
+    const integrationId = crypto.randomUUID();
+    const sessionSecret = "c".repeat(43);
+    const secretHash = createHash("sha256").update(sessionSecret).digest("hex");
+    const identity = new MemoryIdentityRepository();
+    identity.addUser({
+      id: userId,
+      email: "credential-test@example.test",
+      displayName: "Credential Test",
+      status: "ACTIVE",
+      passwordHash: null,
+      failedLoginAttempts: 0,
+      failedLoginWindowStartedAt: null,
+      lockedUntil: null,
+      lastLoginAt: null,
+    });
+    identity.addMembership(userId, {
+      organizationId,
+      name: "Credential Test",
+      slug: "credential-test",
+    });
+    identity.sessions.set(secretHash, {
+      id: crypto.randomUUID(),
+      secretHash,
+      userId,
+      organizationId,
+      branchId: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      lastUsedAt: new Date(),
+      revokedAt: null,
+      ipAddress: null,
+      userAgent: null,
+    });
+
+    const storedIntegration = {
+      id: integrationId,
+      secretReference: null as string | null,
+    };
+    const updates: unknown[] = [];
+    const auditWrites: unknown[] = [];
+    let outboxWrites = 0;
+    const transaction = {
+      select: () => {
+        let source: unknown;
+        const query = {
+          from(table: unknown) {
+            source = table;
+            return query;
+          },
+          where() {
+            return query;
+          },
+          for() {
+            return query;
+          },
+          limit: async () =>
+            source === integrations ? [storedIntegration] : [],
+        };
+        return query;
+      },
+      update: () => ({
+        set(values: unknown) {
+          updates.push(values);
+          Object.assign(storedIntegration, values);
+          return { where: async () => [] };
+        },
+      }),
+      insert: () => ({
+        values(values: unknown) {
+          auditWrites.push(values);
+          return Promise.resolve([]);
+        },
+      }),
+      execute: async () => {
+        outboxWrites += 1;
+        return { rows: [] };
+      },
+    } as unknown as OrganizationTransaction;
+    const secretValue = "fixture-only-secret-value-not-for-production";
+    const secretStore: SecretStore = {
+      store: vi
+        .fn<SecretStore["store"]>()
+        .mockResolvedValueOnce("opaque-test-reference-1" as SecretReference)
+        .mockResolvedValueOnce("opaque-test-reference-2" as SecretReference),
+      rotate: vi
+        .fn<SecretStore["rotate"]>()
+        .mockResolvedValueOnce("opaque-test-reference-2" as SecretReference),
+      withSecret: vi.fn(async (_input, use) =>
+        use(new TextEncoder().encode(secretValue)),
+      ),
+      delete: vi.fn(async () => undefined),
+      metadata: vi.fn(async () => ({
+        createdAt: new Date("2026-10-07T12:00:00.000Z"),
+        updatedAt: new Date("2026-10-07T12:00:00.000Z"),
+        version: 1,
+      })),
+    };
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      allowOnlyTestTenant(organizationId, transaction),
+      { secretStore },
+    );
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/integrations/${integrationId}/credentials`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { secret: secretValue },
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toEqual({ credential: { configured: true } });
+    expect(created.body).not.toContain(secretValue);
+    expect(created.body).not.toContain("opaque-test-reference");
+    expect(secretStore.store).toHaveBeenCalledWith({
+      organizationId,
+      purpose: "INTEGRATION_CREDENTIAL",
+      value: new TextEncoder().encode(secretValue),
+    });
+
+    const metadata = await app.inject({
+      method: "GET",
+      url: `/organizations/${organizationId}/integrations/${integrationId}/credentials`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(metadata.statusCode).toBe(200);
+    expect(metadata.json()).toMatchObject({
+      credential: { configured: true, version: 1 },
+    });
+    expect(metadata.body).not.toContain("opaque-test-reference");
+
+    const replacementValue = "fixture-only-replacement-secret-not-production";
+    const rotated = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/integrations/${integrationId}/credentials/rotate`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { secret: replacementValue },
+    });
+    expect(rotated.statusCode).toBe(200);
+    expect(rotated.body).not.toContain(replacementValue);
+    expect(rotated.body).not.toContain("opaque-test-reference");
+    expect(secretStore.delete).toHaveBeenCalledWith({
+      organizationId,
+      purpose: "INTEGRATION_CREDENTIAL",
+      reference: "opaque-test-reference-1",
+    });
+
+    const revoked = await app.inject({
+      method: "DELETE",
+      url: `/organizations/${organizationId}/integrations/${integrationId}/credentials`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(revoked.statusCode).toBe(204);
+    expect(storedIntegration.secretReference).toBeNull();
+    expect(secretStore.delete).toHaveBeenCalledWith({
+      organizationId,
+      purpose: "INTEGRATION_CREDENTIAL",
+      reference: "opaque-test-reference-2",
+    });
+    expect(JSON.stringify(auditWrites)).not.toContain(secretValue);
+    expect(JSON.stringify(auditWrites)).not.toContain(replacementValue);
+    expect(JSON.stringify(auditWrites)).not.toContain("opaque-test-reference");
+    expect(updates).toHaveLength(3);
+    expect(outboxWrites).toBe(3);
+    await app.close();
+
+    const failClosedApp = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      allowOnlyTestTenant(organizationId, transaction),
+    );
+    const unavailable = await failClosedApp.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/integrations/${integrationId}/credentials`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { secret: "fixture-only-no-backend-secret" },
+    });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toEqual({
+      error: {
+        code: "INTEGRATION_BACKEND_UNAVAILABLE",
+        message: "The integration security backend is unavailable.",
+      },
+    });
+    expect(unavailable.body).not.toContain("fixture-only-no-backend-secret");
+    await failClosedApp.close();
+  });
+
+  it("manages webhook subscriptions without returning signing secrets or references", async () => {
+    const userId = crypto.randomUUID();
+    const organizationId = crypto.randomUUID();
+    const integrationId = crypto.randomUUID();
+    const webhookId = crypto.randomUUID();
+    const sessionSecret = "d".repeat(43);
+    const secretHash = createHash("sha256").update(sessionSecret).digest("hex");
+    const identity = new MemoryIdentityRepository();
+    identity.addUser({
+      id: userId,
+      email: "webhook-test@example.test",
+      displayName: "Webhook Test",
+      status: "ACTIVE",
+      passwordHash: null,
+      failedLoginAttempts: 0,
+      failedLoginWindowStartedAt: null,
+      lockedUntil: null,
+      lastLoginAt: null,
+    });
+    identity.addMembership(userId, {
+      organizationId,
+      name: "Webhook Test",
+      slug: "webhook-test",
+    });
+    identity.sessions.set(secretHash, {
+      id: crypto.randomUUID(),
+      secretHash,
+      userId,
+      organizationId,
+      branchId: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      lastUsedAt: new Date(),
+      revokedAt: null,
+      ipAddress: null,
+      userAgent: null,
+    });
+
+    const integration = {
+      id: integrationId,
+      provider: "WEBHOOK",
+      status: "PENDING",
+    };
+    const subscription: Record<string, unknown> = {
+      id: webhookId,
+      organizationId,
+      integrationId,
+      endpointUrl: "https://hooks.example.org/events",
+      eventTypes: ["USER_CREATED"],
+      status: "ACTIVE",
+      description: null,
+      signingSecretReference: null,
+      createdAt: new Date("2026-10-07T12:00:00.000Z"),
+      updatedAt: new Date("2026-10-07T12:00:00.000Z"),
+    };
+    const auditWrites: unknown[] = [];
+    let outboxWrites = 0;
+    const transaction = {
+      select: () => {
+        let source: unknown;
+        const query = {
+          from(table: unknown) {
+            source = table;
+            return query;
+          },
+          where() {
+            return query;
+          },
+          for() {
+            return query;
+          },
+          orderBy() {
+            return query;
+          },
+          limit: async () =>
+            source === integrations
+              ? [integration]
+              : source === webhookSubscriptions
+                ? [subscription]
+                : [],
+          then: (
+            resolve: (rows: unknown[]) => unknown,
+            reject: (error: unknown) => unknown,
+          ) =>
+            Promise.resolve(
+              source === webhookSubscriptions ? [subscription] : [],
+            ).then(resolve, reject),
+        };
+        return query;
+      },
+      insert: (table: unknown) => {
+        const query = {
+          values(values: unknown) {
+            if (table === webhookSubscriptions) {
+              Object.assign(subscription, values);
+            } else {
+              auditWrites.push(values);
+            }
+            return query;
+          },
+          returning: async () => [subscription],
+          then: (
+            resolve: (rows: unknown[]) => unknown,
+            reject: (error: unknown) => unknown,
+          ) => Promise.resolve([]).then(resolve, reject),
+        };
+        return query;
+      },
+      update: (table: unknown) => {
+        const query = {
+          set(values: unknown) {
+            if (table === webhookSubscriptions) {
+              Object.assign(subscription, values);
+            }
+            return query;
+          },
+          where() {
+            return query;
+          },
+          returning: async () => [subscription],
+          then: (
+            resolve: (rows: unknown[]) => unknown,
+            reject: (error: unknown) => unknown,
+          ) => Promise.resolve([]).then(resolve, reject),
+        };
+        return query;
+      },
+      execute: async () => {
+        outboxWrites += 1;
+        return { rows: [] };
+      },
+    } as unknown as OrganizationTransaction;
+    const signingValue = "fixture-only-webhook-signing-key-1234567890";
+    const replacementSigningValue =
+      "fixture-only-rotated-signing-key-123456789";
+    const secretStore: SecretStore = {
+      store: vi
+        .fn<SecretStore["store"]>()
+        .mockResolvedValueOnce("opaque-webhook-reference-1" as SecretReference)
+        .mockResolvedValueOnce("opaque-webhook-reference-2" as SecretReference),
+      rotate: vi
+        .fn<SecretStore["rotate"]>()
+        .mockResolvedValueOnce("opaque-webhook-reference-2" as SecretReference),
+      withSecret: vi.fn(async (_input, use) =>
+        use(new TextEncoder().encode(signingValue)),
+      ),
+      delete: vi.fn(async () => undefined),
+      metadata: vi.fn(async () => undefined),
+    };
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      allowOnlyTestTenant(organizationId, transaction),
+      { secretStore },
+    );
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/webhooks`,
+      cookies: { onecore_session: sessionSecret },
+      payload: {
+        integrationId,
+        endpointUrl: "https://hooks.example.org/events",
+        eventTypes: ["USER_CREATED"],
+        signingSecret: signingValue,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().webhook).toMatchObject({
+      id: webhookId,
+      status: "ACTIVE",
+      hasSigningSecret: true,
+    });
+    expect(created.body).not.toContain(signingValue);
+    expect(created.body).not.toContain("opaque-webhook-reference-1");
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/organizations/${organizationId}/webhooks/${webhookId}`,
+      cookies: { onecore_session: sessionSecret },
+      payload: {
+        endpointUrl: "https://hooks.example.org/v2/events",
+        eventTypes: ["USER_CREATED", "USER_INVITED"],
+      },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.body).not.toContain("opaque-webhook-reference-1");
+
+    const rotated = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/webhooks/${webhookId}/rotate-secret`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { signingSecret: replacementSigningValue },
+    });
+    expect(rotated.statusCode).toBe(200);
+    expect(rotated.body).not.toContain(replacementSigningValue);
+    expect(rotated.body).not.toContain("opaque-webhook-reference-2");
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/organizations/${organizationId}/webhooks/${webhookId}`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(deleted.statusCode).toBe(204);
+    expect(subscription).toMatchObject({
+      status: "DISABLED",
+      signingSecretReference: null,
+    });
+    expect(secretStore.delete).toHaveBeenCalledWith({
+      organizationId,
+      purpose: "WEBHOOK_SIGNING",
+      reference: "opaque-webhook-reference-2",
+    });
+    expect(JSON.stringify(auditWrites)).not.toContain(signingValue);
+    expect(JSON.stringify(auditWrites)).not.toContain(replacementSigningValue);
+    expect(JSON.stringify(auditWrites)).not.toContain(
+      "opaque-webhook-reference",
+    );
+    expect(outboxWrites).toBe(4);
     await app.close();
   });
 
@@ -491,6 +958,31 @@ describe("API foundation", () => {
       cookies: { onecore_session: sessionSecret },
     });
     expect(configurationDenied.statusCode).toBe(403);
+    const credentialPermissionDenied = await authenticatedApp.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/integrations/${crypto.randomUUID()}/credentials`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { secret: "fixture-only-authorized-test-value" },
+    });
+    expect(credentialPermissionDenied.statusCode).toBe(403);
+    expect(credentialPermissionDenied.body).not.toContain(
+      "fixture-only-authorized-test-value",
+    );
+    const webhookPermissionDenied = await authenticatedApp.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/webhooks`,
+      cookies: { onecore_session: sessionSecret },
+      payload: {
+        integrationId: crypto.randomUUID(),
+        endpointUrl: "https://hooks.example.org/events",
+        eventTypes: ["USER_CREATED"],
+        signingSecret: "fixture-only-webhook-signing-secret-123456",
+      },
+    });
+    expect(webhookPermissionDenied.statusCode).toBe(403);
+    expect(webhookPermissionDenied.body).not.toContain(
+      "fixture-only-webhook-signing-secret-123456",
+    );
     await authenticatedApp.close();
     await app.close();
   });
@@ -551,6 +1043,9 @@ describe("API foundation", () => {
       `/organizations/${organizationB}/workflows`,
       `/organizations/${organizationB}/notification-settings`,
       `/organizations/${organizationB}/integrations`,
+      `/organizations/${organizationB}/integrations/${crypto.randomUUID()}/credentials`,
+      `/organizations/${organizationB}/webhooks`,
+      `/organizations/${organizationB}/webhooks/${crypto.randomUUID()}/deliveries`,
       `/organizations/${organizationB}/domains`,
     ]) {
       const response = await app.inject({
