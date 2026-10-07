@@ -22,6 +22,35 @@ JSONB does not replace columns, foreign keys, uniqueness, or validation for core
 
 Supported initial locales are English (`en`) and Kiswahili (`sw`); use locale identifiers so future French, Arabic, Amharic, Portuguese, Kinyarwanda, Somali, and Luganda can be added without schema changes. Store country as ISO alpha-2, currency as ISO 4217, and timezone as an IANA identifier.
 
+## Localization and regional settings
+
+The existing organization settings remain the source of truth for country
+(`countryCode`), currency (`currencyCode`), timezone (`timezone`), and locale.
+The API validates these fields through the shared core-domain regionalization
+schemas; locale tags are canonicalized as BCP 47 identifiers and currently
+accept the documented English and Kiswahili language set, including regional
+tags such as `en-KE`. Currency codes are checked against the runtime's
+`Intl` currency data. Country codes are shape-validated as uppercase alpha-2;
+this does not imply a country-specific policy or a complete country registry.
+
+The shared UI exposes `Intl`-based date, time, number, percentage, and currency
+formatters. Formatters accept a valid presentation locale and an explicit
+business timezone where relevant; timestamps are treated as instants, with
+UTC used when a caller omits a timezone. Do not pass calendar-date strings or
+localized date strings to instant formatters. Keep date-only values as
+machine-readable calendar dates and do not convert them into instants without
+a domain-defined timezone rule.
+
+Translation lookup is a presentation-only abstraction: callers provide
+translation catalogs and explicit default text; lookup tries the requested
+locale, its language, the configured fallback locale, and its language before
+using that default text. This foundation adds no translated product catalog
+and does not persist a personal locale preference. API values remain
+machine-readable, and the browser is never authoritative for authorization.
+Country-specific tax, legal, payroll, accounting, statutory calendars, and
+other business rules belong to the relevant later domain/module, not these
+shared utilities.
+
 ## Money and historical facts
 
 Store exact amounts in PostgreSQL `numeric`, alongside currency codes. A future business transaction must retain its original amount/currency and the exchange-rate value, source, and effective time used at that transaction; never rewrite historic amounts using a current rate. This phase adds no operational financial transactions.

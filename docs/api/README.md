@@ -4,17 +4,18 @@ The service is `services/api`. It requires `DATABASE_URL` for a non-owner, `NOBY
 
 ## Authentication routes
 
-| Method | Route                | Behavior                                                                                                                                  |
-| ------ | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST` | `/auth/login`        | Validates credentials, creates an opaque server-side session, sets the `HttpOnly` cookie, and returns only safe user/session metadata.    |
-| `POST` | `/auth/logout`       | Revokes the presented session and clears the cookie; safe to call when already anonymous.                                                 |
-| `GET`  | `/auth/session`      | Requires authentication and returns safe user details, selected organization/branch, active memberships, authorized branches, and expiry. |
-| `POST` | `/auth/organization` | Requires authentication and an active membership in the requested organization before switching session context.                          |
-| `POST` | `/auth/branch`       | Requires a selected organization and an active branch assignment or explicit organization-wide branch access.                             |
+| Method | Route                   | Behavior                                                                                                                                     |
+| ------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST` | `/auth/login`           | Validates credentials, creates an opaque server-side session, sets the `HttpOnly` cookie, and returns only safe user/session metadata.       |
+| `POST` | `/auth/logout`          | Revokes the presented session and clears the cookie; safe to call when already anonymous.                                                    |
+| `POST` | `/auth/password/change` | Requires the current password, changes the Argon2id credential, revokes all of the user's active sessions atomically, and clears the cookie. |
+| `GET`  | `/auth/session`         | Requires authentication and returns safe user details, selected organization/branch, active memberships, authorized branches, and expiry.    |
+| `POST` | `/auth/organization`    | Requires authentication and an active membership in the requested organization before switching session context.                             |
+| `POST` | `/auth/branch`          | Requires a selected organization and an active branch assignment or explicit organization-wide branch access.                                |
 
 Login failures return a generic 401 regardless of whether the account exists or is active. Login is rate-limited by IP. State-changing routes require JSON and validate browser origin. The cookie secret is never included in response JSON. See [authentication security](../security/authentication.md).
 
-Authentication is not the complete authorization engine. Protected business routes must use `requireAuthenticated()` and `requireOrganizationMembership()`, then add permission, module-entitlement, branch-row, and data-scope checks before returning business data. Organization and branch IDs are requested context only; the server verifies current membership, organization/branch status, and branch access. Branch selection does not replace RBAC or data-scope checks. Platform roles do not grant operational access.
+Authentication is not the complete authorization engine. There are currently no business-domain CRUD routes. Any such routes must use `requireAuthenticated()` and `requireOrganizationMembership()`, then apply permission, module-entitlement, branch-row, and data-scope checks in the service/query before returning business data. Organization and branch IDs are requested context only; the server verifies current membership, organization/branch status, and branch access. Branch selection does not replace RBAC or data-scope checks. Platform roles do not grant operational access.
 
 Validate every external input at the API boundary. Route handlers should delegate business decisions to application services; domain code must not depend on Fastify.
 

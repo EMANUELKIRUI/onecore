@@ -420,6 +420,11 @@ describe("production lifecycle mutations", () => {
         async (_transaction, verifiedMembership) => verifiedMembership,
       ),
     ).resolves.toBeUndefined();
+    // Activation requires approval; simulate that independent lifecycle step.
+    await database
+      .update(schema.organizations)
+      .set({ status: "APPROVED" })
+      .where(eq(schema.organizations.id, result.organization.id));
     const activated = await createLifecycleMutationService(
       applicationDatabase,
     ).activateOrganization(result.organization.id, actor, metadata());

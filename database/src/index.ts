@@ -79,6 +79,12 @@ export {
   type PermissionGrantCandidate,
 } from "./authorization-policy.js";
 export {
+  resourceScopeAllowsCreate,
+  resourceScopePredicate,
+  type ResourceScopeColumns,
+  type ResourceScopeValues,
+} from "./resource-authorization.js";
+export {
   createModuleRegistry,
   moduleVersionSatisfies,
   type ModuleRegistry,

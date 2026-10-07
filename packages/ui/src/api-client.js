@@ -1,0 +1,85 @@
+export class ApiError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function containsControlCharacter(value) {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+}
+
+export function createApiClient(basePath = "", fetchImplementation = fetch) {
+  if (
+    basePath &&
+    (!basePath.startsWith("/") ||
+      basePath.startsWith("//") ||
+      basePath.includes("\\") ||
+      containsControlCharacter(basePath))
+  ) {
+    throw new TypeError("API base path must be a same-origin absolute path");
+  }
+  const normalizedBasePath = basePath.replace(/\/+$/, "");
+
+  return {
+    async request(path, { method = "GET", body, signal } = {}) {
+      if (
+        !path.startsWith("/") ||
+        path.startsWith("//") ||
+        path.includes("\\") ||
+        containsControlCharacter(path)
+      ) {
+        throw new TypeError("API path must be same-origin and absolute");
+      }
+      let response;
+      try {
+        response = await fetchImplementation(`${normalizedBasePath}${path}`, {
+          method,
+          credentials: "same-origin",
+          headers: {
+            accept: "application/json",
+            ...(body === undefined
+              ? {}
+              : { "content-type": "application/json" }),
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          ...(signal === undefined ? {} : { signal }),
+        });
+      } catch {
+        throw new ApiError(
+          0,
+          "NETWORK_ERROR",
+          "The service could not be reached. Check your connection and try again.",
+        );
+      }
+
+      if (response.status === 204) return null;
+      let payload;
+      try {
+        payload = await response.json();
+      } catch {
+        throw new ApiError(
+          response.status,
+          "INVALID_RESPONSE",
+          "The service returned an unexpected response.",
+        );
+      }
+      if (!response.ok) {
+        const error = payload?.error;
+        throw new ApiError(
+          response.status,
+          typeof error?.code === "string" ? error.code : "REQUEST_FAILED",
+          typeof error?.message === "string"
+            ? error.message
+            : "The request could not be completed.",
+        );
+      }
+      return payload;
+    },
+  };
+}

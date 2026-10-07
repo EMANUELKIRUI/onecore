@@ -330,6 +330,57 @@ export class MemoryIdentityRepository implements IdentityRepository {
     });
   }
 
+  async changePasswordAndRevokeSessions(
+    userId: string,
+    currentSessionHash: string,
+    expectedPasswordHash: string,
+    newPasswordHash: string,
+    event: AuthenticationAuditEvent,
+  ): Promise<boolean> {
+    const session = this.sessions.get(currentSessionHash);
+    const user = await this.findUserById(userId);
+    if (
+      !session ||
+      session.userId !== userId ||
+      session.revokedAt ||
+      session.expiresAt <= event.occurredAt ||
+      !user ||
+      user.status !== "ACTIVE" ||
+      user.passwordHash !== expectedPasswordHash
+    ) {
+      return false;
+    }
+
+    user.passwordHash = newPasswordHash;
+    user.failedLoginAttempts = 0;
+    user.failedLoginWindowStartedAt = null;
+    user.lockedUntil = null;
+    this.users.set(user.email, user);
+    for (const activeSession of this.sessions.values()) {
+      if (activeSession.userId === userId && !activeSession.revokedAt) {
+        activeSession.revokedAt = event.occurredAt;
+      }
+    }
+    this.events.push(
+      {
+        ...structuredClone(event),
+        action: "AUTH_PASSWORD_CHANGED",
+        actorUserId: userId,
+        resourceId: session.id,
+        result: "SUCCESS",
+      },
+      {
+        ...structuredClone(event),
+        action: "AUTH_SESSIONS_REVOKED",
+        actorUserId: userId,
+        resourceId: session.id,
+        reason: "password_changed",
+        result: "SUCCESS",
+      },
+    );
+    return true;
+  }
+
   async listActiveMemberships(userId: string): Promise<IdentityMembership[]> {
     return structuredClone(
       (this.memberships.get(userId) ?? []).filter(

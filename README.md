@@ -27,9 +27,10 @@ The API requires PostgreSQL and the `DATABASE_URL` for a non-owner `NOBYPASSRLS`
 - `packages/` contains reusable contracts, configuration, and platform domain values.
 - `modules/` is reserved for independently structured business modules.
 - `database/` owns PostgreSQL schema, migrations, tenant-aware repositories, seed data, and persistence tests.
+- `packages/ui/` provides the shared dependency-free design tokens, API client, and frontend helpers; `apps/marketing/` and `apps/business/` contain the initial static application shells.
 - `docs/` contains architecture, security, development, API, module, and deployment guidance.
 
-See [the architecture overview](docs/architecture/overview.md), [database guide](database/README.md), [development guide](docs/development/README.md), and [architecture decisions](docs/architecture/adr/).
+See [the architecture overview](docs/architecture/overview.md), [frontend foundation](docs/frontend/design-system.md), [database guide](database/README.md), [development guide](docs/development/README.md), and [architecture decisions](docs/architecture/adr/).
 
 ## Local database
 

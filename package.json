@@ -21,7 +21,7 @@
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "npm run test -w @onecore/config && npm run test -w @onecore/core-domain && npm run test -w @onecore/database && npm run test -w @onecore/api",
+    "test": "npm run test -w @onecore/config && npm run test -w @onecore/core-domain && npm run test -w @onecore/database && npm run test -w @onecore/api && npm run test -w @onecore/ui",
     "db:generate": "npm run db:generate -w @onecore/database",
     "db:migrate": "npm run db:migrate -w @onecore/database",
     "db:seed": "npm run db:seed -w @onecore/database",

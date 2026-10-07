@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, normalize, parse } from "node:path";
-import { and, asc, eq, isNull, or } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import {
   createDomainEvent,
@@ -17,6 +17,10 @@ import type {
   ResolvedAuthorizationContext,
 } from "./authorization.js";
 import { writeAuthorizationMutationEvent } from "./authorization.js";
+import {
+  resourceScopeAllowsCreate,
+  resourceScopePredicate,
+} from "./resource-authorization.js";
 import { storedObjects } from "../schema/index.js";
 import { recordOutboxEvent } from "./outbox.js";
 import type { OrganizationTransaction } from "./tenant-context.js";
@@ -113,17 +117,8 @@ function normalizeObjectKey(value: string): string {
   return segments.join("/");
 }
 
-function storageKeyFor(
-  organizationId: string,
-  branchId: string | null,
-  objectId: string,
-  originalFilename: string,
-): string {
-  const extension = parse(originalFilename).ext || "";
-  const safeFilename = `${objectId}${extension}`;
-  return normalizeObjectKey(
-    join(organizationId, branchId ?? "global", `${safeFilename}.bin`),
-  );
+function storageKeyFor(organizationId: string, objectId: string): string {
+  return normalizeObjectKey(join(organizationId, `${objectId}.bin`));
 }
 
 function checksum(value: Buffer): string {
@@ -185,22 +180,22 @@ export function createStorageService(
   async function selectObject(
     transaction: OrganizationTransaction,
     objectId: string,
-    organizationId: string,
-    branchId: string | null,
+    context: ResolvedAuthorizationContext,
+    permissionKey: string,
   ): Promise<StoredObjectRecord | undefined> {
+    const rowScope = resourceScopePredicate(context, permissionKey, {
+      organizationId: storedObjects.organizationId,
+      branchId: storedObjects.branchId,
+      ownerUserId: storedObjects.createdByUserId,
+    });
+    if (!rowScope) return undefined;
     const [row] = await transaction
       .select()
       .from(storedObjects)
       .where(
         and(
           eq(storedObjects.id, objectId),
-          eq(storedObjects.organizationId, organizationId),
-          branchId
-            ? or(
-                isNull(storedObjects.branchId),
-                eq(storedObjects.branchId, branchId),
-              )
-            : isNull(storedObjects.branchId),
+          rowScope,
           eq(storedObjects.status, "ACTIVE"),
         ),
       )
@@ -231,15 +226,26 @@ export function createStorageService(
             metadata,
             async (transaction, resolved) => {
               if (!branchMatches(parsed.branchId, resolved)) return null;
+              if (
+                !resourceScopeAllowsCreate(
+                  resolved,
+                  "core.organization.storage.manage",
+                  {
+                    organizationId: resolved.organizationId,
+                    branchId: resolved.branchId,
+                    ownerUserId: resolved.userId,
+                  },
+                )
+              ) {
+                return null;
+              }
               if (parsed.content.length !== parsed.byteSize) {
                 return null;
               }
               const objectId = randomUUID();
               const storageKey = storageKeyFor(
                 resolved.organizationId,
-                resolved.branchId,
                 objectId,
-                parsed.originalFilename,
               );
               const hash = checksum(parsed.content);
               try {
@@ -326,8 +332,8 @@ export function createStorageService(
               const row = await selectObject(
                 transaction,
                 objectId,
-                resolved.organizationId,
-                resolved.branchId,
+                resolved,
+                "core.organization.storage.read",
               );
               if (!row) return null;
               const content = await storage.get(row.storageKey);
@@ -364,25 +370,25 @@ export function createStorageService(
             context,
             "core.organization.storage.read",
             metadata,
-            async (transaction, resolved) =>
-              transaction
+            async (transaction, resolved) => {
+              const rowScope = resourceScopePredicate(
+                resolved,
+                "core.organization.storage.read",
+                {
+                  organizationId: storedObjects.organizationId,
+                  branchId: storedObjects.branchId,
+                  ownerUserId: storedObjects.createdByUserId,
+                },
+              );
+              if (!rowScope) return [];
+              return transaction
                 .select()
                 .from(storedObjects)
-                .where(
-                  and(
-                    eq(storedObjects.organizationId, resolved.organizationId),
-                    resolved.branchId
-                      ? or(
-                          isNull(storedObjects.branchId),
-                          eq(storedObjects.branchId, resolved.branchId),
-                        )
-                      : isNull(storedObjects.branchId),
-                    eq(storedObjects.status, "ACTIVE"),
-                  ),
-                )
+                .where(and(rowScope, eq(storedObjects.status, "ACTIVE")))
                 .orderBy(asc(storedObjects.createdAt), asc(storedObjects.id))
                 .limit(limit)
-                .offset(offset),
+                .offset(offset);
+            },
           ),
         (result) => ({
           objectCount: result.allowed ? (result.value?.length ?? 0) : 0,
@@ -412,8 +418,8 @@ export function createStorageService(
               const row = await selectObject(
                 transaction,
                 objectId,
-                resolved.organizationId,
-                resolved.branchId,
+                resolved,
+                "core.organization.storage.manage",
               );
               if (!row) return false;
               try {
@@ -427,7 +433,20 @@ export function createStorageService(
               const [updated] = await transaction
                 .update(storedObjects)
                 .set({ status: "DELETED", updatedAt: new Date() })
-                .where(eq(storedObjects.id, row.id))
+                .where(
+                  and(
+                    eq(storedObjects.id, row.id),
+                    resourceScopePredicate(
+                      resolved,
+                      "core.organization.storage.manage",
+                      {
+                        organizationId: storedObjects.organizationId,
+                        branchId: storedObjects.branchId,
+                        ownerUserId: storedObjects.createdByUserId,
+                      },
+                    ),
+                  ),
+                )
                 .returning({ id: storedObjects.id });
               if (!updated) return false;
               await writeAuthorizationMutationEvent(

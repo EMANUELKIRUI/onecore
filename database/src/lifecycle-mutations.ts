@@ -216,7 +216,7 @@ async function createOrganizationRoles(
   let ownerRole: Pick<typeof roles.$inferSelect, "id" | "name"> | undefined;
 
   for (const template of defaultOrganizationRoleTemplates) {
-    const createdRoles = await transaction.execute(sql`
+    await transaction.execute(sql`
       insert into roles (organization_id, name, description, is_system)
       values (
         ${organizationId},
@@ -224,9 +224,17 @@ async function createOrganizationRoles(
         ${`System-managed ${template.name} role template.`},
         true
       )
-      returning id, name
     `);
-    const [roleRow] = createdRoles;
+    const [roleRow] = await transaction
+      .select({ id: roles.id, name: roles.name })
+      .from(roles)
+      .where(
+        and(
+          eq(roles.organizationId, organizationId),
+          eq(roles.name, template.name),
+        ),
+      )
+      .limit(1);
     if (!roleRow)
       throw new Error(`DEFAULT_ROLE_CREATION_FAILED:${template.name}`);
     const role = z.object({ id: uuidSchema, name: z.string() }).parse(roleRow);

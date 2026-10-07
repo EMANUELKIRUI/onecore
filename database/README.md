@@ -102,11 +102,22 @@ Verify that a tenant sees only its own rows and cannot read, update, or delete a
 
 PostgreSQL 18.6 emitted harmless notices that two generated foreign-key identifiers longer than PostgreSQL's 63-byte identifier limit were truncated. Migrations completed, their constraints were present, and `db:generate` reported no schema drift afterward; do not treat those notices as failed migrations.
 
+On 2026-10-07, the Phase 12 authorization foundation was additionally validated
+against PostgreSQL 18.6 in a disposable database with all 29 migrations
+applied. Fifteen live checks passed as `onecore_app`, including RLS isolation
+without context and direct cross-tenant/cross-branch query denial, branch and
+owner scope for existing job/storage/search services, forged organization and
+branch rejection, module entitlement enforcement, suspended-organization
+denial, and storage-key length. The disposable database and filesystem fixture
+were removed. This does not validate production managed PostgreSQL or business
+domain resources; business-domain authorization remains deferred until those
+resources and routes exist.
+
 ## Connections and transactions
 
 `createDatabase(connectionString)` is the single PostgreSQL connection factory. Repositories and trusted services should accept database/transaction dependencies and keep queries out of HTTP handlers and apps. Use `withActiveOrganizationTransaction` to verify an active user, active membership, and active organization before setting `app.current_organization_id`; use `withActiveBranchTransaction` to verify active branch access and set `app.current_branch_id` as well. The lower-level `withOrganizationTransaction` is internal to trusted provisioning/seed work and is not exported from the database package; it is not an authorization check. Keep every tenant query inside its transaction callback; do not start unrelated pooled queries from inside the callback.
 
-Branch access defaults to `ASSIGNED` and is fail-closed. Set a membership to `ALL` only through a trusted administration path; otherwise access comes from its `membership_branches` rows. Branch switching requires an active organization membership, active organization, active branch in that organization, and either `ALL` scope or an explicit branch assignment. Changing organization clears the saved branch atomically. Membership, organization, and branch state are rechecked when session context is resolved. Phase 5 still needs to apply branch predicates to branch-bearing business records and implement permission/data-scope enforcement.
+Branch access defaults to `ASSIGNED` and is fail-closed. Set a membership to `ALL` only through a trusted administration path; otherwise access comes from its `membership_branches` rows. Branch switching requires an active organization membership, active organization, active branch in that organization, and either `ALL` scope or an explicit branch assignment. Changing organization clears the saved branch atomically. Membership, organization, and branch state are rechecked when session context is resolved. Phase 12 applies authorization-derived row predicates to existing job, stored-object, and indexed-search operations. The reusable resource policy constrains organization in every query and applies supported organization, branch, owner, and assignee scope; unsupported scope/resource combinations return no rows. Jobs and stored objects map `OWN`/`SELF` to `created_by_user_id`; indexed search has no owner column and does not grant owner-only access. These are platform service resources, not business-module implementations.
 
 Business operations that later combine a sale, inventory movement, payment, financial entry, and event must use one transaction; this phase supplies Drizzle transactions and the `recordOutboxEvent` primitive but implements none of those business operations.
 
@@ -133,4 +144,4 @@ The database tests instantiate a clean PGlite PostgreSQL-compatible database, ap
 
 ## Phase boundary
 
-This package supplies persistence and identity repositories. Phase 3 implements password login, opaque sessions, and authentication auditing in `services/api`; Phase 4 adds membership-verified organization and branch context. Complete RBAC, branch-level business-record filtering, OAuth, MFA, password recovery, business APIs, visual workflow execution, payment gateways, and a frontend remain deferred. Do not add customer-specific application forks.
+This package supplies persistence and identity repositories. Phase 3 implements password login, opaque sessions, and authentication auditing in `services/api`; Phase 4 adds membership-verified organization and branch context; Phase 5-7 add RBAC, module entitlements, and configuration authorization; Phase 12 adds row-scope enforcement to existing platform service resources. No business-domain CRUD resources or routes are currently implemented, so business-resource authorization cannot yet be considered complete. OAuth, MFA, password recovery, business APIs, visual workflow execution, payment gateways, and a frontend remain deferred. Do not add customer-specific application forks.

@@ -47,6 +47,14 @@ const organizationSelectionSchema = z.object({
 const branchSelectionSchema = z.object({
   branchId: z.uuid(),
 });
+const passwordChangeSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(1_024),
+    newPassword: z.string().min(12).max(1_024),
+  })
+  .refine(
+    ({ currentPassword, newPassword }) => currentPassword !== newPassword,
+  );
 
 const dummyPasswordHash = hashPassword(randomBytes(32), ARGON2_OPTIONS);
 
@@ -181,6 +189,7 @@ export function registerAuthentication(
   app.register(rateLimit, { global: false });
   app.decorateRequest("auth", null);
   let loginRateLimit: preHandlerAsyncHookHandler | undefined;
+  let passwordChangeRateLimit: preHandlerAsyncHookHandler | undefined;
 
   app.addHook(
     "onRequest",
@@ -513,6 +522,158 @@ export function registerAuthentication(
           request.headers["user-agent"] ?? "",
           now,
           request.observabilityContext?.correlationId ?? request.id,
+        );
+      }
+      clearSessionCookie(reply, config);
+      return reply.status(204).send();
+    },
+  );
+
+  app.post(
+    "/auth/password/change",
+    {
+      preHandler: [
+        requireAuthenticated(),
+        async (request: FastifyRequest, reply: FastifyReply) => {
+          if (rateLimiter) {
+            const decision = await rateLimiter.consume({
+              scope: "authentication.password_change",
+              subject: request.ip,
+              requestId: request.id,
+              correlationId:
+                request.observabilityContext?.correlationId ?? request.id,
+              limit: config.AUTH_LOGIN_RATE_LIMIT_MAX,
+              windowMs: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
+            });
+            if (!decision.allowed) {
+              reply.header(
+                "retry-after",
+                Math.max(
+                  1,
+                  Math.ceil((decision.resetAt.getTime() - Date.now()) / 1_000),
+                ),
+              );
+              return reply.status(429).send({
+                error: {
+                  code: "TOO_MANY_REQUESTS",
+                  message: "Too many requests. Try again later.",
+                },
+              });
+            }
+          } else if (config.NODE_ENV === "production") {
+            request.log.error(
+              {
+                ...request.observabilityContext,
+                eventType: "rate_limit_unavailable",
+                scope: "authentication.password_change",
+              },
+              "Shared authentication rate limiter is not configured",
+            );
+            return reply.status(503).send({
+              error: {
+                code: "SERVICE_UNAVAILABLE",
+                message: "The service is temporarily unavailable.",
+              },
+            });
+          } else {
+            const limiter = (passwordChangeRateLimit ??= app.rateLimit({
+              max: config.AUTH_LOGIN_RATE_LIMIT_MAX,
+              timeWindow: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
+            }));
+            await limiter(request, reply);
+            if (reply.sent) return reply;
+          }
+          if (!validateMutationOrigin(request, reply, config)) return reply;
+        },
+      ],
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const auth = request.auth;
+      if (!auth) {
+        return sendError(
+          reply,
+          401,
+          "UNAUTHORIZED",
+          "Authentication is required.",
+        );
+      }
+      const parsed = passwordChangeSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return sendError(
+          reply,
+          400,
+          "BAD_REQUEST",
+          "Invalid password change request.",
+        );
+      }
+
+      const user = await identity.findUserById(auth.userId);
+      const secret = request.cookies[SESSION_COOKIE];
+      if (
+        !user ||
+        user.status !== "ACTIVE" ||
+        !user.passwordHash ||
+        !secret ||
+        !sessionSecretSchema.test(secret)
+      ) {
+        clearSessionCookie(reply, config);
+        return sendError(
+          reply,
+          401,
+          "UNAUTHORIZED",
+          "Authentication is required.",
+        );
+      }
+
+      const metadata = requestMetadata(request);
+      if (
+        !(await verifyPassword(user.passwordHash, parsed.data.currentPassword))
+      ) {
+        await identity.recordAuthenticationEvent(
+          authenticationAudit(request, {
+            action: "AUTH_PASSWORD_CHANGE_FAILURE",
+            actorUserId: user.id,
+            resourceId: auth.sessionId,
+            result: "FAILURE",
+            reason: "current_password_mismatch",
+          }),
+        );
+        return sendError(
+          reply,
+          403,
+          "FORBIDDEN",
+          "The current password is incorrect.",
+        );
+      }
+
+      const newPasswordHash = await hashPassword(
+        parsed.data.newPassword,
+        ARGON2_OPTIONS,
+      );
+      const changed = await identity.changePasswordAndRevokeSessions(
+        user.id,
+        sessionDigest(secret),
+        user.passwordHash,
+        newPasswordHash,
+        {
+          action: "AUTH_PASSWORD_CHANGED",
+          actorUserId: user.id,
+          resourceId: auth.sessionId,
+          result: "SUCCESS",
+          requestId: metadata.requestId,
+          correlationId: metadata.correlationId,
+          ipAddress: metadata.ipAddress,
+          userAgent: metadata.userAgent,
+          occurredAt: new Date(),
+        },
+      );
+      if (!changed) {
+        clearSessionCookie(reply, config);
+        return sendError(
+          reply,
+          401,
+          "UNAUTHORIZED",
+          "Authentication is required.",
         );
       }
       clearSessionCookie(reply, config);

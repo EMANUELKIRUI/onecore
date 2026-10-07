@@ -20,6 +20,7 @@ import {
   createJobHandlerRegistry,
   createJobService,
   createDatabaseRateLimiter,
+  createIdentityRepository,
   JobExecutionError,
   recordOutboxEvent,
   type JobHandler,
@@ -99,6 +100,7 @@ function eventWorkerContext(
 function platformTestAuthorization(): AuthorizationService {
   async function run<T>(
     context: AuthorizationContext | null,
+    permissionKeys: readonly string[],
     operation: (
       transaction: OrganizationTransaction,
       context: ResolvedAuthorizationContext,
@@ -117,7 +119,15 @@ function platformTestAuthorization(): AuthorizationService {
       branchAccessMode: "ALL",
       roles: [],
       platformRoles: [],
-      permissions: [],
+      permissions: permissionKeys.map((key) => {
+        const segments = key.split(".");
+        return {
+          key,
+          moduleKey: segments.slice(0, -2).join("."),
+          scopeType: "ORGANIZATION" as const,
+          scope: {},
+        };
+      }),
     };
     const value = await database.transaction(async (transaction) => {
       await transaction.execute(sql`SET LOCAL ROLE onecore_app`);
@@ -158,12 +168,12 @@ function platformTestAuthorization(): AuthorizationService {
           }
         : { allowed: false, statusCode: 401, dataScopes: [] },
     hasPermission: async (context) => context !== null,
-    withPermission: (context, _permission, _metadata, operation) =>
-      run(context, operation),
-    withAllPermissions: (context, _permissions, _metadata, operation) =>
-      run(context, operation),
-    withAnyPermission: (context, _permissions, _metadata, operation) =>
-      run(context, operation),
+    withPermission: (context, permission, _metadata, operation) =>
+      run(context, [permission], operation),
+    withAllPermissions: (context, permissions, _metadata, operation) =>
+      run(context, permissions, operation),
+    withAnyPermission: (context, permissions, _metadata, operation) =>
+      run(context, permissions, operation),
   };
 }
 
@@ -390,18 +400,12 @@ describe("PostgreSQL persistence foundation", () => {
   });
 
   it("keeps lifecycle grants column-scoped and system-role provisioning restrictive", async () => {
-    const organizationPrivileges = await client.query<{
-      tableUpdate: boolean;
-      statusUpdate: boolean;
-    }>(`
-      SELECT
-        has_table_privilege('onecore_app', 'public.organizations', 'UPDATE') AS "tableUpdate",
-        has_column_privilege('onecore_app', 'public.organizations', 'status', 'UPDATE') AS "statusUpdate"
-    `);
-    expect(organizationPrivileges.rows[0]).toEqual({
-      tableUpdate: false,
-      statusUpdate: true,
-    });
+    expect(initialApplicationPrivileges.has("organizations:UPDATE")).toBe(
+      false,
+    );
+    expect(
+      initialApplicationColumnPrivileges.has("organizations:UPDATE:status"),
+    ).toBe(true);
 
     const policies = await client.query<{
       policyname: string;
@@ -1292,6 +1296,95 @@ describe("PostgreSQL persistence foundation", () => {
         displayName: "Non-normalized Email",
       }),
     ).rejects.toThrow();
+  });
+
+  it("changes a credential and revokes every session atomically", async () => {
+    const [user] = await database
+      .insert(schema.users)
+      .values({
+        email: `password-change-${crypto.randomUUID()}@example.test`,
+        displayName: "Password Change User",
+        passwordHash: "previous-hash",
+      })
+      .returning();
+    if (!user) throw new Error("Password-change user was not created");
+    const [currentSession, otherSession] = await database
+      .insert(schema.sessions)
+      .values([
+        {
+          secretHash: createHash("sha256")
+            .update(crypto.randomUUID())
+            .digest("hex"),
+          userId: user.id,
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+        {
+          secretHash: createHash("sha256")
+            .update(crypto.randomUUID())
+            .digest("hex"),
+          userId: user.id,
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      ])
+      .returning();
+    if (!currentSession || !otherSession) {
+      throw new Error("Password-change sessions were not created");
+    }
+
+    const identity = createIdentityRepository(database as unknown as Database);
+    const event = {
+      action: "AUTH_PASSWORD_CHANGED",
+      actorUserId: user.id,
+      resourceId: currentSession.id,
+      result: "SUCCESS" as const,
+      requestId: crypto.randomUUID(),
+      ipAddress: "127.0.0.1",
+      userAgent: "persistence-test",
+      occurredAt: new Date(),
+    };
+    expect(
+      await identity.changePasswordAndRevokeSessions(
+        user.id,
+        currentSession.secretHash,
+        "previous-hash",
+        "replacement-hash",
+        event,
+      ),
+    ).toBe(true);
+
+    const state = await client.transaction(async (transaction) => {
+      await transaction.exec("SET LOCAL ROLE onecore_app");
+      await transaction.query(
+        "SELECT set_config('app.current_user_id', $1, true)",
+        [user.id],
+      );
+      const updatedUser = await transaction.query<{
+        password_hash: string;
+      }>("SELECT password_hash FROM users WHERE id = $1", [user.id]);
+      const revokedSessions = await transaction.query<{
+        id: string;
+        revoked_at: Date | null;
+      }>("SELECT id, revoked_at FROM sessions WHERE user_id = $1 ORDER BY id", [
+        user.id,
+      ]);
+      return { updatedUser, revokedSessions };
+    });
+    expect(state.updatedUser.rows).toEqual([
+      { password_hash: "replacement-hash" },
+    ]);
+    expect(state.revokedSessions.rows).toHaveLength(2);
+    expect(
+      state.revokedSessions.rows.every((session) => session.revoked_at),
+    ).toBe(true);
+    expect(
+      await identity.changePasswordAndRevokeSessions(
+        user.id,
+        currentSession.secretHash,
+        "replacement-hash",
+        "third-hash",
+        event,
+      ),
+    ).toBe(false);
   });
 
   it("rejects configuration context for inactive memberships and suspended organizations", async () => {

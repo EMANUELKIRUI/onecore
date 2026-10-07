@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import {
   createAuthorizationService,
@@ -288,7 +288,52 @@ async function bootstrapOrganization() {
     expiresAt: new Date(Date.now() + 60_000),
   });
 
-  return { organization, user, membership, sessionId };
+  return { organization, user, membership, role, sessionId };
+}
+
+async function setJobManageScope(
+  roleId: string,
+  scopeType: "ORGANIZATION" | "BRANCH" | "OWN",
+) {
+  const [permission] = await database
+    .select({ id: schema.permissions.id })
+    .from(schema.permissions)
+    .where(eq(schema.permissions.key, "core.organization.jobs.manage"))
+    .limit(1);
+  if (!permission) throw new Error("Job management permission was not found");
+  await database
+    .update(schema.rolePermissions)
+    .set({ scopeType })
+    .where(
+      and(
+        eq(schema.rolePermissions.roleId, roleId),
+        eq(schema.rolePermissions.permissionId, permission.id),
+      ),
+    );
+}
+
+async function insertJob(
+  organizationId: string,
+  branchId: string | null,
+  createdByUserId: string,
+  status: "QUEUED" | "FAILED" = "QUEUED",
+) {
+  const [job] = await database
+    .insert(schema.jobs)
+    .values({
+      organizationId,
+      branchId,
+      createdByUserId,
+      jobType: "reports.refresh",
+      payload: {},
+      requestHash: "a".repeat(64),
+      correlationId: crypto.randomUUID(),
+      status,
+      maxAttempts: 3,
+    })
+    .returning({ id: schema.jobs.id });
+  if (!job) throw new Error("Test job was not created");
+  return job.id;
 }
 
 beforeAll(async () => {
@@ -390,6 +435,68 @@ describe("durable job handler contracts", () => {
     ).toMatchObject({ allowed: true, value: true });
   });
 
+  it("stores branch-scoped objects within the storage-key column limit", async () => {
+    const { organization, user, membership, sessionId } =
+      await bootstrapOrganization();
+    const [branch] = await database
+      .insert(schema.branches)
+      .values({
+        organizationId: organization.id,
+        name: "Storage Branch",
+        code: `SB-${crypto.randomUUID().slice(0, 8)}`,
+      })
+      .returning({ id: schema.branches.id });
+    if (!branch) throw new Error("Storage branch was not created");
+    await database
+      .update(schema.sessions)
+      .set({ branchId: branch.id })
+      .where(eq(schema.sessions.id, sessionId));
+
+    const service = createStorageService(database as never, authorization, {
+      provider: "LOCAL",
+      rootDirectory: root,
+    });
+    const context: AuthorizationContext = {
+      userId: user.id,
+      sessionId,
+      organizationId: organization.id,
+      membershipId: membership.id,
+      branchId: branch.id,
+    };
+    const content = Buffer.from("branch");
+    const uploaded = await service.upload(
+      context,
+      { requestId: crypto.randomUUID() },
+      {
+        originalFilename: "branch-report.txt",
+        mimeType: "text/plain",
+        content,
+        byteSize: content.length,
+      },
+    );
+    expect(uploaded.allowed).toBe(true);
+    if (!uploaded.allowed || !uploaded.value)
+      throw new Error("Branch-scoped upload denied");
+
+    const object = await service.get(
+      context,
+      { requestId: crypto.randomUUID() },
+      uploaded.value.id,
+    );
+    expect(object.allowed).toBe(true);
+    if (!object.allowed || !object.value)
+      throw new Error("Branch-scoped object unavailable");
+    expect(object.value.metadata.storageKey.length).toBeLessThanOrEqual(100);
+    expect(object.value.content.equals(content)).toBe(true);
+    await expect(
+      service.delete(
+        context,
+        { requestId: crypto.randomUUID() },
+        uploaded.value.id,
+      ),
+    ).resolves.toMatchObject({ allowed: true, value: true });
+  });
+
   it("authorizes job retry and cancellation through the job service", async () => {
     const { organization, user, membership, sessionId } =
       await bootstrapOrganization();
@@ -426,5 +533,117 @@ describe("durable job handler contracts", () => {
     await expect(
       service.cancel(context, { requestId: crypto.randomUUID() }, jobId.id),
     ).resolves.toMatchObject({ allowed: true, value: true });
+  });
+
+  it("applies branch scope to job cancellation and rejects branch overrides", async () => {
+    const { organization, user, membership, role, sessionId } =
+      await bootstrapOrganization();
+    const [branchA] = await database
+      .insert(schema.branches)
+      .values({
+        organizationId: organization.id,
+        name: "Branch A",
+        code: `A-${crypto.randomUUID().slice(0, 8)}`,
+      })
+      .returning({ id: schema.branches.id });
+    const [branchB] = await database
+      .insert(schema.branches)
+      .values({
+        organizationId: organization.id,
+        name: "Branch B",
+        code: `B-${crypto.randomUUID().slice(0, 8)}`,
+      })
+      .returning({ id: schema.branches.id });
+    if (!branchA || !branchB) throw new Error("Branches were not created");
+
+    await setJobManageScope(role.id, "BRANCH");
+    await database
+      .update(schema.sessions)
+      .set({ branchId: branchA.id })
+      .where(eq(schema.sessions.id, sessionId));
+    const branchAJob = await insertJob(organization.id, branchA.id, user.id);
+    const branchBJob = await insertJob(organization.id, branchB.id, user.id);
+    const service = createJobService(
+      database as never,
+      authorization,
+      createJobHandlerRegistry([handler]),
+    );
+    const context: AuthorizationContext = {
+      userId: user.id,
+      sessionId,
+      organizationId: organization.id,
+      membershipId: membership.id,
+      branchId: branchA.id,
+    };
+
+    await expect(
+      service.cancel(context, { requestId: crypto.randomUUID() }, branchAJob),
+    ).resolves.toMatchObject({ allowed: true, value: true });
+    await expect(
+      service.cancel(context, { requestId: crypto.randomUUID() }, branchBJob),
+    ).resolves.toMatchObject({ allowed: true, value: false });
+  });
+
+  it("applies own scope to job cancellation", async () => {
+    const { organization, user, membership, role, sessionId } =
+      await bootstrapOrganization();
+    const [otherUser] = await database
+      .insert(schema.users)
+      .values({
+        email: `other-${crypto.randomUUID()}@example.test`,
+        displayName: "Other Job Owner",
+      })
+      .returning({ id: schema.users.id });
+    if (!otherUser) throw new Error("Other user was not created");
+    await database.insert(schema.organizationMemberships).values({
+      organizationId: organization.id,
+      userId: otherUser.id,
+      status: "ACTIVE",
+      branchAccessMode: "ALL",
+    });
+
+    await setJobManageScope(role.id, "OWN");
+    const ownedJob = await insertJob(organization.id, null, user.id);
+    const otherJob = await insertJob(organization.id, null, otherUser.id);
+    const service = createJobService(
+      database as never,
+      authorization,
+      createJobHandlerRegistry([handler]),
+    );
+    const context: AuthorizationContext = {
+      userId: user.id,
+      sessionId,
+      organizationId: organization.id,
+      membershipId: membership.id,
+      branchId: null,
+    };
+
+    await expect(
+      service.cancel(context, { requestId: crypto.randomUUID() }, ownedJob),
+    ).resolves.toMatchObject({ allowed: true, value: true });
+    await expect(
+      service.cancel(context, { requestId: crypto.randomUUID() }, otherJob),
+    ).resolves.toMatchObject({ allowed: true, value: false });
+  });
+
+  it("does not claim tenant jobs after the organization is suspended", async () => {
+    const { organization } = await bootstrapOrganization();
+    const service = createJobService(
+      database as never,
+      authorization,
+      createJobHandlerRegistry([handler]),
+    );
+    await database
+      .update(schema.organizations)
+      .set({ status: "SUSPENDED" })
+      .where(eq(schema.organizations.id, organization.id));
+
+    await expect(
+      service.processTenantBatch(
+        organization.id,
+        null,
+        "suspended-tenant-worker",
+      ),
+    ).resolves.toBeUndefined();
   });
 });

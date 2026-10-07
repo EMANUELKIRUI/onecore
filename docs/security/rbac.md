@@ -86,7 +86,11 @@ credentials, session secrets, and request bodies.
 Permission resolution requires an available module and an `ENABLED`
 organization entitlement using the existing module/entitlement foundation.
 This is the integration seam, not a complete module registry or entitlement
-lifecycle. Controlled, time-limited support access and row-level business
-scope enforcement are not implemented. Superadmin support access must later
-be explicitly authorized, tenant-bound, time-limited, and audited; it must
-never bypass RLS.
+lifecycle. Resource-level query predicates now apply supported data scopes to
+existing job, storage, and indexed-search service operations. Jobs and stored
+objects map owner scope to `created_by_user_id`; search documents have no owner
+field, so owner/assignee-only access is denied. No business-domain tables or
+CRUD routes are currently implemented, and this work does not claim complete
+business-resource authorization. Controlled, time-limited support access
+remains deferred. Superadmin support access must later be explicitly
+authorized, tenant-bound, time-limited, and audited; it must never bypass RLS.

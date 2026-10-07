@@ -8,7 +8,7 @@ Users are global identity records and can join multiple organizations through `o
 
 ## Isolation path
 
-Request handling resolves the user and active organization through authentication and membership checks, then validates requested branch context before accessing tenant data. Phase 5 centrally resolves organization roles, permissions, and data-scope grants; Phase 6 additionally requires an available, plan-compatible, enabled module entitlement before its permissions are effective. Business-row filtering for `OWN`, `ASSIGNED`, and `CUSTOM` scopes remains deferred. Client-supplied organization/branch/role/module/scope values are not trusted.
+Request handling resolves the user and active organization through authentication and membership checks, then validates requested branch context before accessing tenant data. Phase 5 centrally resolves organization roles, permissions, and data-scope grants; Phase 6 additionally requires an available, plan-compatible, enabled module entitlement before its permissions are effective. Phase 12 applies query-level organization/branch/owner/assignee predicates to existing job, stored-object, and indexed-search service operations. `OWN`/`SELF` maps to the creator column for jobs and stored objects; resources without an applicable owner/assignee column fail closed. `DEPARTMENT` and `CUSTOM` row policies and all business-domain row authorization remain deferred. Client-supplied organization/branch/role/module/scope values are not trusted.
 
 The database adds a second boundary:
 

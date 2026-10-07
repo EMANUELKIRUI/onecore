@@ -504,6 +504,107 @@ describe("identity and authentication API", () => {
     await app.close();
   });
 
+  it("changes credentials atomically, revokes every session, and audits without secrets", async () => {
+    const identity = new MemoryIdentityRepository();
+    identity.addUser(testUser());
+    const { app } = createTestApp(identity);
+    const firstCookie = cookieFrom(await login(app));
+    const secondCookie = cookieFrom(await login(app));
+
+    const changed = await app.inject({
+      method: "POST",
+      url: "/auth/password/change",
+      headers: { cookie: secondCookie, "content-type": "application/json" },
+      payload: {
+        currentPassword: password,
+        newPassword: "An-Entirely-New-Password-42!",
+      },
+    });
+
+    expect(changed.statusCode).toBe(204);
+    expect(changed.headers["set-cookie"]).toContain("Max-Age=0");
+    expect(
+      [...identity.sessions.values()].every((session) => session.revokedAt),
+    ).toBe(true);
+    for (const cookie of [firstCookie, secondCookie]) {
+      const stale = await app.inject({
+        method: "GET",
+        url: "/auth/session",
+        headers: { cookie },
+      });
+      expect(stale.statusCode).toBe(401);
+    }
+
+    expect((await login(app)).statusCode).toBe(401);
+    const newLogin = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: {
+        email: "owner@example.test",
+        password: "An-Entirely-New-Password-42!",
+      },
+    });
+    expect(newLogin.statusCode).toBe(200);
+    expect(newLogin.body).not.toContain(
+      identity.users.get("owner@example.test")?.passwordHash,
+    );
+
+    const securityEvents = identity.events.filter((event) =>
+      ["AUTH_PASSWORD_CHANGED", "AUTH_SESSIONS_REVOKED"].includes(event.action),
+    );
+    expect(securityEvents.map((event) => event.action)).toEqual([
+      "AUTH_PASSWORD_CHANGED",
+      "AUTH_SESSIONS_REVOKED",
+    ]);
+    const serializedEvents = JSON.stringify(securityEvents);
+    expect(serializedEvents).not.toContain(password);
+    expect(serializedEvents).not.toContain("An-Entirely-New-Password-42!");
+    expect(serializedEvents).not.toContain(firstCookie);
+    expect(serializedEvents).not.toContain(secondCookie);
+    await app.close();
+  });
+
+  it("rejects incorrect and weak password changes without revoking the session", async () => {
+    const identity = new MemoryIdentityRepository();
+    identity.addUser(testUser());
+    const { app } = createTestApp(identity);
+    const cookie = cookieFrom(await login(app));
+
+    const incorrect = await app.inject({
+      method: "POST",
+      url: "/auth/password/change",
+      headers: { cookie, "content-type": "application/json" },
+      payload: {
+        currentPassword: "incorrect-current-password",
+        newPassword: "An-Entirely-New-Password-42!",
+      },
+    });
+    expect(incorrect.statusCode).toBe(403);
+    expect(identity.events.at(-1)?.action).toBe("AUTH_PASSWORD_CHANGE_FAILURE");
+
+    const weak = await app.inject({
+      method: "POST",
+      url: "/auth/password/change",
+      headers: { cookie, "content-type": "application/json" },
+      payload: {
+        currentPassword: password,
+        newPassword: "short",
+      },
+    });
+    expect(weak.statusCode).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/auth/session",
+          headers: { cookie },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await app.close();
+  });
+
   it("enforces login rate limits and same-origin JSON mutation requests", async () => {
     const identity = new MemoryIdentityRepository();
     identity.addUser(testUser());

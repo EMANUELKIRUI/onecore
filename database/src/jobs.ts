@@ -4,7 +4,7 @@ import {
   enqueueJobSchema,
   jobNameSchema,
 } from "@onecore/core-domain";
-import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type {
   AuthorizationContext,
@@ -15,8 +15,18 @@ import type {
 } from "./authorization.js";
 import type { OrganizationTransaction } from "./tenant-context.js";
 import { withOrganizationTransaction } from "./tenant-context.js";
-import { auditLogs, branches, jobAttempts, jobs } from "../schema/index.js";
+import {
+  auditLogs,
+  branches,
+  jobAttempts,
+  jobs,
+  organizations,
+} from "../schema/index.js";
 import { loadOrganizationModuleAccess } from "./module-entitlements.js";
+import {
+  resourceScopeAllowsCreate,
+  resourceScopePredicate,
+} from "./resource-authorization.js";
 import { recordOutboxEvent } from "./outbox.js";
 import type { Database } from "./index.js";
 import { observeServiceOperation } from "./service-telemetry.js";
@@ -221,6 +231,24 @@ export function calculateJobRetryDelay(
     baseMilliseconds * 2 ** Math.min(Math.max(attempt - 1, 0), 30),
     maximumMilliseconds,
   );
+}
+
+async function organizationIsActive(
+  transaction: OrganizationTransaction,
+  organizationId: string,
+): Promise<boolean> {
+  const [organization] = await transaction
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(
+      and(
+        eq(organizations.id, organizationId),
+        eq(organizations.status, "ACTIVE"),
+      ),
+    )
+    .for("share")
+    .limit(1);
+  return organization !== undefined;
 }
 
 async function claimBatch(
@@ -599,6 +627,19 @@ export function createJobService(
               ) {
                 return null;
               }
+              if (
+                !resourceScopeAllowsCreate(
+                  resolved,
+                  "core.organization.jobs.enqueue",
+                  {
+                    organizationId: resolved.organizationId,
+                    branchId: resolved.branchId,
+                    ownerUserId: resolved.userId,
+                  },
+                )
+              ) {
+                return null;
+              }
               const now = new Date();
               const id = randomUUID();
               const correlationId = metadata.correlationId ?? randomUUID();
@@ -640,12 +681,22 @@ export function createJobService(
                 .returning({ id: jobs.id });
 
               if (!inserted.length && parsed.idempotencyKey) {
+                const rowScope = resourceScopePredicate(
+                  resolved,
+                  "core.organization.jobs.enqueue",
+                  {
+                    organizationId: jobs.organizationId,
+                    branchId: jobs.branchId,
+                    ownerUserId: jobs.createdByUserId,
+                  },
+                );
+                if (!rowScope) return null;
                 const [existing] = await transaction
                   .select({ id: jobs.id, requestHash: jobs.requestHash })
                   .from(jobs)
                   .where(
                     and(
-                      eq(jobs.organizationId, resolved.organizationId),
+                      rowScope,
                       eq(jobs.jobType, parsed.jobType),
                       eq(jobs.idempotencyKey, parsed.idempotencyKey),
                     ),
@@ -712,21 +763,21 @@ export function createJobService(
             "core.organization.jobs.manage",
             metadata,
             async (transaction, resolved) => {
+              const rowScope = resourceScopePredicate(
+                resolved,
+                "core.organization.jobs.manage",
+                {
+                  organizationId: jobs.organizationId,
+                  branchId: jobs.branchId,
+                  ownerUserId: jobs.createdByUserId,
+                },
+              );
+              if (!rowScope) return false;
               const [job] = await transaction
                 .select()
                 .from(jobs)
                 .where(
-                  and(
-                    eq(jobs.id, id),
-                    eq(jobs.organizationId, resolved.organizationId),
-                    resolved.branchId
-                      ? or(
-                          isNull(jobs.branchId),
-                          eq(jobs.branchId, resolved.branchId),
-                        )
-                      : isNull(jobs.branchId),
-                    eq(jobs.status, "FAILED"),
-                  ),
+                  and(eq(jobs.id, id), rowScope, eq(jobs.status, "FAILED")),
                 )
                 .limit(1)
                 .for("update");
@@ -743,7 +794,7 @@ export function createJobService(
                   lastErrorCode: null,
                   updatedAt: new Date(),
                 })
-                .where(eq(jobs.id, job.id));
+                .where(and(eq(jobs.id, job.id), rowScope));
               await transaction.insert(auditLogs).values({
                 organizationId: resolved.organizationId,
                 actorUserId: resolved.userId,
@@ -781,19 +832,23 @@ export function createJobService(
             "core.organization.jobs.manage",
             metadata,
             async (transaction, resolved) => {
+              const rowScope = resourceScopePredicate(
+                resolved,
+                "core.organization.jobs.manage",
+                {
+                  organizationId: jobs.organizationId,
+                  branchId: jobs.branchId,
+                  ownerUserId: jobs.createdByUserId,
+                },
+              );
+              if (!rowScope) return false;
               const [job] = await transaction
                 .select()
                 .from(jobs)
                 .where(
                   and(
                     eq(jobs.id, id),
-                    eq(jobs.organizationId, resolved.organizationId),
-                    resolved.branchId
-                      ? or(
-                          isNull(jobs.branchId),
-                          eq(jobs.branchId, resolved.branchId),
-                        )
-                      : isNull(jobs.branchId),
+                    rowScope,
                     inArray(jobs.status, ["QUEUED", "RETRY_WAIT", "RUNNING"]),
                   ),
                 )
@@ -810,7 +865,7 @@ export function createJobService(
                   leaseExpiresAt: null,
                   updatedAt: new Date(),
                 })
-                .where(eq(jobs.id, job.id));
+                .where(and(eq(jobs.id, job.id), rowScope));
               await transaction.insert(auditLogs).values({
                 organizationId: resolved.organizationId,
                 actorUserId: resolved.userId,
@@ -859,6 +914,9 @@ export function createJobService(
         database,
         organizationId,
         async (transaction) => {
+          if (!(await organizationIsActive(transaction, organizationId))) {
+            return undefined;
+          }
           if (
             !(await establishWorkerBranch(
               transaction,
@@ -919,6 +977,11 @@ export function createJobService(
               database,
               organizationId,
               async (transaction) => {
+                if (
+                  !(await organizationIsActive(transaction, organizationId))
+                ) {
+                  return "STALE" as const;
+                }
                 if (
                   !(await establishWorkerBranch(
                     transaction,

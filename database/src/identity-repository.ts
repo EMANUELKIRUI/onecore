@@ -129,6 +129,13 @@ export interface IdentityRepository {
     now: Date,
     correlationId?: string,
   ): Promise<void>;
+  changePasswordAndRevokeSessions(
+    userId: string,
+    currentSessionHash: string,
+    expectedPasswordHash: string,
+    newPasswordHash: string,
+    event: AuthenticationAuditEvent,
+  ): Promise<boolean>;
   listActiveMemberships(userId: string): Promise<IdentityMembership[]>;
   listAuthorizedBranches(
     userId: string,
@@ -601,6 +608,82 @@ export function createIdentityRepository(
         },
       );
       if (!session) return;
+    },
+    async changePasswordAndRevokeSessions(
+      userId,
+      currentSessionHash,
+      expectedPasswordHash,
+      newPasswordHash,
+      event,
+    ) {
+      return withSessionTransaction(
+        database,
+        currentSessionHash,
+        async (transaction) => {
+          const [session] = await transaction
+            .select({ id: sessions.id, userId: sessions.userId })
+            .from(sessions)
+            .where(
+              and(
+                eq(sessions.secretHash, currentSessionHash),
+                eq(sessions.userId, userId),
+                isNull(sessions.revokedAt),
+                gt(sessions.expiresAt, event.occurredAt),
+              ),
+            )
+            .for("update")
+            .limit(1);
+          if (!session) return false;
+
+          await transaction.execute(
+            sql`select set_config('app.current_user_id', ${session.userId}, true)`,
+          );
+          const [updatedUser] = await transaction
+            .update(users)
+            .set({
+              passwordHash: newPasswordHash,
+              failedLoginAttempts: 0,
+              failedLoginWindowStartedAt: null,
+              lockedUntil: null,
+              updatedAt: event.occurredAt,
+            })
+            .where(
+              and(
+                eq(users.id, session.userId),
+                eq(users.status, "ACTIVE"),
+                eq(users.passwordHash, expectedPasswordHash),
+              ),
+            )
+            .returning({ id: users.id });
+          if (!updatedUser) return false;
+
+          await transaction
+            .update(sessions)
+            .set({ revokedAt: event.occurredAt })
+            .where(
+              and(
+                eq(sessions.userId, session.userId),
+                isNull(sessions.revokedAt),
+              ),
+            );
+          await writeAuthenticationEvent(transaction, {
+            ...event,
+            action: "AUTH_PASSWORD_CHANGED",
+            actorUserId: session.userId,
+            resourceId: session.id,
+            result: "SUCCESS",
+          });
+          await writeAuthenticationEvent(transaction, {
+            ...event,
+            action: "AUTH_SESSIONS_REVOKED",
+            actorUserId: session.userId,
+            resourceId: session.id,
+            reason: "password_changed",
+            result: "SUCCESS",
+          });
+          return true;
+        },
+      );
     },
     async listActiveMemberships(userId) {
       return withAuthenticatedUserTransaction(

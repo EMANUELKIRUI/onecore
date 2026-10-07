@@ -15,6 +15,10 @@ import type {
   ResolvedAuthorizationContext,
 } from "./authorization.js";
 import { writeAuthorizationMutationEvent } from "./authorization.js";
+import {
+  resourceScopeAllowsCreate,
+  resourceScopePredicate,
+} from "./resource-authorization.js";
 import type { OrganizationTransaction } from "./index.js";
 import {
   membershipBranches,
@@ -333,6 +337,27 @@ export function createPlatformServices(
             metadata,
             async (transaction, resolved) => {
               if (!branchInputMatches(parsed.branchId, resolved)) return false;
+              if (
+                !resourceScopeAllowsCreate(
+                  resolved,
+                  "core.organization.search.manage",
+                  {
+                    organizationId: resolved.organizationId,
+                    branchId: resolved.branchId,
+                  },
+                )
+              ) {
+                return false;
+              }
+              const rowScope = resourceScopePredicate(
+                resolved,
+                "core.organization.search.manage",
+                {
+                  organizationId: searchDocuments.organizationId,
+                  branchId: searchDocuments.branchId,
+                },
+              );
+              if (!rowScope) return false;
               const [document] = await transaction
                 .insert(searchDocuments)
                 .values({
@@ -357,9 +382,7 @@ export function createPlatformServices(
                     metadata: parsed.metadata,
                     updatedAt: new Date(),
                   },
-                  setWhere: resolved.branchId
-                    ? eq(searchDocuments.branchId, resolved.branchId)
-                    : isNull(searchDocuments.branchId),
+                  setWhere: rowScope,
                 })
                 .returning({ id: searchDocuments.id });
               if (!document) return false;
@@ -413,16 +436,22 @@ export function createPlatformServices(
             "core.organization.search.manage",
             metadata,
             async (transaction, resolved) => {
+              const rowScope = resourceScopePredicate(
+                resolved,
+                "core.organization.search.manage",
+                {
+                  organizationId: searchDocuments.organizationId,
+                  branchId: searchDocuments.branchId,
+                },
+              );
+              if (!rowScope) return false;
               const [removed] = await transaction
                 .delete(searchDocuments)
                 .where(
                   and(
-                    eq(searchDocuments.organizationId, resolved.organizationId),
+                    rowScope,
                     eq(searchDocuments.indexName, parsed.indexName),
                     eq(searchDocuments.documentId, parsed.documentId),
-                    resolved.branchId
-                      ? eq(searchDocuments.branchId, resolved.branchId)
-                      : isNull(searchDocuments.branchId),
                   ),
                 )
                 .returning({ id: searchDocuments.id });
@@ -474,12 +503,15 @@ export function createPlatformServices(
             metadata,
             async (transaction, resolved) => {
               if (!branchInputMatches(parsed.branchId, resolved)) return [];
-              const branchCondition = resolved.branchId
-                ? or(
-                    isNull(searchDocuments.branchId),
-                    eq(searchDocuments.branchId, resolved.branchId),
-                  )
-                : isNull(searchDocuments.branchId);
+              const rowScope = resourceScopePredicate(
+                resolved,
+                "core.organization.search.read",
+                {
+                  organizationId: searchDocuments.organizationId,
+                  branchId: searchDocuments.branchId,
+                },
+              );
+              if (!rowScope) return [];
               const query = sql`websearch_to_tsquery('simple', ${parsed.query})`;
               const rank = sql<number>`ts_rank(
             to_tsvector('simple', coalesce(${searchDocuments.title}, '') || ' ' || coalesce(${searchDocuments.body}, '')),
@@ -497,9 +529,8 @@ export function createPlatformServices(
                 .from(searchDocuments)
                 .where(
                   and(
-                    eq(searchDocuments.organizationId, resolved.organizationId),
+                    rowScope,
                     eq(searchDocuments.indexName, parsed.indexName),
-                    branchCondition,
                     sql`to_tsvector('simple', coalesce(${searchDocuments.title}, '') || ' ' || coalesce(${searchDocuments.body}, '')) @@ ${query}`,
                   ),
                 )

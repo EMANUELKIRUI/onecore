@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="OneCore Business OS organization workspace."
+    />
+    <meta name="onecore-api-base" content="" />
+    <meta name="theme-color" content="#f5f7fb" />
+    <title>Business workspace · OneCore</title>
+    <link rel="stylesheet" href="../../packages/ui/styles.css" />
+  </head>
+  <body>
+    <a class="oc-skip-link" href="#main-content">Skip to main content</a>
+    <div class="oc-toast-region" data-toast-region aria-live="polite"></div>
+
+    <main id="main-content">
+      <section
+        id="auth-view"
+        class="oc-auth-frame"
+        aria-labelledby="login-title"
+      >
+        <div class="oc-card oc-auth-card oc-stack">
+          <a class="oc-brand" href="../marketing/">
+            <span class="oc-brand-mark" aria-hidden="true">O</span>
+            <span>OneCore</span>
+          </a>
+          <div class="oc-stack">
+            <span class="oc-status">Business workspace</span>
+            <h1 id="login-title" class="oc-title">Sign in to OneCore</h1>
+            <p class="oc-muted">
+              Continue to your organization workspace using your OneCore
+              account.
+            </p>
+          </div>
+          <div
+            id="auth-message"
+            class="oc-alert oc-alert--error"
+            role="alert"
+            hidden
+          ></div>
+          <form id="login-form" class="oc-stack">
+            <div class="oc-field">
+              <label for="login-email">Email address</label>
+              <input
+                id="login-email"
+                class="oc-input"
+                name="email"
+                type="email"
+                autocomplete="username"
+                required
+                maxlength="320"
+              />
+            </div>
+            <div class="oc-field">
+              <label for="login-password">Password</label>
+              <input
+                id="login-password"
+                class="oc-input"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+                maxlength="1024"
+              />
+            </div>
+            <button class="oc-button" type="submit">Sign in</button>
+          </form>
+          <p class="oc-help">
+            Need help accessing your account? Contact your organization
+            administrator.
+          </p>
+        </div>
+      </section>
+
+      <section id="loading-view" class="oc-auth-frame" aria-label="Loading">
+        <div class="oc-card oc-auth-card oc-stack">
+          <span class="oc-skeleton" aria-hidden="true"></span>
+          <span class="oc-skeleton" aria-hidden="true"></span>
+          <span class="oc-skeleton" aria-hidden="true"></span>
+          <p class="oc-muted" role="status">Checking your OneCore session…</p>
+        </div>
+      </section>
+
+      <section
+        id="error-view"
+        class="oc-auth-frame"
+        aria-labelledby="service-error-title"
+        hidden
+      >
+        <div class="oc-card oc-auth-card oc-stack">
+          <span class="oc-status">Service unavailable</span>
+          <h1 id="service-error-title" class="oc-title">
+            We couldn’t load your workspace
+          </h1>
+          <p id="service-error-message" class="oc-muted"></p>
+          <button id="retry-session" class="oc-button" type="button">
+            Try again
+          </button>
+        </div>
+      </section>
+
+      <div id="app-view" class="oc-app-frame" hidden>
+        <aside
+          id="app-sidebar"
+          class="oc-sidebar"
+          aria-label="Application navigation"
+        >
+          <a class="oc-brand" href="../marketing/">
+            <span class="oc-brand-mark" aria-hidden="true">O</span>
+            <span>OneCore</span>
+          </a>
+          <nav class="oc-nav" aria-label="Workspace">
+            <a href="#overview" data-view="overview" aria-current="page"
+              >Overview</a
+            >
+            <a href="#security" data-view="security">Account security</a>
+          </nav>
+          <p class="oc-footer-note">
+            One platform. Every organization. Anywhere.
+          </p>
+        </aside>
+
+        <div class="oc-app-column">
+          <header class="oc-topbar">
+            <div class="oc-cluster">
+              <button
+                id="menu-toggle"
+                class="oc-button oc-button--secondary oc-mobile-menu"
+                type="button"
+                aria-expanded="false"
+                aria-controls="app-sidebar"
+              >
+                Menu
+              </button>
+              <span class="oc-brand-mark" aria-hidden="true">O</span>
+              <strong>Business workspace</strong>
+            </div>
+            <div class="oc-context">
+              <label class="oc-field">
+                <span class="oc-label">Organization</span>
+                <select
+                  id="organization-select"
+                  class="oc-input"
+                  aria-label="Current organization"
+                ></select>
+              </label>
+              <label id="branch-field" class="oc-field" hidden>
+                <span class="oc-label">Branch</span>
+                <select
+                  id="branch-select"
+                  class="oc-input"
+                  aria-label="Current branch"
+                ></select>
+              </label>
+              <span id="user-label" class="oc-user-label oc-muted"></span>
+              <button
+                id="theme-toggle"
+                class="oc-button oc-button--secondary"
+                type="button"
+              >
+                Theme: system
+              </button>
+              <button
+                id="sign-out"
+                class="oc-button oc-button--quiet"
+                type="button"
+              >
+                Sign out
+              </button>
+            </div>
+          </header>
+
+          <main class="oc-app-main">
+            <div
+              id="app-error"
+              class="oc-alert oc-alert--error"
+              role="alert"
+              hidden
+            ></div>
+            <section
+              id="overview-view"
+              class="oc-stack"
+              aria-labelledby="overview-title"
+            >
+              <header class="oc-main-header">
+                <div class="oc-stack">
+                  <span class="oc-status">Organization workspace</span>
+                  <h1 id="overview-title" class="oc-title">
+                    Welcome to OneCore
+                  </h1>
+                  <p id="organization-summary" class="oc-muted"></p>
+                </div>
+              </header>
+              <section class="oc-card oc-stack" aria-labelledby="modules-title">
+                <h2 id="modules-title" class="oc-section-title">
+                  Your workspace
+                </h2>
+                <div id="workspace-empty" class="oc-empty" role="status" hidden>
+                  <p><strong>No organization is selected.</strong></p>
+                  <p>Select an active organization to continue.</p>
+                </div>
+                <div id="modules-empty" class="oc-empty">
+                  <p>
+                    <strong
+                      >No business modules are available in this workspace
+                      yet.</strong
+                    >
+                  </p>
+                  <p>
+                    Enabled modules will appear here when they are provided by
+                    your organization.
+                  </p>
+                </div>
+              </section>
+            </section>
+
+            <section
+              id="security-view"
+              class="oc-stack"
+              aria-labelledby="security-title"
+              hidden
+            >
+              <header class="oc-main-header">
+                <div class="oc-stack">
+                  <span class="oc-status">Account</span>
+                  <h1 id="security-title" class="oc-title">Account security</h1>
+                  <p class="oc-muted">
+                    Change your password and end existing sessions.
+                  </p>
+                </div>
+              </header>
+              <form id="password-form" class="oc-card oc-stack" novalidate>
+                <div class="oc-field">
+                  <label for="current-password">Current password</label>
+                  <input
+                    id="current-password"
+                    class="oc-input"
+                    name="currentPassword"
+                    type="password"
+                    autocomplete="current-password"
+                    required
+                    maxlength="1024"
+                  />
+                </div>
+                <div class="oc-field">
+                  <label for="new-password">New password</label>
+                  <input
+                    id="new-password"
+                    class="oc-input"
+                    name="newPassword"
+                    type="password"
+                    autocomplete="new-password"
+                    minlength="12"
+                    required
+                    maxlength="1024"
+                    aria-describedby="password-help"
+                  />
+                  <span id="password-help" class="oc-help">
+                    Use at least 12 characters. You will need to sign in again
+                    on all devices after changing it.
+                  </span>
+                </div>
+                <div
+                  id="password-message"
+                  class="oc-alert"
+                  role="alert"
+                  hidden
+                ></div>
+                <button class="oc-button" type="submit">Update password</button>
+              </form>
+            </section>
+          </main>
+        </div>
+      </div>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

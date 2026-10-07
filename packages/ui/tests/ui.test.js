@@ -1,0 +1,105 @@
+import { describe, expect, it, vi } from "vitest";
+import { createApiClient } from "../src/api-client.js";
+import { applyBranding, filterNavigation } from "../src/capabilities.js";
+
+describe("shared UI foundations", () => {
+  it("uses same-origin credentials and parses API error contracts", async () => {
+    const fetchImplementation = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "UNAUTHORIZED",
+            message: "Authentication is required.",
+          },
+        }),
+        { status: 401, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const api = createApiClient("/api", fetchImplementation);
+
+    await expect(api.request("/auth/session")).rejects.toMatchObject({
+      status: 401,
+      code: "UNAUTHORIZED",
+      message: "Authentication is required.",
+    });
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      "/api/auth/session",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("sends JSON mutations and rejects cross-origin base paths", async () => {
+    const fetchImplementation = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const api = createApiClient("", fetchImplementation);
+
+    await expect(
+      api.request("/auth/logout", { method: "POST", body: {} }),
+    ).resolves.toBeNull();
+    expect(fetchImplementation.mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+    expect(() => createApiClient("https://api.example.test")).toThrow(
+      TypeError,
+    );
+    expect(() => createApiClient("/\\attacker.example")).toThrow(TypeError);
+    await expect(api.request("/\\attacker.example")).rejects.toThrow(TypeError);
+  });
+
+  it("normalizes network failures without exposing the underlying exception", async () => {
+    const api = createApiClient("", async () => {
+      throw new Error("private connection detail");
+    });
+
+    await expect(api.request("/auth/session")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 0,
+      code: "NETWORK_ERROR",
+      message:
+        "The service could not be reached. Check your connection and try again.",
+    });
+  });
+
+  it("filters capability-dependent navigation fail-closed", () => {
+    const items = [
+      { label: "Home", href: "/" },
+      { label: "Users", href: "/users", permission: "users.read" },
+      { label: "Inventory", href: "/inventory", module: "inventory" },
+      {
+        label: "Inventory Admin",
+        href: "/inventory/admin",
+        permission: "inventory.manage",
+        module: "inventory",
+      },
+    ];
+
+    expect(
+      filterNavigation(items, ["users.read"], ["inventory"]).map(
+        (item) => item.label,
+      ),
+    ).toEqual(["Home", "Users", "Inventory"]);
+    expect(filterNavigation(items).map((item) => item.label)).toEqual(["Home"]);
+  });
+
+  it("accepts only safe hexadecimal organization brand colors", () => {
+    const style = { setProperty: vi.fn() };
+    const element = { style };
+
+    applyBranding(element, { primaryColor: "#168" });
+    expect(style.setProperty).toHaveBeenCalledWith(
+      "--oc-color-primary",
+      "#168",
+    );
+    style.setProperty.mockClear();
+    applyBranding(element, {
+      primaryColor: "url(javascript:alert(1))",
+    });
+    expect(style.setProperty).not.toHaveBeenCalled();
+  });
+});

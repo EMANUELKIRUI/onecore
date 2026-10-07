@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export * from "./events.js";
 export * from "./platform-services.js";
+export * from "./regionalization.js";
 
 export const deploymentTypes = [
   "SAAS",

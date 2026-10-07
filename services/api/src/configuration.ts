@@ -18,8 +18,12 @@ import {
 import { z } from "zod";
 import type { ApiFastifyInstance } from "./fastify-instance.js";
 import {
+  countryCodeSchema,
+  currencyCodeSchema,
+  localeSchema,
   parseFeatureFlagValue,
   resolveConfigurationCapabilities,
+  timeZoneSchema,
 } from "@onecore/core-domain";
 import {
   recordConfigurationChangedEvent,
@@ -54,29 +58,10 @@ const emailBrandingSchema = z
   .strict();
 const organizationSettingsPatchSchema = z
   .object({
-    countryCode: z
-      .string()
-      .regex(/^[A-Z]{2}$/)
-      .optional(),
-    currencyCode: z
-      .string()
-      .regex(/^[A-Z]{3}$/)
-      .optional(),
-    timezone: z
-      .string()
-      .trim()
-      .min(1)
-      .max(100)
-      .refine((timezone) => {
-        try {
-          new Intl.DateTimeFormat("en", { timeZone: timezone });
-          return true;
-        } catch {
-          return false;
-        }
-      })
-      .optional(),
-    locale: z.string().trim().min(2).max(20).optional(),
+    countryCode: countryCodeSchema.optional(),
+    currencyCode: currencyCodeSchema.optional(),
+    timezone: timeZoneSchema.optional(),
+    locale: localeSchema.optional(),
     address: z.record(z.string(), z.unknown()).optional(),
     taxInformation: z.record(z.string(), z.unknown()).optional(),
     legalName: z.string().trim().max(200).nullable().optional(),
