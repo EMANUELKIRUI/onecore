@@ -1,0 +1,4 @@
+{
+  "buildCommand": "node ../../scripts/build-static-app.mjs superadmin",
+  "outputDirectory": "dist"
+}
