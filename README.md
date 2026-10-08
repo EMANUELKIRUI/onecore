@@ -54,4 +54,4 @@ npm test
 npm run build
 ```
 
-Phase boundaries and known limitations are documented in [the deployment and governance guide](docs/deployment/README.md).
+Upcoming phase scope is maintained in the [canonical roadmap](docs/architecture/roadmap.md). Deployment procedures and known production limitations are documented in [the deployment and governance guide](docs/deployment/README.md).

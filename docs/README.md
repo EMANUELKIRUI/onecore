@@ -1,6 +1,7 @@
 # Documentation
 
 - [Architecture](architecture/overview.md)
+- [Canonical roadmap and upcoming phase scope](architecture/roadmap.md)
 - [Events and transactional outbox](architecture/events.md)
 - [Database](database/README.md)
 - [Multi-tenancy](multi-tenancy/README.md)
