@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="OneCore platform administration." />
+    <meta name="onecore-api-base" content="" />
+    <meta name="theme-color" content="#10284f" />
+    <title>OneCore Platform Administration</title>
+    <link rel="stylesheet" href="../../packages/ui/styles.css" />
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body class="oc-business-app oc-admin-app">
+    <a class="oc-skip-link" href="#main-content">Skip to main content</a>
+    <div class="oc-toast-region" data-toast-region aria-live="polite"></div>
+
+    <section
+      id="checking-view"
+      class="oc-auth-frame"
+      aria-label="Checking administrator session"
+    >
+      <div class="oc-card oc-auth-card oc-stack">
+        <span class="oc-skeleton" aria-hidden="true"></span>
+        <span class="oc-skeleton" aria-hidden="true"></span>
+        <p class="oc-muted" role="status">Verifying platform access…</p>
+      </div>
+    </section>
+
+    <section
+      id="login-view"
+      class="oc-auth-frame oc-auth-frame--split"
+      aria-labelledby="login-title"
+      hidden
+    >
+      <div class="oc-auth-aside">
+        <a class="oc-brand oc-brand--light" href="../marketing/">
+          <span class="oc-brand-mark" aria-hidden="true">O</span>
+          <span class="oc-brand__text"
+            ><strong>OneCore</strong><span>Platform administration</span></span
+          >
+        </a>
+        <div class="oc-auth-aside__message">
+          <span class="oc-auth-kicker">PLATFORM OPERATIONS</span>
+          <h2>One platform.<br />Every organization.</h2>
+          <p>
+            Review organization account requests through a secure,
+            role-restricted workspace.
+          </p>
+          <div class="oc-auth-pill-row" aria-label="Platform controls">
+            <span>Platform access</span><span>Application review</span
+            ><span>Recorded decisions</span>
+          </div>
+        </div>
+        <span class="oc-auth-aside__footer"
+          >Administrative access is verified by OneCore.</span
+        >
+      </div>
+      <div class="oc-auth-panel">
+        <div class="oc-card oc-auth-card oc-stack">
+          <a class="oc-brand oc-auth-mobile-brand" href="../marketing/">
+            <span class="oc-brand-mark" aria-hidden="true">O</span>
+            <span class="oc-brand__text"
+              ><strong>OneCore</strong
+              ><span>Platform administration</span></span
+            >
+          </a>
+          <div class="oc-stack oc-auth-heading">
+            <span class="oc-status">Platform administration</span>
+            <h1 id="login-title" class="oc-title">Sign in</h1>
+            <p class="oc-muted">
+              Use your authorized OneCore administrator account.
+            </p>
+          </div>
+          <div
+            id="login-message"
+            class="oc-alert oc-alert--error"
+            role="alert"
+            hidden
+          ></div>
+          <form id="login-form" class="oc-stack">
+            <div class="oc-field">
+              <label for="login-email">Email address</label>
+              <input
+                id="login-email"
+                class="oc-input"
+                name="email"
+                type="email"
+                autocomplete="username"
+                required
+                maxlength="320"
+              />
+            </div>
+            <div class="oc-field">
+              <label for="login-password">Password</label>
+              <div class="oc-password-control">
+                <input
+                  id="login-password"
+                  class="oc-input"
+                  name="password"
+                  type="password"
+                  autocomplete="current-password"
+                  required
+                  maxlength="1024"
+                />
+                <button
+                  id="password-visibility"
+                  class="oc-button oc-button--quiet oc-password-toggle"
+                  type="button"
+                  aria-label="Show password"
+                  aria-pressed="false"
+                  aria-controls="login-password"
+                >
+                  Show
+                </button>
+              </div>
+            </div>
+            <button
+              id="login-submit"
+              class="oc-button oc-button--wide"
+              type="submit"
+            >
+              Sign in to administration
+            </button>
+          </form>
+          <p class="oc-help oc-auth-support">
+            Platform access is checked by the API. A regular organization
+            account cannot review requests.
+          </p>
+          <a class="oc-auth-back" href="../marketing/">Back to OneCore</a>
+        </div>
+      </div>
+    </section>
+
+    <section
+      id="access-view"
+      class="oc-auth-frame"
+      aria-labelledby="access-title"
+      hidden
+    >
+      <div class="oc-card oc-auth-card oc-stack">
+        <span class="oc-status">Access restricted</span>
+        <h1 id="access-title" class="oc-title">
+          This workspace is for platform Superadmins
+        </h1>
+        <p id="access-message" class="oc-muted">
+          Your account is not authorized to access platform administration.
+        </p>
+        <button
+          id="access-signout"
+          class="oc-button oc-button--secondary"
+          type="button"
+        >
+          Sign out
+        </button>
+      </div>
+    </section>
+
+    <div id="app-view" class="oc-app-frame" hidden>
+      <aside
+        id="app-sidebar"
+        class="oc-sidebar"
+        aria-label="Platform navigation"
+      >
+        <a class="oc-brand oc-brand--light" href="../marketing/">
+          <span class="oc-brand-mark" aria-hidden="true">O</span>
+          <span class="oc-brand__text"
+            ><strong>OneCore</strong><span>Platform admin</span></span
+          >
+        </a>
+        <nav class="oc-nav" aria-label="Administration">
+          <span class="oc-nav__group-label">Platform</span>
+          <a href="#overview" data-admin-view="overview" aria-current="page"
+            ><span class="oc-nav__icon" aria-hidden="true">⌂</span
+            ><span>Overview</span></a
+          >
+          <a href="#requests" data-admin-view="requests"
+            ><span class="oc-nav__icon" aria-hidden="true">▤</span
+            ><span>Organization requests</span
+            ><span id="pending-nav-count" class="oc-nav__count" hidden></span
+          ></a>
+        </nav>
+        <div class="oc-sidebar-context">
+          <span class="oc-sidebar-context__label">Access level</span>
+          <strong>Platform Superadmin</strong>
+          <span>Protected by the OneCore API</span>
+        </div>
+        <a class="oc-sidebar-profile" href="#overview">
+          <span class="oc-avatar" aria-hidden="true">O</span>
+          <span class="oc-sidebar-profile__text"
+            ><strong id="admin-name">Administrator</strong
+            ><span id="admin-email"></span
+          ></span>
+        </a>
+      </aside>
+      <button
+        id="sidebar-backdrop"
+        class="oc-sidebar-backdrop"
+        type="button"
+        aria-label="Close navigation"
+        hidden
+      ></button>
+      <div class="oc-app-column">
+        <header class="oc-topbar">
+          <div class="oc-topbar__brand">
+            <button
+              id="menu-toggle"
+              class="oc-icon-button oc-mobile-menu"
+              type="button"
+              aria-expanded="false"
+              aria-controls="app-sidebar"
+              aria-label="Open navigation"
+            >
+              <span aria-hidden="true">☰</span>
+            </button>
+            <span id="page-title" class="oc-topbar__title"
+              >Platform overview</span
+            >
+          </div>
+          <div class="oc-context">
+            <span class="oc-badge oc-badge--info">Superadmin</span>
+            <button
+              id="sign-out"
+              class="oc-button oc-button--secondary"
+              type="button"
+            >
+              Sign out
+            </button>
+          </div>
+        </header>
+        <main id="main-content" class="oc-app-main">
+          <div id="app-message" class="oc-alert" role="status" hidden></div>
+          <section
+            id="overview-view"
+            class="oc-stack"
+            aria-labelledby="overview-title"
+          >
+            <header class="oc-main-header">
+              <div class="oc-stack">
+                <span class="oc-status">PLATFORM OPERATIONS</span>
+                <h1 id="overview-title" class="oc-title">Overview</h1>
+                <p class="oc-muted">
+                  Organization applications and review activity.
+                </p>
+              </div>
+              <button
+                id="overview-refresh"
+                class="oc-button oc-button--secondary"
+                type="button"
+              >
+                Refresh
+              </button>
+            </header>
+            <div
+              class="oc-grid oc-platform-metrics"
+              aria-label="Organization request statuses"
+            >
+              <button
+                class="oc-metric-card"
+                data-overview-filter="PENDING"
+                type="button"
+              >
+                <span class="oc-metric-card__label">Pending</span
+                ><strong id="count-pending" class="oc-metric-card__value"
+                  >—</strong
+                ><span class="oc-metric-card__hint">Awaiting first review</span>
+              </button>
+              <button
+                class="oc-metric-card"
+                data-overview-filter="UNDER_REVIEW"
+                type="button"
+              >
+                <span class="oc-metric-card__label">Under review</span
+                ><strong id="count-under-review" class="oc-metric-card__value"
+                  >—</strong
+                ><span class="oc-metric-card__hint">Review in progress</span>
+              </button>
+              <button
+                class="oc-metric-card"
+                data-overview-filter="APPROVED"
+                type="button"
+              >
+                <span class="oc-metric-card__label">Approved</span
+                ><strong id="count-approved" class="oc-metric-card__value"
+                  >—</strong
+                ><span class="oc-metric-card__hint">Decision recorded</span>
+              </button>
+              <button
+                class="oc-metric-card"
+                data-overview-filter="REJECTED"
+                type="button"
+              >
+                <span class="oc-metric-card__label">Rejected</span
+                ><strong id="count-rejected" class="oc-metric-card__value"
+                  >—</strong
+                ><span class="oc-metric-card__hint">Decision recorded</span>
+              </button>
+            </div>
+            <section
+              class="oc-card oc-stack"
+              aria-labelledby="review-boundary-title"
+            >
+              <h2 id="review-boundary-title" class="oc-section-title">
+                Review boundary
+              </h2>
+              <p class="oc-muted">
+                Approving an application records the review decision. It does
+                not activate an organization or create owner credentials.
+              </p>
+              <button class="oc-button" data-open-requests type="button">
+                Review organization requests
+              </button>
+            </section>
+          </section>
+          <section
+            id="requests-view"
+            class="oc-stack"
+            aria-labelledby="requests-title"
+            hidden
+          >
+            <header class="oc-main-header">
+              <div class="oc-stack">
+                <span class="oc-status">APPLICATION REVIEW</span>
+                <h1 id="requests-title" class="oc-title">
+                  Organization requests
+                </h1>
+                <p class="oc-muted">
+                  Review organization and owner details, then record the
+                  appropriate status.
+                </p>
+              </div>
+              <button
+                id="requests-refresh"
+                class="oc-button oc-button--secondary"
+                type="button"
+              >
+                Refresh
+              </button>
+            </header>
+            <div
+              class="oc-tabs"
+              role="group"
+              aria-label="Filter organization requests"
+            >
+              <button
+                type="button"
+                data-status-filter="ALL"
+                aria-pressed="true"
+              >
+                All <span id="filter-count-all"></span>
+              </button>
+              <button
+                type="button"
+                data-status-filter="PENDING"
+                aria-pressed="false"
+              >
+                Pending <span id="filter-count-pending"></span>
+              </button>
+              <button
+                type="button"
+                data-status-filter="UNDER_REVIEW"
+                aria-pressed="false"
+              >
+                Under review <span id="filter-count-under-review"></span>
+              </button>
+              <button
+                type="button"
+                data-status-filter="APPROVED"
+                aria-pressed="false"
+              >
+                Approved <span id="filter-count-approved"></span>
+              </button>
+              <button
+                type="button"
+                data-status-filter="REJECTED"
+                aria-pressed="false"
+              >
+                Rejected <span id="filter-count-rejected"></span>
+              </button>
+            </div>
+            <div
+              id="requests-message"
+              class="oc-alert"
+              role="status"
+              hidden
+            ></div>
+            <div class="oc-admin-request-layout">
+              <section
+                class="oc-card oc-stack"
+                aria-labelledby="request-list-title"
+              >
+                <h2 id="request-list-title" class="oc-section-title">
+                  Applications
+                </h2>
+                <div id="request-list" aria-live="polite"></div>
+              </section>
+              <section
+                class="oc-card oc-stack"
+                aria-labelledby="request-detail-title"
+              >
+                <h2 id="request-detail-title" class="oc-section-title">
+                  Application detail
+                </h2>
+                <div id="request-detail">
+                  <p class="oc-muted">Select an application to review.</p>
+                </div>
+              </section>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </body>
+</html>

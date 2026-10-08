@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="OneCore support workspace availability."
+    />
+    <meta name="theme-color" content="#10284f" />
+    <title>OneCore Support</title>
+    <link rel="stylesheet" href="../../packages/ui/styles.css" />
+  </head>
+  <body class="oc-business-app oc-support-app">
+    <a class="oc-skip-link" href="#main-content">Skip to main content</a>
+    <div class="oc-app-frame">
+      <aside
+        id="support-sidebar"
+        class="oc-sidebar"
+        aria-label="Support navigation"
+      >
+        <a class="oc-brand oc-brand--light" href="../marketing/">
+          <span class="oc-brand-mark" aria-hidden="true">O</span>
+          <span class="oc-brand__text"
+            ><strong>OneCore</strong><span>Support</span></span
+          >
+        </a>
+        <nav class="oc-nav" aria-label="Support workspace">
+          <span class="oc-nav__group-label">Workspace</span>
+          <a href="#support-home" aria-current="page"
+            ><span class="oc-nav__icon" aria-hidden="true">⌂</span
+            ><span>Overview</span></a
+          >
+          <span class="oc-nav__disabled" aria-disabled="true"
+            ><span class="oc-nav__icon" aria-hidden="true">▤</span
+            ><span>Support requests</span></span
+          >
+        </nav>
+        <div class="oc-sidebar-context">
+          <span class="oc-sidebar-context__label">Support access</span>
+          <strong>Not enabled</strong>
+          <span>No support API is connected.</span>
+        </div>
+        <a class="oc-sidebar-profile" href="../marketing/">
+          <span class="oc-avatar" aria-hidden="true">O</span>
+          <span class="oc-sidebar-profile__text"
+            ><strong>OneCore</strong><span>Support workspace</span></span
+          >
+        </a>
+      </aside>
+      <button
+        id="support-sidebar-backdrop"
+        class="oc-sidebar-backdrop"
+        type="button"
+        aria-label="Close navigation"
+        hidden
+      ></button>
+      <main id="main-content" class="oc-app-main oc-support-main">
+        <header class="oc-topbar">
+          <div class="oc-topbar__brand">
+            <button
+              id="support-menu-toggle"
+              class="oc-icon-button oc-mobile-menu"
+              type="button"
+              aria-expanded="false"
+              aria-controls="support-sidebar"
+              aria-label="Open navigation"
+            >
+              <span aria-hidden="true">☰</span>
+            </button>
+            <span class="oc-topbar__title">Support workspace</span>
+          </div>
+          <a class="oc-button oc-button--secondary" href="../marketing/"
+            >OneCore home</a
+          >
+        </header>
+        <nav class="oc-breadcrumbs" aria-label="Breadcrumb">
+          <ol>
+            <li aria-current="page">Support</li>
+          </ol>
+        </nav>
+        <header class="oc-main-header">
+          <div class="oc-stack">
+            <span class="oc-status">SUPPORT WORKSPACE</span>
+            <h1 class="oc-title">Support console</h1>
+            <p class="oc-muted">
+              A clear view of support workflows when they are available.
+            </p>
+          </div>
+          <span class="oc-badge oc-badge--warning">Unavailable</span>
+        </header>
+        <section
+          id="support-home"
+          class="oc-state oc-state--unavailable"
+          aria-labelledby="support-unavailable-title"
+        >
+          <span class="oc-feature-card__icon" aria-hidden="true">i</span>
+          <h2 id="support-unavailable-title" class="oc-section-title">
+            Support workflows are not enabled yet
+          </h2>
+          <p>
+            No authorized support request, organization lookup, or activity API
+            is available in this release. No customer or organization data is
+            shown here.
+          </p>
+          <a class="oc-button oc-button--secondary" href="../marketing/"
+            >Back to OneCore</a
+          >
+        </section>
+      </main>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
