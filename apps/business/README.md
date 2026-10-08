@@ -1,5 +1,16 @@
 # Business application
 
+## Visual system
+
+The authenticated workspace and public marketing site share the design tokens
+and responsive components in `packages/ui/styles.css`. The business shell uses
+the organization context returned by the session API, a deep-blue responsive
+navigation drawer, and a compact header. Dashboard summaries and quick links
+are sourced from existing session, entitlement, and protected API responses;
+the UI does not invent sales, inventory, or analytics values. Customer and
+catalog search and management continue to use the existing Business Manager
+API, with authorization enforced by the server.
+
 ## Business Manager
 
 The existing authenticated workspace now groups its supported organization

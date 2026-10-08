@@ -30,7 +30,11 @@ const branchSelect = document.querySelector("#branch-select");
 const branchField = document.querySelector("#branch-field");
 const userLabel = document.querySelector("#user-label");
 const organizationSummary = document.querySelector("#organization-summary");
+const globalSearchForm = document.querySelector("#global-search-form");
+const globalSearchInput = document.querySelector("#global-search");
+const globalSearchDialog = document.querySelector("#global-search-dialog");
 const sidebar = document.querySelector("#app-sidebar");
+const sidebarBackdrop = document.querySelector("#sidebar-backdrop");
 const menuToggle = document.querySelector("#menu-toggle");
 const themeToggle = document.querySelector("#theme-toggle");
 const themeOptions = ["system", "light", "dark"];
@@ -98,6 +102,7 @@ let currentSession;
 let workflowLoadSequence = 0;
 let dashboardLoadSequence = 0;
 let workflowNavigationSequence = 0;
+let globalSearchSequence = 0;
 let resourceLoadSequence = 0;
 let resourceNavigationSequence = 0;
 let businessResourceSequence = 0;
@@ -224,7 +229,7 @@ function statusVariant(status) {
 }
 
 function setWorkflowText() {
-  document.querySelector("#workflow-nav").textContent =
+  document.querySelector("#workflow-nav-label").textContent =
     workflowText("workflow.nav");
   document.querySelector("#workflow-eyebrow").textContent =
     workflowText("workflow.eyebrow");
@@ -246,6 +251,7 @@ function updateWorkflowNavigation(session) {
   const sequence = ++workflowNavigationSequence;
   const organizationId = session.organization?.organizationId;
   navigation.hidden = true;
+  document.querySelector("#dashboard-workflows-link").hidden = true;
   if (!organizationId) {
     return;
   }
@@ -258,6 +264,7 @@ function updateWorkflowNavigation(session) {
         currentSession === session
       ) {
         navigation.hidden = false;
+        document.querySelector("#dashboard-workflows-link").hidden = false;
       }
     })
     .catch(() => {
@@ -266,6 +273,7 @@ function updateWorkflowNavigation(session) {
         currentSession === session
       ) {
         navigation.hidden = true;
+        document.querySelector("#dashboard-workflows-link").hidden = true;
       }
     });
 }
@@ -1242,6 +1250,8 @@ function businessResourceEndpoint(view) {
 
 function clearBusinessManagerContext() {
   businessResourceSequence += 1;
+  globalSearchSequence += 1;
+  if (globalSearchDialog.open) globalSearchDialog.close();
   businessResourceContext = "";
   businessResourceOffsets.customers = 0;
   businessResourceOffsets.products = 0;
@@ -2009,6 +2019,15 @@ async function loadDashboard(session) {
   const notifications = document.querySelector("#dashboard-notifications");
   const workflows = document.querySelector("#dashboard-workflows");
   const organization = document.querySelector("#dashboard-organization");
+  document.querySelector("#dashboard-organizations-count").textContent =
+    new Intl.NumberFormat(preferenceLocale).format(session.memberships.length);
+  document.querySelector("#dashboard-branches-count").textContent =
+    organizationId
+      ? new Intl.NumberFormat(preferenceLocale).format(
+          session.availableBranches.length,
+        )
+      : "—";
+  document.querySelector("#dashboard-modules-count").textContent = "—";
   organization.replaceChildren();
   renderDefinitionList(organization, [
     ["Organization", session.organization?.name],
@@ -2073,6 +2092,11 @@ async function loadDashboard(session) {
         item.status,
       ]),
     );
+    document.querySelector("#dashboard-modules-count").textContent =
+      new Intl.NumberFormat(preferenceLocale).format(
+        [...entitlements.values()].filter((status) => status === "ENABLED")
+          .length,
+      );
     const rows = catalog.catalog ?? [];
     modules.replaceChildren();
     if (!rows.length) {
@@ -2106,6 +2130,9 @@ async function loadDashboard(session) {
 
   if (notificationResult.status === "fulfilled") {
     const rows = notificationResult.value.notifications ?? [];
+    document.querySelector("#notification-indicator").hidden = !rows.some(
+      (item) => !item.readAt,
+    );
     notifications.replaceChildren();
     if (!rows.length) {
       renderDashboardStatus(notifications, "No recent notifications.");
@@ -2124,6 +2151,7 @@ async function loadDashboard(session) {
       }
     }
   } else {
+    document.querySelector("#notification-indicator").hidden = true;
     renderDashboardStatus(
       notifications,
       errorMessage(notificationResult.reason),
@@ -2245,6 +2273,12 @@ async function updateResourceNavigation(session) {
     ],
   ];
   for (const [id] of probes) document.querySelector(`#${id}`).hidden = true;
+  document.querySelector("#language-shortcut").hidden = true;
+  document.querySelector("#notification-shortcut").hidden = true;
+  document.querySelector("#dashboard-customers-action").hidden = true;
+  document.querySelector("#dashboard-catalog-action").hidden = true;
+  document.querySelector("#dashboard-modules-link").hidden = true;
+  document.querySelector("#dashboard-notifications-link").hidden = true;
   if (!organizationId) return;
   await Promise.all(
     probes.map(async ([id, path]) => {
@@ -2256,6 +2290,20 @@ async function updateResourceNavigation(session) {
           currentSession === session
         ) {
           document.querySelector(`#${id}`).hidden = false;
+          if (id === "customers-nav") {
+            document.querySelector("#dashboard-customers-action").hidden =
+              false;
+          } else if (id === "products-nav") {
+            document.querySelector("#dashboard-catalog-action").hidden = false;
+          } else if (id === "notifications-nav") {
+            document.querySelector("#notification-shortcut").hidden = false;
+            document.querySelector("#dashboard-notifications-link").hidden =
+              false;
+          } else if (id === "preferences-nav") {
+            document.querySelector("#language-shortcut").hidden = false;
+          } else if (id === "modules-nav") {
+            document.querySelector("#dashboard-modules-link").hidden = false;
+          }
         }
       } catch {
         if (sequence === resourceNavigationSequence) {
@@ -2264,6 +2312,124 @@ async function updateResourceNavigation(session) {
       }
     }),
   );
+}
+
+async function runGlobalSearch(event) {
+  event.preventDefault();
+  const query = globalSearchInput.value.trim();
+  const status = document.querySelector("#global-search-status");
+  const results = document.querySelector("#global-search-results");
+  const sequence = ++globalSearchSequence;
+  const session = currentSession;
+  const organizationId = session?.organization?.organizationId;
+  results.replaceChildren();
+  if (!organizationId || query.length < 2) {
+    status.textContent = organizationId
+      ? "Enter at least two characters to search."
+      : "Choose an organization before searching.";
+    globalSearchDialog.showModal();
+    return;
+  }
+  const targets = [
+    { view: "customers", navId: "customers-nav", label: "Customer" },
+    { view: "products", navId: "products-nav", label: "Catalog item" },
+  ].filter(({ navId }) => !document.querySelector(`#${navId}`).hidden);
+  if (targets.length === 0) {
+    status.textContent =
+      "No searchable resources are available in this workspace.";
+    globalSearchDialog.showModal();
+    return;
+  }
+  status.textContent = "Searching authorized records…";
+  globalSearchDialog.showModal();
+  const params = new globalThis.URLSearchParams({
+    search: query,
+    limit: "5",
+    offset: "0",
+  });
+  const responses = await Promise.allSettled(
+    targets.map(async (target) => ({
+      target,
+      response: await authenticatedRequest(
+        `${businessResourceEndpoint(target.view)}?${params}`,
+      ),
+    })),
+  );
+  if (
+    sequence !== globalSearchSequence ||
+    currentSession !== session ||
+    !globalSearchDialog.open
+  ) {
+    return;
+  }
+  let successfulSearches = 0;
+  let failedSearch;
+  for (const result of responses) {
+    if (result.status === "rejected") {
+      failedSearch ??= result.reason;
+      continue;
+    }
+    successfulSearches += 1;
+    for (const item of result.value.response.items ?? []) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "oc-search-result";
+      const details = document.createElement("span");
+      details.className = "oc-search-result__details";
+      appendText(details, "strong", item.name);
+      appendText(
+        details,
+        "span",
+        [
+          result.value.target.label,
+          item.reference,
+          result.value.target.view === "products" ? item.type : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        "oc-muted",
+      );
+      button.append(details);
+      button.addEventListener("click", () => {
+        const view = result.value.target.view;
+        const filters = {
+          search: query,
+          status: "",
+          type: "",
+          branchFilter: "",
+        };
+        businessResourceFilters[view] = filters;
+        businessResourceOffsets[view] = 0;
+        globalSearchDialog.close();
+        if (location.hash === `#${view}`) {
+          void loadBusinessManagerView(view, { filters });
+        } else {
+          location.hash = view;
+        }
+      });
+      results.append(button);
+    }
+  }
+  if (results.childElementCount > 0) {
+    status.textContent = `Search results for “${query}”`;
+  } else if (failedSearch && successfulSearches > 0) {
+    status.textContent =
+      "Some authorized resources could not be searched. No matches were found in available results.";
+  } else if (successfulSearches > 0) {
+    status.textContent = "No matching customers or catalog items were found.";
+  } else {
+    status.textContent = errorMessage(failedSearch);
+    results.append(
+      appendText(
+        document.createElement("div"),
+        "p",
+        failedSearch instanceof ApiError && failedSearch.status === 403
+          ? "Access to search results is restricted."
+          : "Search could not be completed. Try again.",
+        "oc-state oc-state--error",
+      ),
+    );
+  }
 }
 
 function appendWorkflowField(container, label, value) {
@@ -2441,6 +2607,14 @@ function setFormPending(form, pending, submitLabel, pendingLabel) {
   form.setAttribute("aria-busy", String(pending));
 }
 
+function userInitials(displayName, email) {
+  const words = displayName.trim().split(/\s+/).filter(Boolean);
+  if (words.length > 1) {
+    return `${words[0][0]}${words.at(-1)[0]}`.toLocaleUpperCase();
+  }
+  return (words[0]?.slice(0, 2) || email.slice(0, 2)).toLocaleUpperCase();
+}
+
 function selectView(view) {
   businessResourceSequence += 1;
   const validViews = [
@@ -2461,6 +2635,12 @@ function selectView(view) {
     boundaryViews[selected]?.title ??
     (selected === "overview" ? "Dashboard" : "OneCore workspace");
   document.title = `${pageTitle} · OneCore`;
+  document.querySelector("#dashboard-modules-link").hidden =
+    document.querySelector("#modules-nav").hidden;
+  document.querySelector("#dashboard-notifications-link").hidden =
+    document.querySelector("#notifications-nav").hidden;
+  document.querySelector("#dashboard-workflows-link").hidden =
+    document.querySelector("#workflow-nav").hidden;
   document.querySelector("#overview-view").hidden = selected !== "overview";
   document.querySelector("#security-view").hidden = selected !== "security";
   document.querySelector("#profile-view").hidden = selected !== "profile";
@@ -2483,6 +2663,8 @@ function selectView(view) {
   });
   sidebar.dataset.open = "false";
   menuToggle.setAttribute("aria-expanded", "false");
+  menuToggle.setAttribute("aria-label", "Open navigation");
+  sidebarBackdrop.hidden = true;
   const currentLink = [
     ...document.querySelectorAll(".oc-nav [data-view]"),
   ].find((link) => link.dataset.view === selected);
@@ -2505,12 +2687,38 @@ function selectView(view) {
 }
 
 function renderSession(session) {
+  globalSearchSequence += 1;
   currentSession = session;
   hide(loadingView);
   hide(errorView);
   hide(authView);
   show(appView);
-  userLabel.textContent = session.user.email;
+  userLabel.textContent = session.user.displayName;
+  const initials = userInitials(session.user.displayName, session.user.email);
+  document.querySelector("#dashboard-greeting-name").textContent =
+    session.user.displayName;
+  const hour = new Date().getHours();
+  document.querySelector("#dashboard-greeting-prefix").textContent =
+    hour < 12
+      ? "Good morning,"
+      : hour < 18
+        ? "Good afternoon,"
+        : "Good evening,";
+  document.querySelector("#sidebar-user-name").textContent =
+    session.user.displayName;
+  document.querySelector("#sidebar-user-email").textContent =
+    session.user.email;
+  document.querySelector("#sidebar-organization").textContent =
+    session.organization?.name ?? "No organization selected";
+  const activeBranch = session.availableBranches.find(
+    (branch) => branch.branchId === session.branch?.branchId,
+  );
+  document.querySelector("#sidebar-branch").textContent = session.branch
+    ? (activeBranch?.name ?? "Selected branch")
+    : "Organization-wide access";
+  for (const selector of ["#sidebar-avatar", "#header-avatar"]) {
+    document.querySelector(selector).textContent = initials;
+  }
   document.querySelector("#profile-details").replaceChildren();
   renderDefinitionList(document.querySelector("#profile-details"), [
     ["Name", session.user.displayName],
@@ -2559,6 +2767,8 @@ function renderSession(session) {
   branchSelect.value = session.branch?.branchId ?? "";
   branchField.hidden =
     !session.organization || session.availableBranches.length === 0;
+  document.querySelector("#dashboard-organizations-count").textContent =
+    new Intl.NumberFormat(preferenceLocale).format(session.memberships.length);
   organizationSummary.textContent = session.organization
     ? `You are working in ${session.organization.name}${session.branch ? ` · ${session.availableBranches.find((branch) => branch.branchId === session.branch.branchId)?.name ?? "Selected branch"}` : ""}.`
     : "Choose an organization you belong to. Access is verified by OneCore.";
@@ -2618,6 +2828,29 @@ loginForm.addEventListener("submit", async (event) => {
   } finally {
     setFormPending(loginForm, false, "Sign in", "Signing in…");
   }
+});
+
+document
+  .querySelector("#password-visibility")
+  .addEventListener("click", (event) => {
+    const button = event.currentTarget;
+    const password = document.querySelector("#login-password");
+    const visible = password.type === "password";
+    password.type = visible ? "text" : "password";
+    button.textContent = visible ? "Hide" : "Show";
+    button.setAttribute(
+      "aria-label",
+      visible ? "Hide password" : "Show password",
+    );
+    button.setAttribute("aria-pressed", String(visible));
+  });
+
+globalSearchForm.addEventListener("submit", runGlobalSearch);
+document
+  .querySelector("#global-search-close")
+  .addEventListener("click", () => globalSearchDialog.close());
+globalSearchDialog.addEventListener("close", () => {
+  globalSearchInput.focus();
 });
 
 organizationSelect.addEventListener("change", async () => {
@@ -2741,14 +2974,42 @@ document.querySelectorAll(".oc-nav [data-view]").forEach((link) => {
   link.addEventListener("click", () => {
     sidebar.dataset.open = "false";
     menuToggle.setAttribute("aria-expanded", "false");
+    menuToggle.setAttribute("aria-label", "Open navigation");
+    sidebarBackdrop.hidden = true;
   });
 });
 menuToggle.addEventListener("click", () => {
   const expanded = menuToggle.getAttribute("aria-expanded") === "true";
   menuToggle.setAttribute("aria-expanded", String(!expanded));
+  menuToggle.setAttribute(
+    "aria-label",
+    expanded ? "Open navigation" : "Close navigation",
+  );
   sidebar.dataset.open = String(!expanded);
+  sidebarBackdrop.hidden = expanded;
+  if (!expanded) {
+    sidebar.querySelector(".oc-nav a:not([hidden])")?.focus();
+  }
+});
+sidebarBackdrop.addEventListener("click", () => {
+  sidebar.dataset.open = "false";
+  menuToggle.setAttribute("aria-expanded", "false");
+  menuToggle.setAttribute("aria-label", "Open navigation");
+  sidebarBackdrop.hidden = true;
+  menuToggle.focus();
 });
 document.addEventListener("keydown", (event) => {
+  if (
+    event.key === "/" &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)
+  ) {
+    event.preventDefault();
+    globalSearchInput.focus();
+    return;
+  }
   if (
     event.key !== "Escape" ||
     menuToggle.getAttribute("aria-expanded") !== "true"
@@ -2756,14 +3017,20 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   menuToggle.setAttribute("aria-expanded", "false");
+  menuToggle.setAttribute("aria-label", "Open navigation");
   sidebar.dataset.open = "false";
+  sidebarBackdrop.hidden = true;
   menuToggle.focus();
 });
 themeToggle.addEventListener("click", () => {
   currentTheme = (currentTheme + 1) % themeOptions.length;
   const theme = themeOptions[currentTheme];
   setTheme(theme);
-  themeToggle.textContent = `Theme: ${theme}`;
+  themeToggle.setAttribute(
+    "aria-label",
+    `Change theme, current theme: ${theme}`,
+  );
+  themeToggle.title = `Theme: ${theme}`;
 });
 
 setWorkflowText();

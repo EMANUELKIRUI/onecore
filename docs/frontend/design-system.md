@@ -67,6 +67,16 @@ tenant read API.
 See [Business Manager capability map](../modules/business-manager.md) for the
 resource fields, schema, API, permission, lifecycle, and security boundaries.
 
+The Business workspace and public marketing page share the OneCore blue
+palette, typography, surfaces, form controls, card treatments, and responsive
+tokens. The authenticated shell uses a deep-blue navigation drawer, a
+context-aware workspace header, and dashboard cards populated only by
+session, entitlement, notification, and workflow APIs. Customer/catalog search
+reuses their existing protected list endpoints. The login panel continues to
+use the real session API; its password control only changes the field's
+visibility. Public marketing remains informational and does not represent
+unfinished business modules as available.
+
 The shared `@onecore/ui` workspace uses native HTML, CSS, and browser ES
 modules. There is no framework, router, component runtime, or client state
 dependency to duplicate. Static applications should be hosted behind a
@@ -77,8 +87,9 @@ frontend configuration must never contain credentials.
 ## Tokens and components
 
 `packages/ui/styles.css` owns the core surface, foreground, muted, primary,
-status, border, radius, spacing, shadow, layout-width, z-index, and motion
-tokens. Organization primary-color branding can be applied through
+status, border, radius, spacing, shadow, layout-width, sidebar/header,
+control-height, typography, z-index, and motion tokens. Organization
+primary-color branding can be applied through
 `applyBranding`; it accepts only 3- or 6-digit hexadecimal colors. Light and
 dark tokens are centralized, with system theme as the default. The UI package
 provides reusable layout and responsive shell classes, form controls, buttons,
@@ -106,11 +117,12 @@ or authentication state in local or session storage. Expired sessions return
 to sign-in, while 401/403/404 and transport failures receive safe user-facing
 messages rather than raw backend details.
 
-Navigation can be filtered with `filterNavigation` only when a future API
-contract supplies server-resolved permissions and entitled modules. The
-current session response does not expose those capability lists, so the shell
-does not pretend to show or enforce them. A hidden action is usability only;
-the API and database remain the authorization boundary.
+The current session response does not expose permission lists, so the shell
+does not infer roles or permissions from client state. Where a protected API
+read exists, a successful read may be used to make its corresponding
+navigation item visible as a usability cue; the API and database remain the
+authorization boundary. Hidden navigation and failed capability probes do not
+grant or deny access to the underlying endpoint.
 
 The notification inbox displays only the signed-in recipient's notifications
 and exposes the existing mark-read operation. User preferences are

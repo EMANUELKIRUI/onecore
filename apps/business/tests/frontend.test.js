@@ -110,6 +110,39 @@ describe("authenticated business shell", () => {
     expect(styles).toContain("@media (max-width: 480px)");
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
     expect(styles).toContain(".oc-table-wrap");
+    expect(styles).toContain(".oc-sidebar-backdrop:not([hidden])");
+    expect(styles).toContain(".oc-dashboard-metrics");
+  });
+
+  it("provides a branded responsive shell and operable accessible controls", () => {
+    expect(page).toContain("OneCore");
+    expect(page).toContain("Business OS");
+    expect(page).toContain('id="menu-toggle"');
+    expect(page).toContain('id="sidebar-backdrop"');
+    expect(page).toContain('aria-label="Open navigation"');
+    expect(page).toContain('id="global-search-form"');
+    expect(page).toContain('id="password-visibility"');
+    expect(application).toContain(
+      'sidebar.querySelector(".oc-nav a:not([hidden])")',
+    );
+    expect(application).toContain("globalSearchDialog.showModal()");
+    expect(application).toContain("globalSearchSequence");
+    expect(application).toContain("dashboard-workflows-link");
+    expect(application).toContain("dashboard-modules-link");
+    expect(styles).toContain("@media (max-width: 900px)");
+    expect(styles).toContain("@media (max-width: 720px)");
+    expect(styles).toContain("@media (max-width: 480px)");
+  });
+
+  it("searches only authorized Business Manager customer and catalog APIs", () => {
+    expect(application).toContain("businessResourceEndpoint(target.view)");
+    expect(application).toContain('label: "Customer"');
+    expect(application).toContain('label: "Catalog item"');
+    expect(application).toContain("Promise.allSettled");
+    expect(application).toContain("currentSession !== session");
+    expect(application).not.toMatch(
+      /sample customers|demo products|fake metrics/i,
+    );
   });
 });
 

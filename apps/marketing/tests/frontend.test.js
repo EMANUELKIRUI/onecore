@@ -13,6 +13,9 @@ describe("public marketing experience", () => {
     expect(page).toContain('aria-label="Main navigation"');
     expect(page).toContain('aria-label="Footer"');
     expect(page).toContain('href="#main-content"');
+    expect(page).toContain('class="oc-hero"');
+    expect(page).toContain('class="oc-platform-visual"');
+    expect(page).toContain('class="oc-brand-mark"');
   });
 
   it("states unavailable product, pricing, and registration boundaries honestly", () => {

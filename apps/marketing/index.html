@@ -11,12 +11,15 @@
     <title>OneCore Business OS · One platform for organizations</title>
     <link rel="stylesheet" href="../../packages/ui/styles.css" />
   </head>
-  <body>
+  <body class="oc-public-page">
     <a class="oc-skip-link" href="#main-content">Skip to main content</a>
     <header class="oc-container oc-public-header">
       <a class="oc-brand" href="./" aria-label="OneCore home">
         <span class="oc-brand-mark" aria-hidden="true">O</span>
-        <span>OneCore</span>
+        <span class="oc-brand__text">
+          <strong>OneCore</strong>
+          <span>Business OS</span>
+        </span>
       </a>
       <nav class="oc-public-nav" aria-label="Main navigation">
         <a href="#products">Products</a>
@@ -31,20 +34,54 @@
 
     <main id="main-content" class="oc-container">
       <section class="oc-hero" aria-labelledby="hero-title">
-        <span class="oc-status">OneCore Business OS</span>
-        <h1 id="hero-title" class="oc-title">
-          One platform.<br />
-          Every organization. Anywhere.
-        </h1>
-        <p>
-          A shared foundation for organization identity, access, configuration,
-          and the business capabilities each organization is entitled to use.
-        </p>
-        <div class="oc-cluster">
-          <a class="oc-button" href="../business/">Open your workspace</a>
-          <a class="oc-button oc-button--secondary" href="#products">
-            Explore the platform
-          </a>
+        <div class="oc-hero__copy">
+          <span class="oc-status">OneCore Business OS</span>
+          <h1 id="hero-title" class="oc-title">
+            One platform.<br />
+            <span class="oc-hero__accent">Every organization.</span>
+          </h1>
+          <p>
+            A shared foundation for organization identity, access,
+            configuration, and the business capabilities each organization is
+            entitled to use.
+          </p>
+          <div class="oc-cluster">
+            <a class="oc-button" href="../business/">Open your workspace</a>
+            <a class="oc-button oc-button--secondary" href="#products">
+              Explore the platform
+            </a>
+          </div>
+        </div>
+        <div
+          class="oc-platform-visual"
+          role="img"
+          aria-label="OneCore connects identity, organization context, and authorized capabilities."
+        >
+          <div class="oc-platform-visual__heading">
+            <span>OneCore foundation</span>
+            <strong>Connected by design</strong>
+          </div>
+          <div class="oc-platform-layer">
+            <span class="oc-platform-layer__icon" aria-hidden="true">01</span>
+            <span>
+              <strong>Identity &amp; access</strong>
+              Verified sign-in and permissions
+            </span>
+          </div>
+          <div class="oc-platform-layer">
+            <span class="oc-platform-layer__icon" aria-hidden="true">02</span>
+            <span>
+              <strong>Organization context</strong>
+              Work within authorized organizations and branches
+            </span>
+          </div>
+          <div class="oc-platform-layer">
+            <span class="oc-platform-layer__icon" aria-hidden="true">03</span>
+            <span>
+              <strong>Entitled capabilities</strong>
+              Shared services and Business Manager
+            </span>
+          </div>
         </div>
       </section>
 
@@ -64,7 +101,8 @@
           available in this workspace.
         </p>
         <div class="oc-grid oc-grid--cards">
-          <article class="oc-card oc-stack">
+          <article class="oc-card oc-stack oc-feature-card">
+            <span class="oc-feature-card__icon" aria-hidden="true">01</span>
             <h3>Organization workspace</h3>
             <p class="oc-muted">
               Sign in and work within an organization and authorized branch
@@ -72,14 +110,16 @@
             </p>
             <a href="../business/">Open the workspace</a>
           </article>
-          <article class="oc-card oc-stack">
+          <article class="oc-card oc-stack oc-feature-card">
+            <span class="oc-feature-card__icon" aria-hidden="true">02</span>
             <h3>Shared platform services</h3>
             <p class="oc-muted">
               Identity, permissions, module entitlements, settings, events, and
               in-app notifications support future OneCore capabilities.
             </p>
           </article>
-          <article class="oc-card oc-stack">
+          <article class="oc-card oc-stack oc-feature-card">
+            <span class="oc-feature-card__icon" aria-hidden="true">03</span>
             <h3>Business modules</h3>
             <p class="oc-muted">
               POS, inventory, finance, HR, CRM, and industry-specific modules
@@ -116,21 +156,24 @@
           Shared capabilities with clear boundaries
         </h2>
         <div class="oc-grid oc-grid--cards">
-          <article class="oc-card oc-stack">
+          <article class="oc-card oc-stack oc-feature-card">
+            <span class="oc-feature-card__icon" aria-hidden="true">01</span>
             <h3>Verified organization context</h3>
             <p class="oc-muted">
               Organization membership and branch access are resolved by the
               server for each protected request.
             </p>
           </article>
-          <article class="oc-card oc-stack">
+          <article class="oc-card oc-stack oc-feature-card">
+            <span class="oc-feature-card__icon" aria-hidden="true">02</span>
             <h3>Roles and permissions</h3>
             <p class="oc-muted">
               Central authorization and module entitlements define access.
               Interface visibility never grants permission.
             </p>
           </article>
-          <article class="oc-card oc-stack">
+          <article class="oc-card oc-stack oc-feature-card">
+            <span class="oc-feature-card__icon" aria-hidden="true">03</span>
             <h3>Configuration and activity</h3>
             <p class="oc-muted">
               Supported settings, notifications, and workflow execution history
@@ -167,7 +210,10 @@
     <footer class="oc-container oc-public-footer">
       <a class="oc-brand" href="./">
         <span class="oc-brand-mark" aria-hidden="true">O</span>
-        <span>OneCore Business OS</span>
+        <span class="oc-brand__text">
+          <strong>OneCore</strong>
+          <span>Business OS</span>
+        </span>
       </a>
       <nav class="oc-cluster" aria-label="Footer">
         <a href="#products">Products</a>

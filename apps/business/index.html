@@ -8,70 +8,115 @@
       content="OneCore Business OS organization workspace."
     />
     <meta name="onecore-api-base" content="" />
-    <meta name="theme-color" content="#f5f7fb" />
-    <title>Business workspace · OneCore</title>
+    <meta name="theme-color" content="#10284f" />
+    <title>OneCore Business OS · Workspace</title>
     <link rel="stylesheet" href="../../packages/ui/styles.css" />
   </head>
-  <body>
+  <body class="oc-business-app">
     <a class="oc-skip-link" href="#main-content">Skip to main content</a>
     <div class="oc-toast-region" data-toast-region aria-live="polite"></div>
 
     <div id="main-content">
       <section
         id="auth-view"
-        class="oc-auth-frame"
+        class="oc-auth-frame oc-auth-frame--split"
         aria-labelledby="login-title"
       >
-        <div class="oc-card oc-auth-card oc-stack">
-          <a class="oc-brand" href="../marketing/">
+        <div class="oc-auth-aside">
+          <a class="oc-brand oc-brand--light" href="../marketing/">
             <span class="oc-brand-mark" aria-hidden="true">O</span>
-            <span>OneCore</span>
+            <span class="oc-brand__text">
+              <strong>OneCore</strong>
+              <span>Business OS</span>
+            </span>
           </a>
-          <div class="oc-stack">
-            <span class="oc-status">Business workspace</span>
-            <h1 id="login-title" class="oc-title">Sign in to OneCore</h1>
-            <p class="oc-muted">
-              Continue to your organization workspace using your OneCore
-              account.
+          <div class="oc-auth-aside__message">
+            <span class="oc-auth-kicker">ONECORE BUSINESS OS</span>
+            <h2>One platform.<br />Every organization.</h2>
+            <p>
+              A connected workspace for the people, access, and capabilities
+              that keep your organization moving.
             </p>
+            <div class="oc-auth-pill-row" aria-label="OneCore foundations">
+              <span>Organization context</span>
+              <span>Secure access</span>
+              <span>Business Manager</span>
+            </div>
           </div>
-          <div
-            id="auth-message"
-            class="oc-alert oc-alert--error"
-            role="alert"
-            hidden
-          ></div>
-          <form id="login-form" class="oc-stack">
-            <div class="oc-field">
-              <label for="login-email">Email address</label>
-              <input
-                id="login-email"
-                class="oc-input"
-                name="email"
-                type="email"
-                autocomplete="username"
-                required
-                maxlength="320"
-              />
+          <span class="oc-auth-aside__footer">
+            One platform. Every organization. Anywhere.
+          </span>
+        </div>
+        <div class="oc-auth-panel">
+          <div class="oc-card oc-auth-card oc-stack">
+            <a class="oc-brand oc-auth-mobile-brand" href="../marketing/">
+              <span class="oc-brand-mark" aria-hidden="true">O</span>
+              <span class="oc-brand__text">
+                <strong>OneCore</strong>
+                <span>Business OS</span>
+              </span>
+            </a>
+            <div class="oc-stack oc-auth-heading">
+              <span class="oc-status">Business workspace</span>
+              <h1 id="login-title" class="oc-title">Welcome back</h1>
+              <p class="oc-muted">
+                Sign in to continue to your organization workspace.
+              </p>
             </div>
-            <div class="oc-field">
-              <label for="login-password">Password</label>
-              <input
-                id="login-password"
-                class="oc-input"
-                name="password"
-                type="password"
-                autocomplete="current-password"
-                required
-                maxlength="1024"
-              />
-            </div>
-            <button class="oc-button" type="submit">Sign in</button>
-          </form>
-          <p class="oc-help">
-            Need help accessing your account? Contact your organization
-            administrator.
-          </p>
+            <div
+              id="auth-message"
+              class="oc-alert oc-alert--error"
+              role="alert"
+              hidden
+            ></div>
+            <form id="login-form" class="oc-stack">
+              <div class="oc-field">
+                <label for="login-email">Email address</label>
+                <input
+                  id="login-email"
+                  class="oc-input"
+                  name="email"
+                  type="email"
+                  autocomplete="username"
+                  placeholder="you@organization.com"
+                  required
+                  maxlength="320"
+                />
+              </div>
+              <div class="oc-field">
+                <label for="login-password">Password</label>
+                <div class="oc-password-control">
+                  <input
+                    id="login-password"
+                    class="oc-input"
+                    name="password"
+                    type="password"
+                    autocomplete="current-password"
+                    required
+                    maxlength="1024"
+                  />
+                  <button
+                    id="password-visibility"
+                    class="oc-button oc-button--quiet oc-password-toggle"
+                    type="button"
+                    aria-label="Show password"
+                    aria-pressed="false"
+                    aria-controls="login-password"
+                  >
+                    Show
+                  </button>
+                </div>
+              </div>
+              <button class="oc-button oc-button--wide" type="submit">
+                Sign in to OneCore
+              </button>
+            </form>
+            <p class="oc-help oc-auth-support">
+              Need help accessing your account? Contact your organization
+              administrator.
+            </p>
+            <a class="oc-auth-back" href="../marketing/">Back to OneCore</a>
+          </div>
         </div>
       </section>
 
@@ -108,95 +153,245 @@
           class="oc-sidebar"
           aria-label="Application navigation"
         >
-          <a class="oc-brand" href="../marketing/">
+          <a class="oc-brand oc-brand--light" href="../marketing/">
             <span class="oc-brand-mark" aria-hidden="true">O</span>
-            <span>OneCore</span>
+            <span class="oc-brand__text">
+              <strong>OneCore</strong>
+              <span>Business OS</span>
+            </span>
           </a>
           <nav class="oc-nav" aria-label="Workspace">
+            <span class="oc-nav__group-label">Workspace</span>
+            <a href="#overview" data-view="overview" aria-current="page">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="3" width="8" height="8" rx="2"></rect>
+                <rect x="13" y="3" width="8" height="5" rx="2"></rect>
+                <rect x="13" y="10" width="8" height="11" rx="2"></rect>
+                <rect x="3" y="13" width="8" height="8" rx="2"></rect>
+              </svg>
+              <span>Dashboard</span>
+            </a>
             <span class="oc-nav__group-label">Business Manager</span>
-            <a href="#overview" data-view="overview" aria-current="page"
-              >Overview</a
-            >
             <a
               id="organization-nav"
               href="#organization"
               data-view="organization"
               hidden
-              >Business profile</a
             >
-            <a id="customers-nav" href="#customers" data-view="customers" hidden
-              >Customers</a
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M4 21V5l8-2v18M12 8h8v13M8 8h.01M8 12h.01M8 16h.01M16 12h.01M16 16h.01M2 21h20"
+                ></path>
+              </svg>
+              <span>Business profile</span>
+            </a>
+            <a
+              id="customers-nav"
+              href="#customers"
+              data-view="customers"
+              hidden
             >
-            <a id="products-nav" href="#products" data-view="products" hidden
-              >Products &amp; services</a
-            >
-            <a href="#branches" data-view="branches">Branches</a>
-            <a id="workflow-nav" href="#workflows" data-view="workflows" hidden
-              >Workflow activity</a
-            >
-            <a id="settings-nav" href="#settings" data-view="settings" hidden
-              >Settings</a
-            >
-
-            <span class="oc-nav__group-label">Workspace</span>
-            <a href="#members" data-view="members">Users & members</a>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                <circle cx="10" cy="7" r="4"></circle>
+                <path
+                  d="M20 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"
+                ></path>
+              </svg>
+              <span>Customers</span>
+            </a>
+            <a id="products-nav" href="#products" data-view="products" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m12 3 9 5-9 5-9-5 9-5Z"></path>
+                <path d="m3 12 9 5 9-5M3 16l9 5 9-5"></path>
+              </svg>
+              <span>Products &amp; services</span>
+            </a>
+            <a href="#branches" data-view="branches">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6M9 9h.01M15 9h.01M9 12h.01M15 12h.01"
+                ></path>
+              </svg>
+              <span>Branches</span>
+            </a>
+            <span class="oc-nav__group-label">Activity</span>
             <a
               id="notifications-nav"
               href="#notifications"
               data-view="notifications"
               hidden
-              >Notifications</a
             >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"
+                ></path>
+              </svg>
+              <span>Notifications</span>
+              <span id="notification-count" class="oc-nav__count" hidden></span>
+            </a>
+            <a id="workflow-nav" href="#workflows" data-view="workflows" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="6" cy="6" r="3"></circle>
+                <circle cx="18" cy="18" r="3"></circle>
+                <path d="M9 6h4a5 5 0 0 1 5 5v4"></path>
+              </svg>
+              <span id="workflow-nav-label">Workflow activity</span>
+            </a>
+            <span class="oc-nav__group-label">Administration</span>
+            <a id="settings-nav" href="#settings" data-view="settings" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path
+                  d="m19.4 15 1.5 1.1-1.5 2.4-1.7-.7a8 8 0 0 1-1.6.9l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.6-.9l-1.7.7-1.4-2.4L9.4 15a8 8 0 0 1 0-1.9L8 12l1.4-2.4 1.7.7a8 8 0 0 1 1.6-.9l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.6.9l1.7-.7 1.5 2.4-1.5 1.1a8 8 0 0 1 0 1.9Z"
+                ></path>
+              </svg>
+              <span>Settings</span>
+            </a>
+
             <a
               id="preferences-nav"
               href="#preferences"
               data-view="preferences"
               hidden
-              >Communication preferences</a
             >
-            <a id="templates-nav" href="#templates" data-view="templates" hidden
-              >Message templates</a
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="5"></circle>
+                <path
+                  d="M12 2v2M12 20v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"
+                ></path>
+              </svg>
+              <span>Preferences</span>
+            </a>
+            <a
+              id="templates-nav"
+              href="#templates"
+              data-view="templates"
+              hidden
             >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5"></path>
+              </svg>
+              <span>Message templates</span>
+            </a>
             <a
               id="deliveries-nav"
               href="#deliveries"
               data-view="deliveries"
               hidden
-              >Delivery activity</a
             >
-            <a id="modules-nav" href="#modules" data-view="modules" hidden
-              >Modules</a
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M3 6h18M5 6v14h14V6M9 10h6M9 14h6M9 18h3M7 3h10"
+                ></path>
+              </svg>
+              <span>Delivery activity</span>
+            </a>
+            <a id="modules-nav" href="#modules" data-view="modules" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="3" width="8" height="8" rx="2"></rect>
+                <rect x="13" y="3" width="8" height="8" rx="2"></rect>
+                <rect x="3" y="13" width="8" height="8" rx="2"></rect>
+                <rect x="13" y="13" width="8" height="8" rx="2"></rect>
+              </svg>
+              <span>Modules</span>
+            </a>
+            <a id="roles-nav" href="#roles" data-view="roles" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"
+                ></path>
+                <path d="m9 12 2 2 4-4"></path>
+              </svg>
+              <span>Roles &amp; permissions</span>
+            </a>
+            <a id="features-nav" href="#features" data-view="features" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 19V5M4 19h17M8 15l4-5 3 2 5-7"></path>
+              </svg>
+              <span>Feature availability</span>
+            </a>
+            <a href="#members" data-view="members" hidden
+              >Users &amp; members</a
             >
-            <a id="roles-nav" href="#roles" data-view="roles" hidden
-              >Roles & permissions</a
-            >
-            <a id="features-nav" href="#features" data-view="features" hidden
-              >Feature availability</a
-            >
-            <a href="#audit" data-view="audit">Audit log</a>
-            <a href="#profile" data-view="profile">Profile</a>
-            <a href="#security" data-view="security">Account security</a>
+            <a href="#audit" data-view="audit" hidden>Audit log</a>
+            <a href="#profile" data-view="profile">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="8" r="4"></circle>
+                <path d="M4 21a8 8 0 0 1 16 0"></path>
+              </svg>
+              <span>Profile</span>
+            </a>
+            <a href="#security" data-view="security">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="4" y="10" width="16" height="11" rx="2"></rect>
+                <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"></path>
+              </svg>
+              <span>Account security</span>
+            </a>
           </nav>
-          <p class="oc-footer-note">
-            One platform. Every organization. Anywhere.
-          </p>
+          <div class="oc-sidebar-context" aria-live="polite">
+            <span class="oc-sidebar-context__label">Current workspace</span>
+            <strong id="sidebar-organization">No organization selected</strong>
+            <span id="sidebar-branch">Organization-wide access</span>
+          </div>
+          <a class="oc-sidebar-profile" href="#profile">
+            <span id="sidebar-avatar" class="oc-avatar" aria-hidden="true"
+              >O</span
+            >
+            <span class="oc-sidebar-profile__text">
+              <strong id="sidebar-user-name">OneCore user</strong>
+              <span id="sidebar-user-email"></span>
+            </span>
+          </a>
         </aside>
+        <button
+          id="sidebar-backdrop"
+          class="oc-sidebar-backdrop"
+          type="button"
+          aria-label="Close navigation"
+          hidden
+        ></button>
 
         <div class="oc-app-column">
           <header class="oc-topbar">
-            <div class="oc-cluster">
+            <div class="oc-topbar__brand">
               <button
                 id="menu-toggle"
-                class="oc-button oc-button--secondary oc-mobile-menu"
+                class="oc-icon-button oc-mobile-menu"
                 type="button"
                 aria-expanded="false"
                 aria-controls="app-sidebar"
+                aria-label="Open navigation"
               >
-                Menu
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 6h16M4 12h16M4 18h16"></path>
+                </svg>
               </button>
-              <span class="oc-brand-mark" aria-hidden="true">O</span>
-              <strong>Business workspace</strong>
+              <span class="oc-topbar__title">Business workspace</span>
             </div>
+            <form
+              id="global-search-form"
+              class="oc-global-search"
+              role="search"
+            >
+              <label class="oc-sr-only" for="global-search">
+                Search customers and products
+              </label>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="7"></circle>
+                <path d="m20 20-4-4"></path>
+              </svg>
+              <input
+                id="global-search"
+                class="oc-input"
+                type="search"
+                placeholder="Search customers and catalog"
+                autocomplete="off"
+                maxlength="100"
+              />
+              <kbd>/</kbd>
+            </form>
             <div class="oc-context">
               <label class="oc-field">
                 <span class="oc-label">Organization</span>
@@ -214,17 +409,66 @@
                   aria-label="Current branch"
                 ></select>
               </label>
-              <span id="user-label" class="oc-user-label oc-muted"></span>
+              <a
+                id="language-shortcut"
+                class="oc-icon-button"
+                href="#preferences"
+                aria-label="Language and communication preferences"
+                title="Language preferences"
+                hidden
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <path
+                    d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"
+                  ></path>
+                </svg>
+              </a>
+              <a
+                id="notification-shortcut"
+                class="oc-icon-button"
+                href="#notifications"
+                aria-label="Notifications"
+                title="Notifications"
+                hidden
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"
+                  ></path>
+                </svg>
+                <span
+                  id="notification-indicator"
+                  class="oc-notification-dot"
+                  hidden
+                ></span>
+              </a>
+              <a class="oc-user-chip" href="#profile" aria-label="Open profile">
+                <span
+                  id="header-avatar"
+                  class="oc-avatar oc-avatar--small"
+                  aria-hidden="true"
+                  >O</span
+                >
+                <span id="user-label" class="oc-user-label"></span>
+              </a>
               <button
                 id="theme-toggle"
-                class="oc-button oc-button--secondary"
+                class="oc-icon-button"
                 type="button"
+                aria-label="Change theme"
+                title="Change theme"
               >
-                Theme: system
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <path
+                    d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"
+                  ></path>
+                </svg>
               </button>
               <button
                 id="sign-out"
-                class="oc-button oc-button--quiet"
+                class="oc-button oc-button--secondary oc-sign-out"
                 type="button"
               >
                 Sign out
@@ -244,6 +488,34 @@
               role="alert"
               hidden
             ></div>
+            <dialog
+              id="global-search-dialog"
+              class="oc-dialog oc-search-dialog"
+              aria-labelledby="global-search-title"
+            >
+              <div class="oc-dialog__body">
+                <div class="oc-main-header">
+                  <div class="oc-stack">
+                    <span class="oc-status">Authorized results</span>
+                    <h2 id="global-search-title" class="oc-section-title">
+                      Search
+                    </h2>
+                  </div>
+                  <button
+                    id="global-search-close"
+                    class="oc-icon-button"
+                    type="button"
+                    aria-label="Close search results"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m18 6-12 12M6 6l12 12"></path>
+                    </svg>
+                  </button>
+                </div>
+                <p id="global-search-status" class="oc-muted" role="status"></p>
+                <div id="global-search-results" class="oc-search-results"></div>
+              </div>
+            </dialog>
             <section
               id="overview-view"
               class="oc-stack"
@@ -251,18 +523,119 @@
             >
               <header class="oc-main-header">
                 <div class="oc-stack">
-                  <span class="oc-status">Organization workspace</span>
-                  <h1 id="overview-title" class="oc-title">Business Manager</h1>
-                  <p id="organization-summary" class="oc-muted"></p>
+                  <span class="oc-status">BUSINESS OVERVIEW</span>
+                  <h1 id="overview-title" class="oc-title">
+                    <span id="dashboard-greeting-prefix">Good morning,</span>
+                    <span id="dashboard-greeting-name">there</span>
+                  </h1>
+                  <p class="oc-muted">
+                    Here’s what’s happening with your workspace today.
+                  </p>
+                  <p id="organization-summary" class="oc-dashboard-context"></p>
+                </div>
+                <div
+                  class="oc-cluster oc-dashboard-actions"
+                  aria-label="Quick actions"
+                >
+                  <a
+                    id="dashboard-customers-action"
+                    class="oc-button oc-button--secondary"
+                    href="#customers"
+                    hidden
+                    >Manage customers</a
+                  >
+                  <a
+                    id="dashboard-catalog-action"
+                    class="oc-button"
+                    href="#products"
+                    hidden
+                    >Open catalog</a
+                  >
                 </div>
               </header>
               <section
-                class="oc-card oc-stack"
+                id="dashboard-metrics"
+                class="oc-grid oc-dashboard-metrics"
+                aria-label="Workspace summary"
+              >
+                <article class="oc-metric-card">
+                  <span class="oc-metric-card__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path
+                        d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"
+                      ></path>
+                      <circle cx="10" cy="7" r="4"></circle>
+                      <path
+                        d="M20 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"
+                      ></path>
+                    </svg>
+                  </span>
+                  <span class="oc-metric-card__label">Organizations</span>
+                  <strong
+                    id="dashboard-organizations-count"
+                    class="oc-metric-card__value"
+                    >—</strong
+                  >
+                  <span class="oc-metric-card__hint"
+                    >Available to your account</span
+                  >
+                </article>
+                <article class="oc-metric-card">
+                  <span
+                    class="oc-metric-card__icon oc-metric-card__icon--violet"
+                    aria-hidden="true"
+                  >
+                    <svg viewBox="0 0 24 24">
+                      <path
+                        d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6M9 9h.01M15 9h.01M9 12h.01M15 12h.01"
+                      ></path>
+                    </svg>
+                  </span>
+                  <span class="oc-metric-card__label">Authorized branches</span>
+                  <strong
+                    id="dashboard-branches-count"
+                    class="oc-metric-card__value"
+                    >—</strong
+                  >
+                  <span class="oc-metric-card__hint"
+                    >In the current organization</span
+                  >
+                </article>
+                <article class="oc-metric-card">
+                  <span
+                    class="oc-metric-card__icon oc-metric-card__icon--green"
+                    aria-hidden="true"
+                  >
+                    <svg viewBox="0 0 24 24">
+                      <rect x="3" y="3" width="8" height="8" rx="2"></rect>
+                      <rect x="13" y="3" width="8" height="8" rx="2"></rect>
+                      <rect x="3" y="13" width="8" height="8" rx="2"></rect>
+                      <rect x="13" y="13" width="8" height="8" rx="2"></rect>
+                    </svg>
+                  </span>
+                  <span class="oc-metric-card__label">Enabled modules</span>
+                  <strong
+                    id="dashboard-modules-count"
+                    class="oc-metric-card__value"
+                    >—</strong
+                  >
+                  <span class="oc-metric-card__hint"
+                    >From organization entitlements</span
+                  >
+                </article>
+              </section>
+              <section
+                class="oc-card oc-stack oc-dashboard-organization"
                 aria-labelledby="workspace-title"
               >
-                <h2 id="workspace-title" class="oc-section-title">
-                  Business overview
-                </h2>
+                <div class="oc-main-header">
+                  <div class="oc-stack">
+                    <span class="oc-card-eyebrow">ORGANIZATION</span>
+                    <h2 id="workspace-title" class="oc-section-title">
+                      Workspace context
+                    </h2>
+                  </div>
+                </div>
                 <div id="workspace-empty" class="oc-empty" role="status" hidden>
                   <p><strong>No organization is selected.</strong></p>
                   <p>Select an active organization to continue.</p>
@@ -274,38 +647,59 @@
                 aria-labelledby="dashboard-modules-title"
               >
                 <div class="oc-main-header">
-                  <h2 id="dashboard-modules-title" class="oc-section-title">
-                    Modules and entitlements
-                  </h2>
-                  <a href="#modules">View all</a>
+                  <div class="oc-stack">
+                    <span class="oc-card-eyebrow">CAPABILITIES</span>
+                    <h2 id="dashboard-modules-title" class="oc-section-title">
+                      Module access
+                    </h2>
+                  </div>
+                  <a id="dashboard-modules-link" href="#modules" hidden
+                    >View all modules</a
+                  >
                 </div>
                 <div id="dashboard-modules" class="oc-stack"></div>
               </section>
               <div class="oc-grid oc-grid--cards oc-dashboard-grid">
                 <section
-                  class="oc-card oc-stack"
+                  class="oc-card oc-stack oc-dashboard-feed"
                   aria-labelledby="dashboard-notifications-title"
                 >
                   <div class="oc-main-header">
-                    <h2
-                      id="dashboard-notifications-title"
-                      class="oc-section-title"
+                    <div class="oc-stack">
+                      <span class="oc-card-eyebrow">INBOX</span>
+                      <h2
+                        id="dashboard-notifications-title"
+                        class="oc-section-title"
+                      >
+                        Recent notifications
+                      </h2>
+                    </div>
+                    <a
+                      id="dashboard-notifications-link"
+                      href="#notifications"
+                      hidden
+                      >Open inbox</a
                     >
-                      Recent notifications
-                    </h2>
-                    <a href="#notifications">Open inbox</a>
                   </div>
                   <div id="dashboard-notifications" class="oc-stack"></div>
                 </section>
                 <section
-                  class="oc-card oc-stack"
+                  class="oc-card oc-stack oc-dashboard-feed"
                   aria-labelledby="dashboard-workflows-title"
                 >
                   <div class="oc-main-header">
-                    <h2 id="dashboard-workflows-title" class="oc-section-title">
-                      Workflow activity
-                    </h2>
-                    <a href="#workflows">View activity</a>
+                    <div class="oc-stack">
+                      <span class="oc-card-eyebrow">AUTOMATION</span>
+                      <h2
+                        id="dashboard-workflows-title"
+                        class="oc-section-title"
+                      >
+                        Recent activity
+                      </h2>
+                    </div>
+                    <a id="dashboard-workflows-link" href="#workflows" hidden
+                      >View activity</a
+                    >
                   </div>
                   <div id="dashboard-workflows" class="oc-stack"></div>
                 </section>
