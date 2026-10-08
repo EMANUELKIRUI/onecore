@@ -362,6 +362,24 @@ const configurationPermissions = {
   domainsManage: "core.organization.domains.manage",
 } as const;
 
+const workflowConfigurationTypeErrors = new Set([
+  "WORKFLOW_CONFIGURATION_LIMIT_INVALID",
+  "WORKFLOW_CONDITION_FIELD_UNAVAILABLE",
+  "WORKFLOW_GRAPH_INVALID",
+  "WORKFLOW_ACTION_NOT_SUPPORTED",
+  "WORKFLOW_RECIPIENT_FIELD_UNAVAILABLE",
+]);
+
+function isWorkflowConfigurationError(error: unknown): boolean {
+  return (
+    error instanceof z.ZodError ||
+    (error instanceof TypeError &&
+      workflowConfigurationTypeErrors.has(error.message)) ||
+    (error instanceof JobExecutionError &&
+      error.code === "WORKFLOW_CONDITION_INVALID")
+  );
+}
+
 interface OperationResponse {
   statusCode: number;
   body: unknown;
@@ -1382,7 +1400,8 @@ export function registerConfigurationResourceRoutes(
               context.organizationId,
               version.id,
             );
-          } catch {
+          } catch (error) {
+            if (!isWorkflowConfigurationError(error)) throw error;
             return response(400, {
               error: {
                 code: "INVALID_WORKFLOW",

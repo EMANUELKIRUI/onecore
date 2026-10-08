@@ -11,7 +11,7 @@ for the recorded platform foundations.
 
 ### Status
 
-PLANNED
+IN PROGRESS
 
 ### Objective
 
@@ -28,9 +28,9 @@ run.
 This phase follows Phase 17 because OneCore now has provider-neutral
 communications contracts and queueing, in addition to the earlier workflow
 metadata, transactional event, job, tenant-isolation, and in-app notification
-foundations. Workflow definitions and actions are still metadata; no workflow
-execution engine currently exists. This phase closes that specific gap without
-starting a business module or enabling external provider delivery.
+foundations. Workflow definitions and actions were metadata before this phase;
+this phase adds bounded execution without starting a business module or
+enabling external provider delivery.
 
 ### Scope
 
