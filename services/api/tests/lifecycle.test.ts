@@ -100,6 +100,41 @@ function testLifecycleService(
     deploymentType: "SAAS",
   };
   return {
+    listPublicModules: vi.fn(async () => [
+      {
+        name: "core.business_manager",
+        displayName: "Business Manager",
+        description: "Customer and catalog management.",
+      },
+    ]),
+    submitOrganizationApplication: vi.fn(async (input) => {
+      const data = input as { name: string; slug: string; industry: string };
+      return {
+        organization: {
+          id: crypto.randomUUID(),
+          name: data.name,
+          slug: data.slug,
+          industry: data.industry,
+          status: "PENDING",
+          deploymentType: "SAAS",
+          profile: {},
+          createdAt: new Date("2026-10-08T00:00:00.000Z"),
+          updatedAt: new Date("2026-10-08T00:00:00.000Z"),
+        },
+      } as never;
+    }),
+    listOrganizationApplications: vi.fn(async () => []),
+    transitionOrganizationApplication: vi.fn(async (id, status) => ({
+      id,
+      name: "Created Organization",
+      slug: "created-organization",
+      industry: "Retail",
+      status,
+      deploymentType: "SAAS",
+      profile: {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })) as never,
     createOrganization: vi.fn(
       async () =>
         ({
@@ -136,6 +171,140 @@ function testLifecycleService(
 }
 
 describe("lifecycle API routes", () => {
+  const applicationPayload = {
+    name: "Example Trading Limited",
+    slug: "example-trading",
+    industry: "Retail",
+    deploymentType: "SAAS",
+    contactEmail: "contact@example.test",
+    contactPhone: "+254700000001",
+    ownerName: "Example Owner",
+    ownerEmail: "owner@example.test",
+    countryCode: "KE",
+    region: "Nairobi",
+    city: "Nairobi",
+    address: "Business district",
+    requestedModules: ["core.business_manager"],
+  };
+
+  it("serves the real public module catalog and accepts an application without creating an account", async () => {
+    const lifecycle = testLifecycleService();
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+      undefined,
+      { lifecycleMutations: lifecycle },
+    );
+    const modules = await app.inject({
+      method: "GET",
+      url: "/public/organization-applications/modules",
+    });
+    const submitted = await app.inject({
+      method: "POST",
+      url: "/public/organization-applications",
+      headers: { "content-type": "application/json" },
+      payload: applicationPayload,
+    });
+
+    expect(modules.statusCode).toBe(200);
+    expect(modules.json().modules).toEqual([
+      expect.objectContaining({ name: "core.business_manager" }),
+    ]);
+    expect(submitted.statusCode).toBe(201);
+    expect(submitted.json().application).toMatchObject({
+      reference: "example-trading",
+      organizationName: "Example Trading Limited",
+      status: "PENDING",
+    });
+    expect(submitted.body).not.toContain("ownerUserId");
+    expect(submitted.body).not.toContain("password");
+    expect(lifecycle.submitOrganizationApplication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerEmail: "owner@example.test",
+        requestedModules: ["core.business_manager"],
+      }),
+      expect.objectContaining({ requestId: expect.any(String) }),
+    );
+    await app.close();
+  });
+
+  it("rejects invalid public applications and reports duplicate applications safely", async () => {
+    const lifecycle = testLifecycleService({
+      submitOrganizationApplication: vi.fn(async () => {
+        throw new LifecycleMutationError("APPLICATION_ALREADY_EXISTS");
+      }),
+    });
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+      undefined,
+      { lifecycleMutations: lifecycle },
+    );
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/public/organization-applications",
+      headers: { "content-type": "application/json" },
+      payload: { ...applicationPayload, ownerEmail: "not-an-email" },
+    });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/public/organization-applications",
+      headers: { "content-type": "application/json" },
+      payload: applicationPayload,
+    });
+
+    expect(invalid.statusCode).toBe(400);
+    expect(lifecycle.submitOrganizationApplication).not.toHaveBeenCalled();
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.json().error.message).toBe(
+      "An application using these details already exists.",
+    );
+    await app.close();
+  });
+
+  it("restricts application review to the superadmin lifecycle service", async () => {
+    const { identity, secret } = authenticatedIdentity();
+    const listOrganizationApplications = vi.fn(async () => {
+      throw new LifecycleMutationError("LIFECYCLE_UNAUTHORIZED");
+    });
+    const transitionOrganizationApplication = vi.fn(async () => {
+      throw new LifecycleMutationError("LIFECYCLE_UNAUTHORIZED");
+    });
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      undefined,
+      {
+        lifecycleMutations: testLifecycleService({
+          listOrganizationApplications,
+          transitionOrganizationApplication,
+        }),
+      },
+    );
+    const anonymousList = await app.inject({
+      method: "GET",
+      url: "/platform/organization-applications",
+    });
+    const tenantList = await app.inject({
+      method: "GET",
+      url: "/platform/organization-applications",
+      cookies: { onecore_session: secret },
+    });
+    const tenantApproval = await app.inject({
+      method: "POST",
+      url: `/platform/organization-applications/${crypto.randomUUID()}/status`,
+      cookies: { onecore_session: secret },
+      headers: { "content-type": "application/json" },
+      payload: { status: "APPROVED" },
+    });
+
+    expect(anonymousList.statusCode).toBe(401);
+    expect(tenantList.statusCode).toBe(403);
+    expect(tenantApproval.statusCode).toBe(403);
+    expect(transitionOrganizationApplication).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
   it("requires a validated session and superadmin service decision for organization creation", async () => {
     const { identity, secret, userId } = authenticatedIdentity();
     const lifecycle = testLifecycleService({

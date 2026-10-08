@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Request a OneCore Business OS account for your organization."
+    />
+    <meta name="onecore-api-base" content="" />
+    <meta name="theme-color" content="#10284f" />
+    <title>Request a Business Account · OneCore</title>
+    <link rel="stylesheet" href="../../../packages/ui/styles.css" />
+    <script type="module" src="./registration.js"></script>
+  </head>
+  <body class="oc-public-page">
+    <a class="oc-skip-link" href="#main-content">Skip to main content</a>
+    <header class="oc-container oc-public-header">
+      <a class="oc-brand" href="../" aria-label="OneCore home">
+        <span class="oc-brand-mark" aria-hidden="true">O</span>
+        <span class="oc-brand__text">
+          <strong>OneCore</strong>
+          <span>Business OS</span>
+        </span>
+      </a>
+      <nav class="oc-public-nav" aria-label="Main navigation">
+        <a href="../#products">Products</a>
+        <a href="../#pricing">Plans</a>
+        <a class="oc-button oc-button--secondary" href="../../business/">
+          Sign in
+        </a>
+      </nav>
+    </header>
+    <main id="main-content" class="oc-container">
+      <nav class="oc-breadcrumbs" aria-label="Breadcrumb">
+        <ol>
+          <li><a href="../">OneCore</a></li>
+          <li aria-current="page">Request a Business Account</li>
+        </ol>
+      </nav>
+      <section class="oc-auth-frame" aria-labelledby="registration-title">
+        <div class="oc-card oc-auth-card oc-stack">
+          <span class="oc-status">Organization application</span>
+          <h1 id="registration-title" class="oc-title">
+            Request a Business Account
+          </h1>
+          <p class="oc-muted">
+            Submit your organization details for review. This request does not
+            create an owner login or activate Business OS access.
+          </p>
+          <ol
+            id="registration-progress"
+            class="oc-cluster"
+            aria-label="Application progress"
+          ></ol>
+          <div id="registration-message" role="alert" hidden></div>
+          <form id="registration-form" class="oc-stack" novalidate></form>
+          <p class="oc-help">
+            Submission creates a pending application. A OneCore administrator
+            must review and approve it before account setup can continue.
+          </p>
+        </div>
+      </section>
+    </main>
+    <footer class="oc-container oc-public-footer">
+      <a class="oc-brand" href="../">
+        <span class="oc-brand-mark" aria-hidden="true">O</span>
+        <span class="oc-brand__text">
+          <strong>OneCore</strong>
+          <span>Business OS</span>
+        </span>
+      </a>
+      <a href="../../business/">Workspace sign in</a>
+    </footer>
+  </body>
+</html>

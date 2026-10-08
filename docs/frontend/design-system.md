@@ -7,8 +7,10 @@ Phase 14 completes the dependency-free frontend foundation in
 platform, products, industries, features, and pricing information alongside
 workspace sign-in. These pages describe shared capabilities and clearly state
 that business modules, public pricing, and self-service registration are not
-available; they do not fetch fabricated content. There is no public
-registration/onboarding API.
+available; they do not fetch fabricated content. The public
+`apps/marketing/register/` entry explains this limitation and directs existing
+users to sign in. `POST /platform/organizations` is restricted to authenticated
+platform superadmins and is not a public registration/onboarding API.
 
 The business application provides login/session bootstrap, a data-backed
 dashboard, verified organization/branch context selection, profile/session

@@ -58,6 +58,31 @@ const eventDefinitions = {
       })
       .strict(),
   },
+  ORGANIZATION_APPLICATION_SUBMITTED: {
+    version: 1,
+    owningModule: "core.organization",
+    description: "A public organization account application was submitted.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        name: z.string().trim().min(1).max(200),
+        industry: z.string().trim().min(1).max(100),
+        deploymentType: deploymentTypeSchema,
+      })
+      .strict(),
+  },
+  ORGANIZATION_STATUS_CHANGED: {
+    version: 1,
+    owningModule: "core.organization",
+    description: "An organization entered a new lifecycle status.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        previousStatus: organizationStatusSchema,
+        status: organizationStatusSchema,
+      })
+      .strict(),
+  },
   USER_CREATED: {
     version: 1,
     owningModule: "core.identity",

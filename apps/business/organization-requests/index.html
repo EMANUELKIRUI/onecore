@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="onecore-api-base" content="" />
+    <meta name="theme-color" content="#10284f" />
+    <title>Organization requests · OneCore</title>
+    <link rel="stylesheet" href="../../../packages/ui/styles.css" />
+    <script type="module" src="./requests.js"></script>
+  </head>
+  <body class="oc-business-app">
+    <a class="oc-skip-link" href="#main-content">Skip to main content</a>
+    <header class="oc-container oc-public-header">
+      <a class="oc-brand oc-brand--light" href="../">
+        <span class="oc-brand-mark" aria-hidden="true">O</span>
+        <span class="oc-brand__text">
+          <strong>OneCore</strong>
+          <span>Platform administration</span>
+        </span>
+      </a>
+      <nav class="oc-public-nav" aria-label="Platform navigation">
+        <a href="../">Business workspace</a>
+        <a href="../../marketing/">OneCore home</a>
+      </nav>
+    </header>
+    <main id="main-content" class="oc-container oc-stack">
+      <header class="oc-main-header">
+        <div class="oc-stack">
+          <span class="oc-status">Platform administration</span>
+          <h1 class="oc-title">Organization requests</h1>
+          <p class="oc-muted">
+            Review account applications. Only authorized platform Superadmins
+            can view or change application status.
+          </p>
+        </div>
+        <button id="refresh-applications" class="oc-button oc-button--secondary">
+          Refresh
+        </button>
+      </header>
+      <div id="request-message" class="oc-alert" role="status" hidden></div>
+      <div class="oc-grid">
+        <section class="oc-card oc-stack" aria-labelledby="requests-title">
+          <h2 id="requests-title" class="oc-section-title">Applications</h2>
+          <div id="request-list" aria-live="polite"></div>
+        </section>
+        <section class="oc-card oc-stack" aria-labelledby="detail-title">
+          <h2 id="detail-title" class="oc-section-title">Application detail</h2>
+          <div id="request-detail">
+            <p class="oc-muted">Choose an application to review.</p>
+          </div>
+        </section>
+      </div>
+      <a class="oc-auth-back" href="../">Return to workspace</a>
+    </main>
+  </body>
+</html>

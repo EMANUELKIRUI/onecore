@@ -120,6 +120,8 @@ describe("platform domain values", () => {
         "CATALOG_ITEM_DELETED",
         "ORGANIZATION_CREATED",
         "ORGANIZATION_ACTIVATED",
+        "ORGANIZATION_APPLICATION_SUBMITTED",
+        "ORGANIZATION_STATUS_CHANGED",
         "USER_CREATED",
         "USER_INVITED",
         "USER_ROLE_CHANGED",

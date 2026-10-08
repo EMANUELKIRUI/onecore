@@ -3,14 +3,16 @@ import {
   canTransitionOrganizationStatus,
   createDomainEvent,
   defaultOrganizationRoleTemplates,
+  organizationStatusSchema,
 } from "@onecore/core-domain";
-import { and, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Database, OrganizationTransaction } from "./index.js";
 import { recordOutboxEvent } from "./outbox.js";
 import {
   auditLogs,
   membershipRoles,
+  modules,
   organizationMemberships,
   organizations,
   platformUserRoles,
@@ -39,6 +41,29 @@ const organizationInputSchema = z.object({
     passwordHash: z.string().min(1).optional(),
   }),
 });
+const organizationApplicationSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    slug: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    industry: z.string().trim().min(1).max(100),
+    deploymentType: z.literal("SAAS"),
+    contactEmail: z.email().trim().toLowerCase().max(320),
+    contactPhone: z.string().trim().min(1).max(50),
+    website: z.url().max(2_048).optional(),
+    ownerName: z.string().trim().min(1).max(200),
+    ownerEmail: z.email().trim().toLowerCase().max(320),
+    countryCode: z.string().trim().regex(/^[A-Z]{2}$/),
+    region: z.string().trim().min(1).max(100),
+    city: z.string().trim().min(1).max(100),
+    address: z.string().trim().min(1).max(300),
+    requestedModules: z.array(z.string().trim().min(1).max(100)).max(50),
+  })
+  .strict();
 const userInputSchema = z.object({
   email: z.email().trim().toLowerCase().max(320),
   displayName: z.string().trim().min(1).max(200),
@@ -82,7 +107,8 @@ export class LifecycleMutationError extends Error {
       | "BOOTSTRAP_OWNER_CANNOT_BE_SUPERADMIN"
       | "USER_NOT_ACTIVE"
       | "USER_ALREADY_EXISTS"
-      | "MEMBERSHIP_ALREADY_EXISTS",
+      | "MEMBERSHIP_ALREADY_EXISTS"
+      | "APPLICATION_ALREADY_EXISTS",
   ) {
     super(code);
     this.name = "LifecycleMutationError";
@@ -90,6 +116,22 @@ export class LifecycleMutationError extends Error {
 }
 
 export interface LifecycleMutationService {
+  listPublicModules(): Promise<
+    Array<{ name: string; displayName: string; description: string | null }>
+  >;
+  submitOrganizationApplication(
+    input: unknown,
+    metadata: LifecycleRequestMetadata,
+  ): Promise<{ organization: typeof organizations.$inferSelect }>;
+  listOrganizationApplications(
+    actor: PlatformLifecycleActor,
+  ): Promise<Array<typeof organizations.$inferSelect>>;
+  transitionOrganizationApplication(
+    organizationId: string,
+    status: "UNDER_REVIEW" | "APPROVED" | "REJECTED",
+    actor: PlatformLifecycleActor,
+    metadata: LifecycleRequestMetadata,
+  ): Promise<typeof organizations.$inferSelect>;
   createOrganization(
     input: unknown,
     actor: PlatformLifecycleActor,
@@ -572,6 +614,250 @@ export function createLifecycleMutationService(
   database: Database,
 ): LifecycleMutationService {
   return {
+    async listPublicModules() {
+      const available = await database
+        .select({
+          name: modules.key,
+          displayName: modules.name,
+          description: modules.description,
+        })
+        .from(modules)
+        .where(
+          and(eq(modules.lifecycle, "AVAILABLE"), eq(modules.isAvailable, true)),
+        )
+        .orderBy(asc(modules.name));
+      return available;
+    },
+
+    async submitOrganizationApplication(input, metadata) {
+      const data = organizationApplicationSchema.parse(input);
+      return database.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select set_config('app.organization_application_owner_email', ${data.ownerEmail}, true)`,
+        );
+        await transaction.execute(
+          sql`select set_config('app.organization_application_slug', ${data.slug}, true)`,
+        );
+        const availableModules = await transaction
+          .select({ key: modules.key })
+          .from(modules)
+          .where(
+            and(
+              eq(modules.lifecycle, "AVAILABLE"),
+              eq(modules.isAvailable, true),
+            ),
+          );
+        const availableModuleKeys = new Set(
+          availableModules.map(({ key }) => key),
+        );
+        if (
+          new Set(data.requestedModules).size !== data.requestedModules.length ||
+          data.requestedModules.some((key) => !availableModuleKeys.has(key))
+        ) {
+          throw new TypeError("APPLICATION_MODULE_UNAVAILABLE");
+        }
+
+        const [existingSlug] = await transaction
+          .select({ id: organizations.id })
+          .from(organizations)
+          .where(eq(organizations.slug, data.slug))
+          .limit(1);
+        const [existingApplication] = await transaction
+          .select({ id: organizations.id })
+          .from(organizations)
+          .where(
+            and(
+              sql`lower(${organizations.profile}->'application'->>'ownerEmail') = ${data.ownerEmail}`,
+              inArray(organizations.status, [
+                "PENDING",
+                "UNDER_REVIEW",
+                "APPROVED",
+                "PAYMENT_PENDING",
+                "ACTIVE",
+              ]),
+            ),
+          )
+          .limit(1);
+        if (existingSlug || existingApplication) {
+          throw new LifecycleMutationError("APPLICATION_ALREADY_EXISTS");
+        }
+
+        const organizationId = randomUUID();
+        await transaction.execute(
+          sql`select set_config('app.current_organization_id', ${organizationId}, true)`,
+        );
+        await transaction.execute(
+          sql`select set_config('app.organization_application_submission', 'true', true)`,
+        );
+        const profile = {
+          application: {
+            contactEmail: data.contactEmail,
+            contactPhone: data.contactPhone,
+            ...(data.website ? { website: data.website } : {}),
+            ownerName: data.ownerName,
+            ownerEmail: data.ownerEmail,
+            countryCode: data.countryCode,
+            region: data.region,
+            city: data.city,
+            address: data.address,
+            requestedModules: data.requestedModules,
+          },
+        };
+        const [organization] = await transaction
+          .insert(organizations)
+          .values({
+            id: organizationId,
+            name: data.name,
+            slug: data.slug,
+            industry: data.industry,
+            status: "PENDING",
+            deploymentType: data.deploymentType,
+            profile,
+          })
+          .returning();
+        if (!organization) throw new Error("ORGANIZATION_APPLICATION_FAILED");
+
+        await transaction.insert(auditLogs).values({
+          organizationId,
+          action: "ORGANIZATION_APPLICATION_SUBMITTED",
+          resource: "organization",
+          resourceId: organizationId,
+          result: "SUCCESS",
+          requestMetadata: {
+            requestId: metadata.requestId,
+            correlationId: metadata.correlationId,
+          },
+          beforeState: null,
+          afterState: {
+            status: "PENDING",
+            name: data.name,
+            industry: data.industry,
+            deploymentType: data.deploymentType,
+          },
+        });
+        await recordOutboxEvent(
+          transaction,
+          createDomainEvent({
+            eventType: "ORGANIZATION_APPLICATION_SUBMITTED",
+            organizationId,
+            correlationId: metadata.correlationId,
+            aggregateType: "organization",
+            aggregateId: organizationId,
+            payload: {
+              name: data.name,
+              industry: data.industry,
+              deploymentType: data.deploymentType,
+            },
+            metadata: { requestId: metadata.requestId },
+          }),
+        );
+        return { organization };
+      });
+    },
+
+    async listOrganizationApplications(actor) {
+      return withAuthenticatedUserTransaction(
+        database,
+        actor.userId,
+        async (transaction) => {
+          await verifyPlatformActor(transaction, actor);
+          const applications = await transaction
+            .select()
+            .from(organizations)
+            .where(
+              inArray(organizations.status, [
+                "PENDING",
+                "UNDER_REVIEW",
+                "APPROVED",
+                "REJECTED",
+              ]),
+            )
+            .orderBy(asc(organizations.createdAt));
+          return applications;
+        },
+      );
+    },
+
+    async transitionOrganizationApplication(
+      organizationId,
+      status,
+      actor,
+      metadata,
+    ) {
+      const targetStatus = organizationStatusSchema.parse(status);
+      const trustedOrganizationId = uuidSchema.parse(organizationId);
+      return withAuthenticatedUserTransaction(
+        database,
+        actor.userId,
+        async (transaction) => {
+          await verifyPlatformActor(transaction, actor);
+          await setOrganizationContext(transaction, trustedOrganizationId);
+          const [organization] = await transaction
+            .select()
+            .from(organizations)
+            .where(eq(organizations.id, trustedOrganizationId))
+            .for("update")
+            .limit(1);
+          if (!organization) {
+            throw new LifecycleMutationError("ORGANIZATION_NOT_FOUND");
+          }
+          if (
+            !["PENDING", "UNDER_REVIEW", "APPROVED", "REJECTED"].includes(
+              organization.status,
+            ) ||
+            !canTransitionOrganizationStatus(organization.status, targetStatus)
+          ) {
+            throw new LifecycleMutationError(
+              "INVALID_ORGANIZATION_STATE_TRANSITION",
+            );
+          }
+          const [updated] = await transaction
+            .update(organizations)
+            .set({ status: targetStatus, updatedAt: new Date() })
+            .where(
+              and(
+                eq(organizations.id, trustedOrganizationId),
+                eq(organizations.status, organization.status),
+              ),
+            )
+            .returning();
+          if (!updated) {
+            throw new LifecycleMutationError(
+              "INVALID_ORGANIZATION_STATE_TRANSITION",
+            );
+          }
+          await writeLifecycleAudit(
+            transaction,
+            trustedOrganizationId,
+            actor.userId,
+            metadata,
+            "ORGANIZATION_APPLICATION_STATUS_CHANGED",
+            "organization",
+            trustedOrganizationId,
+            { status: organization.status },
+            { status: targetStatus },
+          );
+          await recordOutboxEvent(
+            transaction,
+            createDomainEvent({
+              eventType: "ORGANIZATION_STATUS_CHANGED",
+              organizationId: trustedOrganizationId,
+              actorUserId: actor.userId,
+              correlationId: metadata.correlationId,
+              aggregateType: "organization",
+              aggregateId: trustedOrganizationId,
+              payload: {
+                previousStatus: organization.status,
+                status: targetStatus,
+              },
+              metadata: { requestId: metadata.requestId },
+            }),
+          );
+          return updated;
+        },
+      );
+    },
+
     async createOrganization(input, actor, metadata) {
       const data = organizationInputSchema.parse(input);
       return withAuthenticatedUserTransaction(

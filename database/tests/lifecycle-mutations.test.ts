@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { Algorithm, hash as hashPassword } from "@node-rs/argon2";
 import { PGlite } from "@electric-sql/pglite";
+import { canTransitionOrganizationStatus } from "@onecore/core-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import type { PgliteDatabase } from "drizzle-orm/pglite";
@@ -290,6 +291,7 @@ describe("production lifecycle mutations", () => {
       userId: result.bootstrapOwner.id,
       branchAccessMode: "ALL",
     });
+
     const assignedRoles = await database
       .select({ name: schema.roles.name })
       .from(schema.membershipRoles)
@@ -620,6 +622,134 @@ describe("production lifecycle mutations", () => {
             .where(eq(schema.organizations.id, result.organization.id)),
       ),
     ).resolves.toEqual([]);
+  });
+
+  it("submits applications as pending without creating an owner account", async () => {
+    const lifecycle = createLifecycleMutationService(applicationDatabase);
+    const ownerEmail = `applicant-${crypto.randomUUID()}@example.test`;
+    const result = await lifecycle.submitOrganizationApplication(
+      {
+        name: "Application Trading",
+        slug: `application-${crypto.randomUUID()}`,
+        industry: "Retail",
+        deploymentType: "SAAS",
+        contactEmail: `contact-${crypto.randomUUID()}@example.test`,
+        contactPhone: "+254700000000",
+        ownerName: "Application Owner",
+        ownerEmail,
+        countryCode: "KE",
+        region: "Nairobi",
+        city: "Nairobi",
+        address: "Central Nairobi",
+        requestedModules: ["core.business_manager"],
+      },
+      metadata(),
+    );
+    const users = await database
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.email, ownerEmail));
+    const memberships = await database
+      .select({ id: schema.organizationMemberships.id })
+      .from(schema.organizationMemberships)
+      .where(
+        eq(
+          schema.organizationMemberships.organizationId,
+          result.organization.id,
+        ),
+      );
+    const events = await database
+      .select({ eventType: schema.outboxEvents.eventType })
+      .from(schema.outboxEvents)
+      .where(eq(schema.outboxEvents.organizationId, result.organization.id));
+
+    expect(result.organization.status).toBe("PENDING");
+    expect(result.organization.profile).toMatchObject({
+      application: { ownerEmail, requestedModules: ["core.business_manager"] },
+    });
+    expect(users).toEqual([]);
+    expect(memberships).toEqual([]);
+    expect(events.map(({ eventType }) => eventType)).toEqual([
+      "ORGANIZATION_APPLICATION_SUBMITTED",
+    ]);
+  });
+
+  it("limits review transitions to superadmins and records the pending review lifecycle", async () => {
+    const lifecycle = createLifecycleMutationService(applicationDatabase);
+    const ownerEmail = `review-${crypto.randomUUID()}@example.test`;
+    const submitted = await lifecycle.submitOrganizationApplication(
+      {
+        name: "Review Trading",
+        slug: `review-${crypto.randomUUID()}`,
+        industry: "Retail",
+        deploymentType: "SAAS",
+        contactEmail: `contact-${crypto.randomUUID()}@example.test`,
+        contactPhone: "+254700000000",
+        ownerName: "Review Owner",
+        ownerEmail,
+        countryCode: "KE",
+        region: "Nairobi",
+        city: "Nairobi",
+        address: "Central Nairobi",
+        requestedModules: [],
+      },
+      metadata(),
+    );
+    await expect(
+      lifecycle.submitOrganizationApplication(
+        {
+          name: "Different Business",
+          slug: `different-${crypto.randomUUID()}`,
+          industry: "Retail",
+          deploymentType: "SAAS",
+          contactEmail: `different-${crypto.randomUUID()}@example.test`,
+          contactPhone: "+254700000000",
+          ownerName: "Review Owner",
+          ownerEmail,
+          countryCode: "KE",
+          region: "Nairobi",
+          city: "Nairobi",
+          address: "Central Nairobi",
+          requestedModules: [],
+        },
+        metadata(),
+      ),
+    ).rejects.toMatchObject({ code: "APPLICATION_ALREADY_EXISTS" });
+
+    await expect(
+      lifecycle.listOrganizationApplications(await createActor(false)),
+    ).rejects.toMatchObject({ code: "LIFECYCLE_UNAUTHORIZED" });
+    const actor = await createActor();
+    await expect(
+      lifecycle.transitionOrganizationApplication(
+        submitted.organization.id,
+        "APPROVED",
+        actor,
+        metadata(),
+      ),
+    ).rejects.toMatchObject({
+      code: "INVALID_ORGANIZATION_STATE_TRANSITION",
+    });
+    const reviewing = await lifecycle.transitionOrganizationApplication(
+      submitted.organization.id,
+      "UNDER_REVIEW",
+      actor,
+      metadata(),
+    );
+    const approved = await lifecycle.transitionOrganizationApplication(
+      submitted.organization.id,
+      "APPROVED",
+      actor,
+      metadata(),
+    );
+    const stillNoOwner = await database
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.email, ownerEmail));
+
+    expect(reviewing.status).toBe("UNDER_REVIEW");
+    expect(approved.status).toBe("APPROVED");
+    expect(stillNoOwner).toEqual([]);
   });
 
   it("resolves an existing active identity as bootstrap owner without changing credentials", async () => {

@@ -55,6 +55,42 @@ const invitationInputSchema = z
   })
   .strict();
 const organizationPathSchema = z.object({ organizationId: z.uuid() });
+const organizationApplicationSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    slug: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    industry: z.string().trim().min(1).max(100),
+    deploymentType: z.literal("SAAS"),
+    contactEmail: z.email().trim().toLowerCase().max(320),
+    contactPhone: z.string().trim().min(1).max(50),
+    website: z.url().max(2_048).optional(),
+    ownerName: z.string().trim().min(1).max(200),
+    ownerEmail: z.email().trim().toLowerCase().max(320),
+    countryCode: z.string().trim().regex(/^[A-Z]{2}$/),
+    region: z.string().trim().min(1).max(100),
+    city: z.string().trim().min(1).max(100),
+    address: z.string().trim().min(1).max(300),
+    requestedModules: z.array(z.string().trim().min(1).max(100)).max(50),
+  })
+  .strict();
+const applicationTransitionSchema = z
+  .object({ status: z.enum(["UNDER_REVIEW", "APPROVED", "REJECTED"]) })
+  .strict();
+const applicationProfileSchema = z.object({
+  application: organizationApplicationSchema
+    .omit({
+      name: true,
+      slug: true,
+      industry: true,
+      deploymentType: true,
+    })
+    .strict(),
+});
 
 const userCreatePermission = "core.organization.user.create";
 
@@ -117,7 +153,9 @@ function sendLifecycleFailure(
         ? "The requested resource was not found."
         : statusCode === 400
           ? "A display name and password are required for a new bootstrap owner."
-          : "The requested lifecycle change conflicts with the current state.";
+          : error.code === "APPLICATION_ALREADY_EXISTS"
+            ? "An application using these details already exists."
+            : "The requested lifecycle change conflicts with the current state.";
   return sendError(reply, statusCode, code, message);
 }
 
@@ -137,6 +175,140 @@ export function registerLifecycleRoutes(
   lifecycle: LifecycleMutationService,
   config: RuntimeConfig,
 ): void {
+  let applicationRateLimit: ReturnType<typeof app.rateLimit> | undefined;
+  app.get("/public/organization-applications/modules", async (_request, reply) => {
+    const catalog = await lifecycle.listPublicModules();
+    return reply.send({ modules: catalog });
+  });
+
+  app.post(
+    "/public/organization-applications",
+    {
+      preHandler: async (request, reply) => {
+        const limiter = (applicationRateLimit ??= app.rateLimit({
+          max: 5,
+          timeWindow: "1 minute",
+        }));
+        await limiter.call(app, request, reply);
+      },
+    },
+    async (request, reply) => {
+      if (!validateMutationOrigin(request, reply, config)) return reply;
+      const body = organizationApplicationSchema.safeParse(request.body);
+      if (!body.success) {
+        return sendError(
+          reply,
+          400,
+          "BAD_REQUEST",
+          "Invalid organization application details.",
+        );
+      }
+      try {
+        const result = await lifecycle.submitOrganizationApplication(
+          body.data,
+          lifecycleMetadata(request),
+        );
+        return reply.status(201).send({
+          application: {
+            reference: result.organization.slug,
+            organizationName: result.organization.name,
+            status: result.organization.status,
+            submittedAt: result.organization.createdAt.toISOString(),
+          },
+        });
+      } catch (error) {
+        if (
+          error instanceof TypeError &&
+          error.message === "APPLICATION_MODULE_UNAVAILABLE"
+        ) {
+          return sendError(
+            reply,
+            400,
+            "BAD_REQUEST",
+            "One or more requested modules are unavailable.",
+          );
+        }
+        return sendLifecycleFailure(reply, error);
+      }
+    },
+  );
+
+  app.get(
+    "/platform/organization-applications",
+    { preHandler: requireAuthenticated() },
+    async (request, reply) => {
+      if (!request.auth) {
+        return sendError(reply, 401, "UNAUTHORIZED", "Authentication is required.");
+      }
+      try {
+        const applications = await lifecycle.listOrganizationApplications(
+          request.auth,
+        );
+        return reply.send({
+          applications: applications.map((organization) => {
+            const profile = applicationProfileSchema.parse(
+              organization.profile,
+            );
+            return {
+              reference: organization.id,
+              organization: {
+                name: organization.name,
+                slug: organization.slug,
+                industry: organization.industry,
+                deploymentType: organization.deploymentType,
+              },
+              applicant: profile.application,
+              status: organization.status,
+              submittedAt: organization.createdAt.toISOString(),
+              updatedAt: organization.updatedAt.toISOString(),
+            };
+          }),
+        });
+      } catch (error) {
+        return sendLifecycleFailure(reply, error);
+      }
+    },
+  );
+
+  app.post(
+    "/platform/organization-applications/:organizationId/status",
+    { preHandler: requireAuthenticated() },
+    async (request, reply) => {
+      if (!validateMutationOrigin(request, reply, config)) return reply;
+      const path = organizationPathSchema.safeParse(request.params);
+      const body = applicationTransitionSchema.safeParse(request.body);
+      if (!path.success || !body.success) {
+        return sendError(
+          reply,
+          400,
+          "BAD_REQUEST",
+          "Invalid organization application transition.",
+        );
+      }
+      if (!request.auth) {
+        return sendError(reply, 401, "UNAUTHORIZED", "Authentication is required.");
+      }
+      try {
+        const organization =
+          await lifecycle.transitionOrganizationApplication(
+            path.data.organizationId,
+            body.data.status,
+            request.auth,
+            lifecycleMetadata(request),
+          );
+        return reply.send({
+          application: {
+            reference: organization.id,
+            organizationName: organization.name,
+            status: organization.status,
+          },
+        });
+      } catch (error) {
+        return sendLifecycleFailure(reply, error);
+      }
+    },
+  );
+
   app.post(
     "/platform/organizations",
     {
