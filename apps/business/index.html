@@ -114,8 +114,17 @@
           </a>
           <nav class="oc-nav" aria-label="Workspace">
             <a href="#overview" data-view="overview" aria-current="page"
-              >Overview</a
+              >Dashboard</a
             >
+            <a
+              id="organization-nav"
+              href="#organization"
+              data-view="organization"
+              hidden
+              >Organization</a
+            >
+            <a href="#branches" data-view="branches">Branches</a>
+            <a href="#members" data-view="members">Users & members</a>
             <a
               id="notifications-nav"
               href="#notifications"
@@ -123,18 +132,39 @@
               hidden
               >Notifications</a
             >
+            <a
+              id="preferences-nav"
+              href="#preferences"
+              data-view="preferences"
+              hidden
+              >Communication preferences</a
+            >
+            <a id="templates-nav" href="#templates" data-view="templates" hidden
+              >Message templates</a
+            >
+            <a
+              id="deliveries-nav"
+              href="#deliveries"
+              data-view="deliveries"
+              hidden
+              >Delivery activity</a
+            >
             <a id="modules-nav" href="#modules" data-view="modules" hidden
-              >Modules & access</a
+              >Modules</a
             >
             <a id="roles-nav" href="#roles" data-view="roles" hidden
               >Roles & permissions</a
             >
             <a id="settings-nav" href="#settings" data-view="settings" hidden
-              >Organization settings</a
+              >Configuration</a
+            >
+            <a id="features-nav" href="#features" data-view="features" hidden
+              >Feature availability</a
             >
             <a id="workflow-nav" href="#workflows" data-view="workflows" hidden
               >Workflow activity</a
             >
+            <a href="#audit" data-view="audit">Audit & activity</a>
             <a href="#profile" data-view="profile">Profile</a>
             <a href="#security" data-view="security">Account security</a>
           </nav>
@@ -194,6 +224,11 @@
           </header>
 
           <main class="oc-app-main">
+            <nav class="oc-breadcrumbs" aria-label="Breadcrumb">
+              <ol id="breadcrumbs">
+                <li aria-current="page">Dashboard</li>
+              </ol>
+            </nav>
             <div
               id="app-error"
               class="oc-alert oc-alert--error"
@@ -214,26 +249,73 @@
                   <p id="organization-summary" class="oc-muted"></p>
                 </div>
               </header>
-              <section class="oc-card oc-stack" aria-labelledby="modules-title">
-                <h2 id="modules-title" class="oc-section-title">
-                  Your workspace
+              <section
+                class="oc-card oc-stack"
+                aria-labelledby="workspace-title"
+              >
+                <h2 id="workspace-title" class="oc-section-title">
+                  Organization overview
                 </h2>
                 <div id="workspace-empty" class="oc-empty" role="status" hidden>
                   <p><strong>No organization is selected.</strong></p>
                   <p>Select an active organization to continue.</p>
                 </div>
-                <div id="modules-empty" class="oc-empty">
-                  <p>
-                    <strong
-                      >No business modules are available in this workspace
-                      yet.</strong
-                    >
-                  </p>
-                  <p>
-                    Enabled modules will appear here when they are provided by
-                    your organization.
-                  </p>
+                <div id="dashboard-organization" class="oc-stack"></div>
+              </section>
+              <section
+                class="oc-card oc-stack"
+                aria-labelledby="dashboard-modules-title"
+              >
+                <div class="oc-main-header">
+                  <h2 id="dashboard-modules-title" class="oc-section-title">
+                    Modules and entitlements
+                  </h2>
+                  <a href="#modules">View all</a>
                 </div>
+                <div id="dashboard-modules" class="oc-stack"></div>
+              </section>
+              <div class="oc-grid oc-grid--cards oc-dashboard-grid">
+                <section
+                  class="oc-card oc-stack"
+                  aria-labelledby="dashboard-notifications-title"
+                >
+                  <div class="oc-main-header">
+                    <h2
+                      id="dashboard-notifications-title"
+                      class="oc-section-title"
+                    >
+                      Recent notifications
+                    </h2>
+                    <a href="#notifications">Open inbox</a>
+                  </div>
+                  <div id="dashboard-notifications" class="oc-stack"></div>
+                </section>
+                <section
+                  class="oc-card oc-stack"
+                  aria-labelledby="dashboard-workflows-title"
+                >
+                  <div class="oc-main-header">
+                    <h2 id="dashboard-workflows-title" class="oc-section-title">
+                      Workflow activity
+                    </h2>
+                    <a href="#workflows">View activity</a>
+                  </div>
+                  <div id="dashboard-workflows" class="oc-stack"></div>
+                </section>
+              </div>
+              <section
+                class="oc-state oc-state--empty"
+                aria-labelledby="dashboard-status-title"
+              >
+                <h2 id="dashboard-status-title" class="oc-section-title">
+                  Platform status
+                </h2>
+                <p>
+                  Your authenticated workspace is available. Organization
+                  services and activity below are loaded from authorized APIs;
+                  this page does not report fabricated uptime or business
+                  metrics.
+                </p>
               </section>
             </section>
 
@@ -319,6 +401,22 @@
                 </p>
                 <a href="#security">Change your password</a>
               </div>
+            </section>
+
+            <section
+              id="boundary-view"
+              class="oc-stack"
+              aria-labelledby="boundary-title"
+              hidden
+            >
+              <header class="oc-main-header">
+                <div class="oc-stack">
+                  <span id="boundary-eyebrow" class="oc-status"></span>
+                  <h1 id="boundary-title" class="oc-title"></h1>
+                  <p id="boundary-description" class="oc-muted"></p>
+                </div>
+              </header>
+              <div id="boundary-content" class="oc-stack"></div>
             </section>
 
             <section

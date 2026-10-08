@@ -469,6 +469,40 @@ p {
   gap: var(--oc-space-2);
 }
 
+.oc-breadcrumbs {
+  margin-bottom: var(--oc-space-4);
+  color: var(--oc-color-muted);
+  font-size: 0.875rem;
+}
+
+.oc-breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--oc-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.oc-breadcrumbs li + li::before {
+  padding-right: var(--oc-space-2);
+  content: "/";
+}
+
+.oc-dashboard-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+}
+
+.oc-dashboard-grid > * {
+  min-width: 0;
+}
+
+.oc-table input[type="checkbox"] {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: var(--oc-color-primary);
+}
+
 .oc-state {
   display: grid;
   gap: var(--oc-space-3);

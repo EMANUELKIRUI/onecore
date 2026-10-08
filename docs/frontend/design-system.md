@@ -10,21 +10,32 @@ that business modules, public pricing, and self-service registration are not
 available; they do not fetch fabricated content. There is no public
 registration/onboarding API.
 
-The business application provides login/session bootstrap, an authenticated
-overview, verified organization/branch context selection, profile/session
-details, password change, sign-out, notifications, workflow execution history,
-and server-authorized read views for modules/entitlements, roles/permissions,
-and organization settings. Each data view uses its existing API and renders
-loading, empty, denied/error, and retry states. Role, module, and settings
-navigation is only exposed after an API request succeeds; that UI behavior is
-not an authorization decision.
+The business application provides login/session bootstrap, a data-backed
+dashboard, verified organization/branch context selection, profile/session
+details, password change, sign-out, and existing-API views for modules and
+entitlements, roles and their permission/data-scope grants, organization
+configuration, effective feature values, notifications, notification
+preferences, communication template status/version metadata, recipient-scoped
+delivery status, and Phase 18 workflow execution history. Notification
+preferences and language use the existing self-service update endpoint.
+Dashboard previews use the same protected module, inbox, and workflow APIs;
+they do not invent uptime, transactions, counts, or business metrics. Each
+API-driven page provides loading, empty, forbidden/error, and retry states.
+Capability navigation is shown after a protected read succeeds, only as a UX
+convenience; direct URLs and hidden links do not authorize requests.
 
-Organization settings are currently a limited read-only summary. The API does
-not expose an active-session list, organization user listing, platform
-organization administration, or audit-log read route to this application.
-Consequently the UI does not pretend to provide those screens or CRUD
-operations. It does not provide a workflow designer or business-module
-screens. `apps/superadmin`, `apps/support`, and `apps/status` remain reserved.
+The organization screen updates regional preferences and legal name through
+the existing settings `PATCH` API; the API remains the authority for
+validation and permission checks. Effective feature values are read-only.
+Branches shown in the application come only from the authenticated session's
+active authorized branch choices. The session response provides the
+signed-in user's own active organization memberships, not a tenant member
+directory; membership status details and role assignment UI are therefore not
+claimed. No current organization-scoped API exposes organization lifecycle
+editing, a branch directory/manager, active-session listing/device revocation,
+or tenant audit-log reads to this application. These boundaries are explicit
+and display no fabricated records. `apps/superadmin`, `apps/support`, and
+`apps/status` remain reserved.
 
 The shared `@onecore/ui` workspace uses native HTML, CSS, and browser ES
 modules. There is no framework, router, component runtime, or client state
@@ -71,28 +82,34 @@ current session response does not expose those capability lists, so the shell
 does not pretend to show or enforce them. A hidden action is usability only;
 the API and database remain the authorization boundary.
 
-The business shell includes an API-backed notification inbox and workflow
-activity view. It displays only the signed-in recipient's notification
-content, and exposes the mark-read operation through the existing API. Workflow
-history omits event payloads, notification content, recipient data, and job
-internals. Modules and entitlements, roles and permission catalogs, and a
-limited organization configuration summary are read from existing APIs;
-settings and access catalogs are not client-side authority. The shell shows
-explicit empty states until actual business modules are implemented and must
-not show fabricated metrics or inactive routes. Public content is static and
-does not claim live API status.
+The notification inbox displays only the signed-in recipient's notifications
+and exposes the existing mark-read operation. User preferences are
+self-service; organization notification defaults remain outside this UI.
+Communication history is limited to deliveries addressed to the signed-in
+user and does not render message bodies, recipient details, provider
+credentials, or payloads. Templates are presented as status/version metadata;
+template bodies are not rendered. Workflow history omits triggering payloads,
+resource identifiers, notification content, recipient data, and job
+internals; the UI does not provide workflow authoring or scheduling. Role
+details show server-returned permission keys and scope types. None of these
+views replaces server-side authorization or tenant/branch/data-scope checks.
+The shell clearly identifies registered modules whose business UI is not
+implemented and does not present them as operational.
 
 ## Locale-aware presentation
 
 `@onecore/ui` exports translation fallback and `Intl`-based formatting helpers
 for dates, times, numbers, percentages, and currencies. Translation catalogs
 and default text are supplied by callers; the shared package does not invent
-translations or replace the existing native HTML/CSS/ES-module approach.
-Locale formatting is presentation-only. Use machine-readable API values and
-pass the organization's configured IANA timezone when formatting instants;
-formatters default to UTC rather than the browser's implicit timezone. Never
-parse localized date strings as API or database values. The server remains
-authoritative for organization configuration, authorization, and persistence.
+translations or replace the existing native HTML/CSS/ES-module approach. The
+business app uses the existing supported locale resolution and formatting
+helpers for user and regional presentation; this does not claim a fully
+translated application. Locale formatting is presentation-only. Use
+machine-readable API values and pass the organization's configured IANA
+timezone when formatting instants; formatters default to UTC rather than the
+browser's implicit timezone. Never parse localized date strings as API or
+database values. The server remains authoritative for organization
+configuration, authorization, and persistence.
 
 ## Deployment and branding
 
