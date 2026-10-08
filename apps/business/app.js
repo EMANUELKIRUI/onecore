@@ -1,5 +1,10 @@
 import { ApiError, createApiClient } from "../../packages/ui/src/api-client.js";
-import { announce, setTheme } from "../../packages/ui/src/elements.js";
+import {
+  announce,
+  createStatusBadge,
+  setTheme,
+  setBusy,
+} from "../../packages/ui/src/elements.js";
 import {
   formatDateTime,
   resolveLocale,
@@ -90,6 +95,34 @@ const workflowMessages = {
 let currentTheme = 0;
 let currentSession;
 let workflowLoadSequence = 0;
+let workflowNavigationSequence = 0;
+let resourceLoadSequence = 0;
+let resourceNavigationSequence = 0;
+let notificationOffset = 0;
+const resourceViews = {
+  notifications: {
+    title: "Notifications",
+    description: "Notifications delivered to your signed-in account.",
+    eyebrow: "Your inbox",
+  },
+  modules: {
+    title: "Modules & access",
+    description:
+      "Platform capabilities and this organization’s recorded entitlements.",
+    eyebrow: "Organization",
+  },
+  roles: {
+    title: "Roles & permissions",
+    description:
+      "The role and permission catalogs available in this organization context.",
+    eyebrow: "Access",
+  },
+  settings: {
+    title: "Organization settings",
+    description: "Verified settings currently available for this organization.",
+    eyebrow: "Configuration",
+  },
+};
 
 function workflowText(key) {
   return translate(key, {
@@ -123,28 +156,407 @@ function setWorkflowText() {
 
 function updateWorkflowNavigation(session) {
   const navigation = document.querySelector("#workflow-nav");
+  const sequence = ++workflowNavigationSequence;
   const organizationId = session.organization?.organizationId;
+  navigation.hidden = true;
   if (!organizationId) {
-    navigation.hidden = true;
     return;
   }
-  void api
-    .request(
-      `/organizations/${encodeURIComponent(organizationId)}/workflow-executions?limit=1`,
-    )
+  void authenticatedRequest(
+    `/organizations/${encodeURIComponent(organizationId)}/workflow-executions?limit=1`,
+  )
     .then(() => {
-      if (currentSession?.organization?.organizationId === organizationId) {
+      if (
+        sequence === workflowNavigationSequence &&
+        currentSession === session
+      ) {
         navigation.hidden = false;
       }
     })
-    .catch((error) => {
-      if (currentSession?.organization?.organizationId !== organizationId) {
-        return;
+    .catch(() => {
+      if (
+        sequence === workflowNavigationSequence &&
+        currentSession === session
+      ) {
+        navigation.hidden = true;
       }
-      navigation.hidden =
-        error instanceof ApiError && [401, 403].includes(error.status);
-      if (!navigation.hidden) show(navigation);
     });
+}
+
+function sessionExpired() {
+  currentSession = undefined;
+  hide(appView);
+  hide(loadingView);
+  hide(errorView);
+  authMessage.textContent =
+    "Your session is no longer available. Sign in to continue.";
+  show(authMessage);
+  show(authView);
+}
+
+async function authenticatedRequest(path, options) {
+  try {
+    return await api.request(path, options);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      sessionExpired();
+    }
+    throw error;
+  }
+}
+
+function appendText(container, tagName, text, className) {
+  const element = document.createElement(tagName);
+  if (className) element.className = className;
+  element.textContent = text;
+  container.append(element);
+  return element;
+}
+
+function renderDefinitionList(container, values) {
+  const list = document.createElement("dl");
+  list.className = "oc-detail-list";
+  for (const [label, value] of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = String(value);
+    list.append(term, detail);
+  }
+  container.append(list);
+}
+
+function renderSimpleTable(container, headers, rows) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "oc-table-wrap";
+  const table = document.createElement("table");
+  table.className = "oc-table";
+  const head = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  for (const label of headers) {
+    appendText(headerRow, "th", label);
+  }
+  head.append(headerRow);
+  const body = document.createElement("tbody");
+  for (const row of rows) {
+    const tableRow = document.createElement("tr");
+    for (const value of row) {
+      appendText(tableRow, "td", String(value ?? "—"));
+    }
+    body.append(tableRow);
+  }
+  table.append(head, body);
+  wrapper.append(table);
+  container.append(wrapper);
+}
+
+function renderNotifications(container, notifications, organizationId) {
+  if (notifications.length === 0) return false;
+  for (const notification of notifications) {
+    const card = document.createElement("article");
+    card.className = "oc-card oc-stack";
+    const header = document.createElement("div");
+    header.className = "oc-cluster";
+    appendText(header, "h2", notification.title, "oc-section-title");
+    header.append(
+      createStatusBadge(
+        notification.readAt ? "Read" : "Unread",
+        notification.readAt ? "neutral" : "info",
+      ),
+    );
+    card.append(header);
+    appendText(card, "p", notification.body);
+    appendText(
+      card,
+      "time",
+      formatDateTime(new Date(notification.createdAt), {
+        locale: workflowLocale,
+      }),
+      "oc-muted",
+    ).dateTime = notification.createdAt;
+    if (!notification.readAt) {
+      const markRead = document.createElement("button");
+      markRead.type = "button";
+      markRead.className = "oc-button oc-button--secondary";
+      markRead.textContent = "Mark as read";
+      markRead.addEventListener("click", async () => {
+        setBusy(markRead, true);
+        try {
+          await authenticatedRequest(
+            `/organizations/${encodeURIComponent(organizationId)}/notifications/${encodeURIComponent(notification.id)}/read`,
+            { method: "POST", body: {} },
+          );
+          await loadResourceView("notifications");
+          announce("Notification marked as read.", "success");
+        } catch (error) {
+          announce(errorMessage(error), "error");
+        } finally {
+          if (markRead.isConnected) setBusy(markRead, false);
+        }
+      });
+      card.append(markRead);
+    }
+    container.append(card);
+  }
+  return true;
+}
+
+function renderResource(view, result, container) {
+  const organizationId = currentSession?.organization?.organizationId;
+  if (view === "notifications") {
+    return renderNotifications(
+      container,
+      Array.isArray(result.notifications) ? result.notifications : [],
+      organizationId,
+    );
+  }
+  if (view === "modules") {
+    const entitlements = new Map(
+      (result.entitlements ?? []).map((item) => [item.moduleName, item]),
+    );
+    const modules = result.catalog ?? [];
+    renderSimpleTable(
+      container,
+      ["Capability", "Availability", "Organization entitlement"],
+      modules.map((item) => [
+        item.displayName,
+        item.available && item.lifecycle === "AVAILABLE"
+          ? "Available"
+          : "Not available",
+        entitlements.get(item.name)?.status ?? "Not enabled",
+      ]),
+    );
+    return modules.length > 0;
+  }
+  if (view === "roles") {
+    const roles = result.roles ?? [];
+    const permissions = result.permissions ?? [];
+    if (roles.length > 0) {
+      appendText(container, "h2", "Organization roles", "oc-section-title");
+      renderSimpleTable(
+        container,
+        ["Role", "Status", "Type", "Description"],
+        roles.map((role) => [
+          role.name,
+          role.status,
+          role.isSystem ? "System" : "Organization",
+          role.description,
+        ]),
+      );
+    }
+    if (permissions.length > 0) {
+      appendText(container, "h2", "Permission catalog", "oc-section-title");
+      renderSimpleTable(
+        container,
+        ["Permission", "Module", "Description"],
+        permissions.map((permission) => [
+          permission.key,
+          permission.module,
+          permission.description,
+        ]),
+      );
+    }
+    return roles.length + permissions.length > 0;
+  }
+  if (view === "settings") {
+    const { organization, settings, business, capabilities } = result;
+    appendText(container, "h2", "Organization", "oc-section-title");
+    renderDefinitionList(container, [
+      ["Name", organization?.name],
+      ["Industry", organization?.industry],
+      ["Deployment type", organization?.deploymentType],
+      ["Legal name", business?.legalName],
+    ]);
+    appendText(container, "h2", "Regional settings", "oc-section-title");
+    renderDefinitionList(container, [
+      ["Country", settings?.countryCode],
+      ["Currency", settings?.currencyCode],
+      ["Time zone", settings?.timezone],
+      ["Locale", settings?.locale],
+    ]);
+    appendText(
+      container,
+      "h2",
+      "Configuration capabilities",
+      "oc-section-title",
+    );
+    renderDefinitionList(
+      container,
+      Object.entries(capabilities ?? {}).map(([key, value]) => [
+        key,
+        value ? "Available" : "Not available",
+      ]),
+    );
+    appendText(
+      container,
+      "p",
+      "Settings are shown read-only here. This application does not yet provide a settings editor.",
+      "oc-help",
+    );
+    return true;
+  }
+  return false;
+}
+
+async function loadResourceView(view) {
+  const metadata = resourceViews[view];
+  if (!metadata) return;
+  const session = currentSession;
+  const organizationId = session?.organization?.organizationId;
+  const sequence = ++resourceLoadSequence;
+  const loading = document.querySelector("#resource-loading");
+  const error = document.querySelector("#resource-error");
+  const empty = document.querySelector("#resource-empty");
+  const content = document.querySelector("#resource-content");
+  document.querySelector("#resource-eyebrow").textContent = metadata.eyebrow;
+  document.querySelector("#resource-title").textContent = metadata.title;
+  document.querySelector("#resource-description").textContent =
+    metadata.description;
+  content.replaceChildren();
+  hide(error);
+  hide(empty);
+  show(loading);
+  if (!organizationId) {
+    hide(loading);
+    error.textContent = "Select an organization to view this information.";
+    show(error);
+    return;
+  }
+  try {
+    let result;
+    if (view === "notifications") {
+      result = await authenticatedRequest(
+        `/organizations/${encodeURIComponent(organizationId)}/notifications?limit=20&offset=${notificationOffset}`,
+      );
+    } else if (view === "modules") {
+      const [catalog, entitlements] = await Promise.all([
+        authenticatedRequest("/modules"),
+        authenticatedRequest(
+          `/organizations/${encodeURIComponent(organizationId)}/modules`,
+        ),
+      ]);
+      result = { ...catalog, ...entitlements };
+    } else if (view === "roles") {
+      const [rolesResult, permissionsResult] = await Promise.allSettled([
+        authenticatedRequest("/roles"),
+        authenticatedRequest("/permissions"),
+      ]);
+      result = {
+        roles:
+          rolesResult.status === "fulfilled" ? rolesResult.value.roles : [],
+        permissions:
+          permissionsResult.status === "fulfilled"
+            ? permissionsResult.value.permissions
+            : [],
+      };
+      if (
+        rolesResult.status === "rejected" &&
+        permissionsResult.status === "rejected"
+      ) {
+        throw rolesResult.reason;
+      }
+    } else {
+      result = await authenticatedRequest(
+        `/organizations/${encodeURIComponent(organizationId)}/configuration`,
+      );
+    }
+    if (sequence !== resourceLoadSequence || currentSession !== session) return;
+    const hasContent = renderResource(view, result, content);
+    if (!hasContent) {
+      empty.textContent =
+        view === "notifications"
+          ? notificationOffset > 0
+            ? "There are no more notifications."
+            : "You do not have any notifications yet."
+          : "No information is available in this organization context.";
+      show(empty);
+    }
+    if (view === "notifications")
+      renderNotificationPagination(result.notifications ?? []);
+  } catch (requestError) {
+    if (sequence !== resourceLoadSequence) return;
+    error.textContent =
+      requestError instanceof ApiError && requestError.status === 403
+        ? "You are not authorized to view this information."
+        : errorMessage(requestError);
+    show(error);
+  } finally {
+    if (sequence === resourceLoadSequence) hide(loading);
+  }
+}
+
+function renderNotificationPagination(notifications) {
+  const content = document.querySelector("#resource-content");
+  const pagination = document.createElement("nav");
+  pagination.className = "oc-pagination";
+  pagination.setAttribute("aria-label", "Notification pages");
+  const controls = document.createElement("div");
+  controls.className = "oc-pagination__controls";
+  const previous = document.createElement("button");
+  previous.type = "button";
+  previous.className = "oc-button oc-button--secondary";
+  previous.textContent = "Previous";
+  previous.disabled = notificationOffset === 0;
+  previous.addEventListener("click", () => {
+    notificationOffset = Math.max(0, notificationOffset - 20);
+    void loadResourceView("notifications");
+  });
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "oc-button oc-button--secondary";
+  next.textContent = "Next";
+  next.disabled = notifications.length < 20;
+  next.addEventListener("click", () => {
+    notificationOffset += 20;
+    void loadResourceView("notifications");
+  });
+  controls.append(previous, next);
+  pagination.append(controls);
+  content.append(pagination);
+}
+
+async function updateResourceNavigation(session) {
+  const organizationId = session.organization?.organizationId;
+  const sequence = ++resourceNavigationSequence;
+  const probes = [
+    [
+      "notifications-nav",
+      organizationId &&
+        `/organizations/${encodeURIComponent(organizationId)}/notifications?limit=1`,
+    ],
+    [
+      "modules-nav",
+      organizationId &&
+        `/organizations/${encodeURIComponent(organizationId)}/modules`,
+    ],
+    ["roles-nav", "/roles"],
+    [
+      "settings-nav",
+      organizationId &&
+        `/organizations/${encodeURIComponent(organizationId)}/configuration`,
+    ],
+  ];
+  for (const [id] of probes) document.querySelector(`#${id}`).hidden = true;
+  if (!organizationId) return;
+  await Promise.all(
+    probes.map(async ([id, path]) => {
+      if (!path) return;
+      try {
+        await authenticatedRequest(path);
+        if (
+          sequence === resourceNavigationSequence &&
+          currentSession === session
+        ) {
+          document.querySelector(`#${id}`).hidden = false;
+        }
+      } catch {
+        if (sequence === resourceNavigationSequence) {
+          document.querySelector(`#${id}`).hidden = true;
+        }
+      }
+    }),
+  );
 }
 
 function appendWorkflowField(container, label, value) {
@@ -244,7 +656,7 @@ async function loadWorkflowExecutions() {
   hide(error);
   show(loading);
   try {
-    const result = await api.request(
+    const result = await authenticatedRequest(
       `/organizations/${encodeURIComponent(organizationId)}/workflow-executions?limit=50`,
     );
     if (
@@ -279,7 +691,16 @@ function hide(element) {
 }
 
 function errorMessage(error) {
-  if (error instanceof ApiError) return error.message;
+  if (error instanceof ApiError) {
+    if (error.status === 0) {
+      return "The service could not be reached. Check your connection and try again.";
+    }
+    if (error.status === 401) return "Your session has expired. Sign in again.";
+    if (error.status === 403) {
+      return "You are not authorized to complete this request.";
+    }
+    if (error.status === 404) return "The requested resource is unavailable.";
+  }
   return "The request could not be completed. Please try again.";
 }
 
@@ -291,10 +712,27 @@ function setFormPending(form, pending, submitLabel, pendingLabel) {
 }
 
 function selectView(view) {
-  const selected = ["security", "workflows"].includes(view) ? view : "overview";
+  const validViews = [
+    "overview",
+    "security",
+    "profile",
+    "workflows",
+    ...Object.keys(resourceViews),
+  ];
+  const selected = !view
+    ? "overview"
+    : validViews.includes(view)
+      ? view
+      : "not-found";
   document.querySelector("#overview-view").hidden = selected !== "overview";
   document.querySelector("#security-view").hidden = selected !== "security";
+  document.querySelector("#profile-view").hidden = selected !== "profile";
   document.querySelector("#workflows-view").hidden = selected !== "workflows";
+  document.querySelector("#resource-view").hidden = !Object.hasOwn(
+    resourceViews,
+    selected,
+  );
+  document.querySelector("#not-found-view").hidden = selected !== "not-found";
   document.querySelectorAll("[data-view]").forEach((link) => {
     if (link.dataset.view === selected) {
       link.setAttribute("aria-current", "page");
@@ -305,6 +743,10 @@ function selectView(view) {
   sidebar.dataset.open = "false";
   menuToggle.setAttribute("aria-expanded", "false");
   if (selected === "workflows") void loadWorkflowExecutions();
+  if (Object.hasOwn(resourceViews, selected)) {
+    if (selected === "notifications") notificationOffset = 0;
+    void loadResourceView(selected);
+  }
 }
 
 function renderSession(session) {
@@ -314,6 +756,25 @@ function renderSession(session) {
   hide(authView);
   show(appView);
   userLabel.textContent = session.user.email;
+  document.querySelector("#profile-details").replaceChildren();
+  renderDefinitionList(document.querySelector("#profile-details"), [
+    ["Name", session.user.displayName],
+    ["Email", session.user.email],
+    [
+      "Session expires",
+      formatDateTime(new Date(session.session.expiresAt), {
+        locale: workflowLocale,
+      }),
+    ],
+    ["Organizations available", session.memberships.length],
+    ["Current organization", session.organization?.name],
+    [
+      "Current branch",
+      session.availableBranches.find(
+        (branch) => branch.branchId === session.branch?.branchId,
+      )?.name ?? (session.branch ? "Selected branch" : "Organization-wide"),
+    ],
+  ]);
 
   organizationSelect.replaceChildren();
   const noOrganization = document.createElement("option");
@@ -351,6 +812,7 @@ function renderSession(session) {
   );
   document.querySelector("#modules-empty").hidden = !session.organization;
   updateWorkflowNavigation(session);
+  void updateResourceNavigation(session);
   selectView(location.hash.slice(1));
 }
 
@@ -359,6 +821,7 @@ async function refreshSession() {
   hide(errorView);
   hide(appView);
   hide(appError);
+  hide(authMessage);
   show(loadingView);
   try {
     renderSession(await api.request("/auth/session"));
@@ -391,7 +854,10 @@ loginForm.addEventListener("submit", async (event) => {
     loginForm.reset();
     await refreshSession();
   } catch (error) {
-    authMessage.textContent = errorMessage(error);
+    authMessage.textContent =
+      error instanceof ApiError && error.status === 401
+        ? "Email or password is incorrect."
+        : errorMessage(error);
     show(authMessage);
   } finally {
     setFormPending(loginForm, false, "Sign in", "Signing in…");
@@ -406,7 +872,7 @@ organizationSelect.addEventListener("change", async () => {
   }
   organizationSelect.disabled = true;
   try {
-    await api.request("/auth/organization", {
+    await authenticatedRequest("/auth/organization", {
       method: "POST",
       body: { organizationId: organizationSelect.value },
     });
@@ -429,7 +895,7 @@ branchSelect.addEventListener("change", async () => {
   }
   branchSelect.disabled = true;
   try {
-    await api.request("/auth/branch", {
+    await authenticatedRequest("/auth/branch", {
       method: "POST",
       body: { branchId: branchSelect.value },
     });
@@ -459,7 +925,7 @@ passwordForm.addEventListener("submit", async (event) => {
   }
   setFormPending(passwordForm, true, "Update password", "Updating password…");
   try {
-    await api.request("/auth/password/change", {
+    await authenticatedRequest("/auth/password/change", {
       method: "POST",
       body: {
         currentPassword: values.get("currentPassword"),
@@ -507,7 +973,16 @@ document
 document
   .querySelector("#workflow-refresh")
   .addEventListener("click", loadWorkflowExecutions);
+document.querySelector("#resource-refresh").addEventListener("click", () => {
+  void loadResourceView(location.hash.slice(1));
+});
 window.addEventListener("hashchange", () => selectView(location.hash.slice(1)));
+document.querySelectorAll(".oc-nav [data-view]").forEach((link) => {
+  link.addEventListener("click", () => {
+    sidebar.dataset.open = "false";
+    menuToggle.setAttribute("aria-expanded", "false");
+  });
+});
 menuToggle.addEventListener("click", () => {
   const expanded = menuToggle.getAttribute("aria-expanded") === "true";
   menuToggle.setAttribute("aria-expanded", String(!expanded));

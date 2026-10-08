@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="OneCore Business OS — one platform for organizations to configure their work."
+      content="OneCore is a shared foundation for organization identity, access, configuration, and entitled business capabilities."
     />
-    <title>OneCore Business OS</title>
+    <meta name="theme-color" content="#f5f7fb" />
+    <title>OneCore Business OS · One platform for organizations</title>
     <link rel="stylesheet" href="../../packages/ui/styles.css" />
   </head>
   <body>
@@ -18,8 +19,10 @@
         <span>OneCore</span>
       </a>
       <nav class="oc-public-nav" aria-label="Main navigation">
-        <a href="#platform">Platform</a>
-        <a href="#principles">Principles</a>
+        <a href="#products">Products</a>
+        <a href="#industries">Industries</a>
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing</a>
         <a class="oc-button oc-button--secondary" href="../business/">
           Sign in
         </a>
@@ -39,58 +42,125 @@
         </p>
         <div class="oc-cluster">
           <a class="oc-button" href="../business/">Open your workspace</a>
-          <a class="oc-button oc-button--secondary" href="#platform">
+          <a class="oc-button oc-button--secondary" href="#products">
             Explore the platform
           </a>
         </div>
       </section>
 
-      <section id="platform" class="oc-grid" aria-labelledby="platform-title">
-        <div class="oc-stack">
-          <span class="oc-status">Shared platform</span>
-          <h2 id="platform-title" class="oc-section-title">
-            A foundation designed to grow with your organization
-          </h2>
-          <p class="oc-muted">
-            OneCore brings identity, organization context, roles, permissions,
-            modules, and configuration together behind a consistent platform.
-          </p>
-        </div>
+      <section
+        id="products"
+        class="oc-section-spaced oc-stack"
+        aria-labelledby="products-title"
+      >
+        <span class="oc-status">Products</span>
+        <h2 id="products-title" class="oc-section-title">
+          A platform foundation, not a catalogue of unfinished modules
+        </h2>
+        <p class="oc-muted">
+          OneCore currently provides shared identity, organization context,
+          access controls, configuration, events, notifications, and workflow
+          execution foundations. Product-specific business modules are not yet
+          available in this workspace.
+        </p>
         <div class="oc-grid oc-grid--cards">
           <article class="oc-card oc-stack">
-            <h3>One identity</h3>
+            <h3>Organization workspace</h3>
             <p class="oc-muted">
-              Sign in once and use server-verified organization membership and
-              branch context.
+              Sign in and work within an organization and authorized branch
+              context.
+            </p>
+            <a href="../business/">Open the workspace</a>
+          </article>
+          <article class="oc-card oc-stack">
+            <h3>Shared platform services</h3>
+            <p class="oc-muted">
+              Identity, permissions, module entitlements, settings, events, and
+              in-app notifications support future OneCore capabilities.
             </p>
           </article>
           <article class="oc-card oc-stack">
-            <h3>One configuration model</h3>
+            <h3>Business modules</h3>
             <p class="oc-muted">
-              Keep organization-specific settings within a shared platform,
-              rather than separate product forks.
-            </p>
-          </article>
-          <article class="oc-card oc-stack">
-            <h3>Capabilities by entitlement</h3>
-            <p class="oc-muted">
-              Business modules can plug into shared access and configuration
-              foundations as they become available.
+              POS, inventory, finance, HR, CRM, and industry-specific modules
+              are not included in the current product.
             </p>
           </article>
         </div>
       </section>
 
-      <section id="principles" class="oc-card oc-stack oc-section-spaced">
-        <span class="oc-status">Built for clarity</span>
-        <h2 class="oc-section-title">
-          One platform. Every organization. Anywhere.
+      <section
+        id="industries"
+        class="oc-section-spaced oc-stack"
+        aria-labelledby="industries-title"
+      >
+        <span class="oc-status">Industries</span>
+        <h2 id="industries-title" class="oc-section-title">
+          A common foundation for organizations
         </h2>
         <p class="oc-muted">
-          Organization access and permissions are enforced by OneCore services.
-          The interface helps people navigate; it is never the security
-          authority.
+          OneCore is being built as a configurable multi-organization platform.
+          It does not currently offer specialized school, healthcare, hotel,
+          retail, or other industry workflows. Industry capabilities will be
+          presented here when implemented and supported.
         </p>
+      </section>
+
+      <section
+        id="features"
+        class="oc-section-spaced oc-stack"
+        aria-labelledby="features-title"
+      >
+        <span class="oc-status">Platform features</span>
+        <h2 id="features-title" class="oc-section-title">
+          Shared capabilities with clear boundaries
+        </h2>
+        <div class="oc-grid oc-grid--cards">
+          <article class="oc-card oc-stack">
+            <h3>Verified organization context</h3>
+            <p class="oc-muted">
+              Organization membership and branch access are resolved by the
+              server for each protected request.
+            </p>
+          </article>
+          <article class="oc-card oc-stack">
+            <h3>Roles and permissions</h3>
+            <p class="oc-muted">
+              Central authorization and module entitlements define access.
+              Interface visibility never grants permission.
+            </p>
+          </article>
+          <article class="oc-card oc-stack">
+            <h3>Configuration and activity</h3>
+            <p class="oc-muted">
+              Supported settings, notifications, and workflow execution history
+              use existing authorized platform APIs.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section
+        id="pricing"
+        class="oc-card oc-stack oc-section-spaced"
+        aria-labelledby="pricing-title"
+      >
+        <span class="oc-status">Plans and pricing</span>
+        <h2 id="pricing-title" class="oc-section-title">
+          Contact your OneCore administrator
+        </h2>
+        <p class="oc-muted">
+          Public plan details, self-service registration, and organization
+          provisioning are not currently available through this site. Your
+          organization administrator can advise on access and enabled
+          capabilities.
+        </p>
+        <div class="oc-cluster">
+          <a class="oc-button" href="../business/">Sign in</a>
+          <span class="oc-help">
+            New organization access is administrator-managed.
+          </span>
+        </div>
       </section>
     </main>
 
@@ -99,6 +169,11 @@
         <span class="oc-brand-mark" aria-hidden="true">O</span>
         <span>OneCore Business OS</span>
       </a>
+      <nav class="oc-cluster" aria-label="Footer">
+        <a href="#products">Products</a>
+        <a href="#features">Features</a>
+        <a href="../business/">Workspace sign in</a>
+      </nav>
       <span class="oc-help">One platform. Every organization. Anywhere.</span>
     </footer>
   </body>

@@ -237,6 +237,17 @@ a {
   gap: var(--oc-space-2);
 }
 
+.oc-form {
+  display: grid;
+  gap: var(--oc-space-4);
+}
+
+.oc-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: var(--oc-space-4);
+}
+
 .oc-field label,
 .oc-label {
   font-size: 0.9rem;
@@ -258,9 +269,41 @@ a {
   color: var(--oc-color-muted);
 }
 
+.oc-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.oc-input[aria-invalid="true"] {
+  border-color: var(--oc-color-danger);
+}
+
+.oc-field__error {
+  color: var(--oc-color-danger);
+  font-size: 0.875rem;
+}
+
 .oc-help {
   color: var(--oc-color-muted);
   font-size: 0.875rem;
+}
+
+.oc-detail-list {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.7fr) minmax(0, 2fr);
+  gap: var(--oc-space-3) var(--oc-space-6);
+  margin: 0;
+}
+
+.oc-detail-list dt {
+  color: var(--oc-color-muted);
+  font-weight: 700;
+}
+
+.oc-detail-list dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .oc-title,
@@ -336,8 +379,127 @@ p {
   font-weight: 700;
 }
 
+.oc-badge {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 1.5rem;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--oc-color-border);
+  border-radius: 99px;
+  background: var(--oc-color-surface);
+  color: var(--oc-color-foreground);
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.oc-badge--success {
+  border-color: var(--oc-color-success);
+  color: var(--oc-color-success);
+}
+
+.oc-badge--warning {
+  border-color: var(--oc-color-warning);
+  color: var(--oc-color-warning);
+}
+
+.oc-badge--danger {
+  border-color: var(--oc-color-danger);
+  color: var(--oc-color-danger);
+}
+
+.oc-badge--info {
+  border-color: var(--oc-color-info);
+  color: var(--oc-color-info);
+}
+
+.oc-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--oc-space-2);
+  border-bottom: 1px solid var(--oc-color-border);
+}
+
+.oc-tabs a,
+.oc-tabs button {
+  min-height: 2.75rem;
+  padding: 0.65rem 0.9rem;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--oc-color-muted);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.oc-tabs :is(a, button)[aria-current="page"],
+.oc-tabs :is(a, button)[aria-selected="true"] {
+  border-bottom-color: var(--oc-color-primary);
+  color: var(--oc-color-foreground);
+}
+
+.oc-dropdown {
+  position: relative;
+}
+
+.oc-dropdown > summary {
+  min-height: 2.75rem;
+  align-content: center;
+  cursor: pointer;
+}
+
+.oc-dropdown[open] > summary {
+  color: var(--oc-color-primary-strong);
+}
+
+.oc-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--oc-space-3);
+}
+
+.oc-pagination__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--oc-space-2);
+}
+
+.oc-state {
+  display: grid;
+  gap: var(--oc-space-3);
+  justify-items: start;
+  padding: var(--oc-space-6);
+  border: 1px solid var(--oc-color-border);
+  border-radius: var(--oc-radius-md);
+  background: var(--oc-color-surface);
+}
+
+.oc-state--error {
+  border-color: var(--oc-color-danger);
+}
+
+.oc-state--loading {
+  color: var(--oc-color-muted);
+}
+
+.oc-state--empty {
+  color: var(--oc-color-muted);
+}
+
+.oc-confirm-action {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--oc-space-3);
+}
+
 .oc-table-wrap {
   overflow-x: auto;
+  max-width: 100%;
   border: 1px solid var(--oc-color-border);
   border-radius: var(--oc-radius-md);
 }
@@ -530,7 +692,9 @@ p {
 
 .oc-public-nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--oc-space-4);
 }
 
@@ -538,6 +702,10 @@ p {
   color: var(--oc-color-muted);
   font-weight: 600;
   text-decoration: none;
+}
+
+.oc-public-nav a.oc-button {
+  color: var(--oc-color-foreground);
 }
 
 .oc-hero {
@@ -653,6 +821,24 @@ p {
   .oc-public-footer {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .oc-public-nav {
+    justify-content: flex-start;
+  }
+
+  .oc-public-nav a {
+    min-height: 2.75rem;
+    align-content: center;
+  }
+
+  .oc-detail-list {
+    grid-template-columns: 1fr;
+    gap: var(--oc-space-1);
+  }
+
+  .oc-detail-list dd + dt {
+    margin-top: var(--oc-space-3);
   }
 }
 

@@ -4,7 +4,7 @@ OneCore is organized as a modular monorepo with explicit application, service, s
 
 Phase 10 adds validated request/correlation context, structured request completion logs with sensitive-field redaction, stable error classification, liveness/readiness endpoints, restrictive API response headers and body limits, and a PostgreSQL-backed rate limiter using forced RLS and the existing audit log.
 
-Phase 14 establishes the shared, dependency-free UI package and initial public marketing and authenticated business shells. The business shell consumes the existing authentication/session, organization/branch selection, logout, and password-change APIs; it does not become an authorization authority or claim access to unavailable modules. Superadmin, support, status, and business-module application surfaces remain deferred until their supported UI/API contracts exist. See [frontend conventions](../frontend/design-system.md).
+Phase 14 completes the shared, dependency-free UI package and static public marketing and authenticated business foundations. The business app consumes existing authentication/session, organization/branch selection, notification, workflow-history, module-entitlement, role/permission, configuration, logout, and password-change APIs without becoming an authorization authority. Its read-only or unavailable states reflect current API coverage; Superadmin, support, status, audit-log reading, organization user directories, and business-module application surfaces remain deferred until supported UI/API contracts exist. See [frontend conventions](../frontend/design-system.md).
 
 ## Dependency direction
 

@@ -16,7 +16,7 @@
     <a class="oc-skip-link" href="#main-content">Skip to main content</a>
     <div class="oc-toast-region" data-toast-region aria-live="polite"></div>
 
-    <main id="main-content">
+    <div id="main-content">
       <section
         id="auth-view"
         class="oc-auth-frame"
@@ -116,9 +116,26 @@
             <a href="#overview" data-view="overview" aria-current="page"
               >Overview</a
             >
+            <a
+              id="notifications-nav"
+              href="#notifications"
+              data-view="notifications"
+              hidden
+              >Notifications</a
+            >
+            <a id="modules-nav" href="#modules" data-view="modules" hidden
+              >Modules & access</a
+            >
+            <a id="roles-nav" href="#roles" data-view="roles" hidden
+              >Roles & permissions</a
+            >
+            <a id="settings-nav" href="#settings" data-view="settings" hidden
+              >Organization settings</a
+            >
             <a id="workflow-nav" href="#workflows" data-view="workflows" hidden
               >Workflow activity</a
             >
+            <a href="#profile" data-view="profile">Profile</a>
             <a href="#security" data-view="security">Account security</a>
           </nav>
           <p class="oc-footer-note">
@@ -277,6 +294,34 @@
             </section>
 
             <section
+              id="profile-view"
+              class="oc-stack"
+              aria-labelledby="profile-title"
+              hidden
+            >
+              <header class="oc-main-header">
+                <div class="oc-stack">
+                  <span class="oc-status">Account</span>
+                  <h1 id="profile-title" class="oc-title">Profile</h1>
+                  <p class="oc-muted">
+                    Your signed-in identity and current session context.
+                  </p>
+                </div>
+              </header>
+              <div class="oc-card oc-stack">
+                <div id="profile-details"></div>
+              </div>
+              <div class="oc-state oc-state--empty">
+                <h2 class="oc-section-title">Session security</h2>
+                <p>
+                  Session expiry is shown above. The current API does not
+                  provide a list of active sessions or device-level revocation.
+                </p>
+                <a href="#security">Change your password</a>
+              </div>
+            </section>
+
+            <section
               id="workflows-view"
               class="oc-stack"
               aria-labelledby="workflows-title"
@@ -314,10 +359,70 @@
               ></div>
               <div id="workflow-list" class="oc-stack" aria-live="polite"></div>
             </section>
+
+            <section
+              id="resource-view"
+              class="oc-stack"
+              aria-labelledby="resource-title"
+              hidden
+            >
+              <header class="oc-main-header">
+                <div class="oc-stack">
+                  <span id="resource-eyebrow" class="oc-status"></span>
+                  <h1 id="resource-title" class="oc-title"></h1>
+                  <p id="resource-description" class="oc-muted"></p>
+                </div>
+                <button
+                  id="resource-refresh"
+                  class="oc-button oc-button--secondary"
+                  type="button"
+                >
+                  Refresh
+                </button>
+              </header>
+              <div
+                id="resource-loading"
+                class="oc-state oc-state--loading"
+                role="status"
+                hidden
+              >
+                <span class="oc-skeleton" aria-hidden="true"></span>
+                <span>Loading workspace information…</span>
+              </div>
+              <div
+                id="resource-error"
+                class="oc-state oc-state--error"
+                role="alert"
+                hidden
+              ></div>
+              <div
+                id="resource-empty"
+                class="oc-state oc-state--empty"
+                role="status"
+                hidden
+              ></div>
+              <div id="resource-content" class="oc-stack"></div>
+            </section>
+
+            <section
+              id="not-found-view"
+              class="oc-stack"
+              aria-labelledby="not-found-title"
+              hidden
+            >
+              <span class="oc-status">Page not found</span>
+              <h1 id="not-found-title" class="oc-title">
+                This workspace page is unavailable
+              </h1>
+              <p class="oc-muted">
+                The page may not exist or may not be available to your account.
+              </p>
+              <a class="oc-button" href="#overview">Return to overview</a>
+            </section>
           </main>
         </div>
       </div>
-    </main>
+    </div>
 
     <script type="module" src="./app.js"></script>
   </body>
