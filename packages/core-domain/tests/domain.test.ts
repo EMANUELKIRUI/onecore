@@ -24,9 +24,35 @@ import {
   notificationInputSchema,
   searchRequestSchema,
   storageUploadMetadataSchema,
+  defaultOrganizationRoleTemplates,
+  organizationSelfServicePermissionKeys,
+  permissionCatalog,
 } from "../src/index.js";
 
 describe("platform domain values", () => {
+  it("defines self-only notification permissions without granting notification creation", () => {
+    const catalogKeys = new Set(permissionCatalog.map(({ key }) => key));
+    for (const key of organizationSelfServicePermissionKeys) {
+      expect(catalogKeys.has(key)).toBe(true);
+    }
+    for (const roleName of [
+      "Organization Admin",
+      "Manager",
+      "Staff",
+      "Viewer",
+    ]) {
+      const role = defaultOrganizationRoleTemplates.find(
+        ({ name }) => name === roleName,
+      );
+      expect(role?.permissionKeys).toEqual(
+        expect.arrayContaining([...organizationSelfServicePermissionKeys]),
+      );
+      expect(role?.permissionKeys).not.toContain(
+        "core.organization.notification_inbox.manage",
+      );
+    }
+  });
+
   it("registers the required versioned platform event contracts", () => {
     expect(Object.keys(eventRegistry).sort()).toEqual(
       [
@@ -43,6 +69,7 @@ describe("platform domain values", () => {
         "JOB_COMPLETED",
         "JOB_FAILED",
         "NOTIFICATION_CREATED",
+        "COMMUNICATION_QUEUED",
         "STORAGE_OBJECT_CREATED",
         "STORAGE_OBJECT_DELETED",
         "SEARCH_DOCUMENT_INDEXED",

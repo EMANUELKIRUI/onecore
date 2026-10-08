@@ -2,6 +2,7 @@ import { hashRateLimitIdentity } from "@onecore/config";
 import {
   createDomainEvent,
   notificationInputSchema,
+  resolveCommunicationPreference,
   searchDocumentInputSchema,
   searchRequestSchema,
   type EventPayload,
@@ -24,6 +25,7 @@ import {
   membershipBranches,
   notifications,
   notificationDeliveries,
+  notificationPreferences,
   organizationMemberships,
   searchDocuments,
 } from "../schema/index.js";
@@ -177,6 +179,41 @@ export function createPlatformServices(
               );
               if (!recipientAllowed) return null;
 
+              const preferenceRows = await transaction
+                .select({
+                  userId: notificationPreferences.userId,
+                  enabled: notificationPreferences.enabled,
+                })
+                .from(notificationPreferences)
+                .where(
+                  and(
+                    eq(notificationPreferences.organizationId, resolved.organizationId),
+                    eq(notificationPreferences.channel, "IN_APP"),
+                    eq(notificationPreferences.category, parsed.notificationType),
+                    or(
+                      isNull(notificationPreferences.userId),
+                      eq(notificationPreferences.userId, parsed.recipientUserId),
+                    ),
+                  ),
+                );
+              const organizationDefault = preferenceRows.find(
+                (preference) => preference.userId === null,
+              )?.enabled;
+              const userOverride = preferenceRows.find(
+                (preference) => preference.userId === parsed.recipientUserId,
+              )?.enabled;
+              if (
+                !resolveCommunicationPreference({
+                  platformDefault: true,
+                  ...(organizationDefault === undefined
+                    ? {}
+                    : { organizationDefault }),
+                  ...(userOverride === undefined ? {} : { userOverride }),
+                })
+              ) {
+                return null;
+              }
+
               const [notification] = await transaction
                 .insert(notifications)
                 .values({
@@ -251,7 +288,7 @@ export function createPlatformServices(
         () =>
           authorization.withPermission(
             context,
-            "core.organization.notification_inbox.read",
+            "core.organization.notification_inbox.update_self",
             metadata,
             async (transaction, resolved) =>
               transaction

@@ -1046,6 +1046,12 @@ describe("API foundation", () => {
       `/organizations/${organizationB}/integrations/${crypto.randomUUID()}/credentials`,
       `/organizations/${organizationB}/webhooks`,
       `/organizations/${organizationB}/webhooks/${crypto.randomUUID()}/deliveries`,
+      `/organizations/${organizationB}/communication-templates`,
+      `/organizations/${organizationB}/notification-preferences`,
+      `/organizations/${organizationB}/notification-preferences/defaults`,
+      `/organizations/${organizationB}/communication-providers`,
+      `/organizations/${organizationB}/communications/deliveries`,
+      `/organizations/${organizationB}/notifications`,
       `/organizations/${organizationB}/domains`,
     ]) {
       const response = await app.inject({
@@ -1087,6 +1093,85 @@ describe("API foundation", () => {
       },
     });
     expect(foreignBranch.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("rejects anonymous communication, template, preference, provider, and inbox operations", async () => {
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+    );
+    const organizationId = crypto.randomUUID();
+    const templateId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const deliveryId = crypto.randomUUID();
+    const cases = [
+      app.inject({ method: "GET", url: `/organizations/${organizationId}/communication-templates` }),
+      app.inject({
+        method: "POST",
+        url: `/organizations/${organizationId}/communication-templates`,
+        payload: {
+          key: "test.notice",
+          channel: "EMAIL",
+          locale: "en",
+          subject: "Notice",
+          body: "Hello {{customer.name}}",
+          variables: ["customer.name"],
+        },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/organizations/${organizationId}/communication-templates/${templateId}/versions/${versionId}/publish`,
+      }),
+      app.inject({ method: "GET", url: `/organizations/${organizationId}/notification-preferences` }),
+      app.inject({
+        method: "PUT",
+        url: `/organizations/${organizationId}/notification-preferences`,
+        payload: { locale: "fr-CA" },
+      }),
+      app.inject({ method: "GET", url: `/organizations/${organizationId}/notification-preferences/defaults` }),
+      app.inject({
+        method: "PUT",
+        url: `/organizations/${organizationId}/notification-preferences/defaults`,
+        payload: { preferences: [{ channel: "EMAIL", category: "ACCOUNT_NOTICE", enabled: true }] },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/organizations/${organizationId}/communications`,
+        payload: {
+          channel: "EMAIL",
+          recipientUserId: crypto.randomUUID(),
+          category: "ACCOUNT_NOTICE",
+          templateKey: "test.notice",
+          variables: { "customer.name": "Test" },
+        },
+      }),
+      app.inject({ method: "GET", url: `/organizations/${organizationId}/communications/deliveries` }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/communications/deliveries/${deliveryId}/attempts`,
+      }),
+      app.inject({ method: "GET", url: `/organizations/${organizationId}/communication-providers` }),
+      app.inject({
+        method: "POST",
+        url: `/organizations/${organizationId}/communication-providers`,
+        payload: {
+          integrationId: crypto.randomUUID(),
+          channel: "EMAIL",
+          providerKey: "test.email",
+          configuration: { senderName: "Test" },
+        },
+      }),
+      app.inject({ method: "GET", url: `/organizations/${organizationId}/notifications` }),
+      app.inject({
+        method: "POST",
+        url: `/organizations/${organizationId}/notifications/${crypto.randomUUID()}/read`,
+      }),
+    ];
+    const responses = await Promise.all(cases);
+    expect(responses.map(({ statusCode }) => statusCode)).toEqual(
+      Array(cases.length).fill(401),
+    );
     await app.close();
   });
 

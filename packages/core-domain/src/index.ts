@@ -2,7 +2,11 @@ import { z } from "zod";
 
 export * from "./events.js";
 export * from "./platform-services.js";
+<<<<<<< HEAD
 export * from "./regionalization.js";
+=======
+export * from "./communications.js";
+>>>>>>> 14422d7 (feat: complete phase 17 communications services)
 
 export const deploymentTypes = [
   "SAAS",
@@ -295,6 +299,24 @@ export const permissionCatalog = [
   },
   {
     module: "core.organization",
+    resource: "notification_inbox",
+    action: "update_self",
+    description: "Update the current user's own notification read state.",
+  },
+  {
+    module: "core.organization",
+    resource: "notification_preferences",
+    action: "read_self",
+    description: "Read the current user's own communication preferences.",
+  },
+  {
+    module: "core.organization",
+    resource: "notification_preferences",
+    action: "update_self",
+    description: "Update the current user's own communication preferences.",
+  },
+  {
+    module: "core.organization",
     resource: "jobs",
     action: "enqueue",
     description: "Enqueue authorized organization platform jobs.",
@@ -525,6 +547,13 @@ export const organizationConfigurationPermissionKeys = [
   "core.organization.events.manage",
 ] as const;
 
+export const organizationSelfServicePermissionKeys = [
+  "core.organization.notification_inbox.read",
+  "core.organization.notification_inbox.update_self",
+  "core.organization.notification_preferences.read_self",
+  "core.organization.notification_preferences.update_self",
+] as const;
+
 export const defaultOrganizationRoleTemplates = [
   { name: "Organization Owner", permissionKeys: null },
   {
@@ -532,6 +561,7 @@ export const defaultOrganizationRoleTemplates = [
     permissionKeys: [
       ...roleAdministrationPermissionKeys,
       ...organizationConfigurationPermissionKeys,
+      ...organizationSelfServicePermissionKeys,
     ],
   },
   {
@@ -540,17 +570,22 @@ export const defaultOrganizationRoleTemplates = [
       "core.organization.organization.read",
       "core.organization.user.read",
       "core.organization.settings.read",
+      ...organizationSelfServicePermissionKeys,
     ],
   },
   {
     name: "Staff",
-    permissionKeys: ["core.organization.organization.read"],
+    permissionKeys: [
+      "core.organization.organization.read",
+      ...organizationSelfServicePermissionKeys,
+    ],
   },
   {
     name: "Viewer",
     permissionKeys: [
       "core.organization.organization.read",
       "core.organization.settings.read",
+      ...organizationSelfServicePermissionKeys,
     ],
   },
 ] as const;

@@ -41,6 +41,10 @@ import {
   type WebhookAttemptStatus,
   type WebhookDeliveryStatus,
   type WebhookSubscriptionStatus,
+  communicationChannels,
+  type CommunicationAttemptStatus,
+  type CommunicationStatus,
+  type CommunicationTemplateStatus,
   permissionStatuses,
   roleStatuses,
   sslStatuses,
@@ -133,6 +137,10 @@ export const notificationChannel = pgEnum(
 export const notificationDeliveryStatus = pgEnum(
   "notification_delivery_status",
   notificationDeliveryStatuses,
+);
+export const communicationChannel = pgEnum(
+  "communication_channel",
+  communicationChannels,
 );
 export const storedObjectProvider = pgEnum(
   "stored_object_provider",
@@ -308,6 +316,7 @@ export const organizationMemberships = pgTable(
     branchAccessMode: membershipBranchAccessMode("branch_access_mode")
       .notNull()
       .default("ASSIGNED"),
+    locale: varchar("locale", { length: 35 }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -2343,6 +2352,393 @@ export const notificationDeliveries = pgTable(
     check(
       "notification_deliveries_attempts_nonnegative",
       sql`${table.attempts} >= 0`,
+    ),
+  ],
+);
+
+export const communicationProviderConfigs = pgTable(
+  "communication_provider_configs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    integrationId: uuid("integration_id").notNull(),
+    channel: communicationChannel("channel").notNull(),
+    providerKey: varchar("provider_key", { length: 80 }).notNull(),
+    status: varchar("status", { length: 20 })
+      .$type<"ACTIVE" | "DISABLED">()
+      .notNull()
+      .default("DISABLED"),
+    configuration: jsonObject("configuration"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    unique("communication_provider_configs_org_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    unique("communication_provider_configs_integration_unique").on(
+      table.organizationId,
+      table.integrationId,
+    ),
+    foreignKey({
+      name: "communication_provider_configs_integration_fk",
+      columns: [table.organizationId, table.integrationId],
+      foreignColumns: [integrations.organizationId, integrations.id],
+    }).onDelete("restrict"),
+    index("communication_provider_configs_org_channel_idx").on(
+      table.organizationId,
+      table.channel,
+      table.status,
+    ),
+    check(
+      "communication_provider_configs_status_check",
+      sql`${table.status} in ('ACTIVE', 'DISABLED')`,
+    ),
+    check(
+      "communication_provider_configs_configuration_size_check",
+      sql`octet_length(${table.configuration}::text) <= 16384`,
+    ),
+  ],
+);
+
+export const communicationTemplates = pgTable(
+  "communication_templates",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    key: varchar("key", { length: 100 }).notNull(),
+    channel: communicationChannel("channel").notNull(),
+    status: varchar("status", { length: 20 })
+      .$type<"ACTIVE" | "INACTIVE">()
+      .notNull()
+      .default("ACTIVE"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    unique("communication_templates_org_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    unique("communication_templates_org_channel_key_unique").on(
+      table.organizationId,
+      table.channel,
+      table.key,
+    ),
+    index("communication_templates_org_status_idx").on(
+      table.organizationId,
+      table.status,
+    ),
+  ],
+);
+
+export const communicationTemplateVersions = pgTable(
+  "communication_template_versions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    templateId: uuid("template_id").notNull(),
+    version: integer("version").notNull(),
+    locale: varchar("locale", { length: 35 }).notNull(),
+    subject: varchar("subject", { length: 250 }),
+    body: text("body").notNull(),
+    variables: jsonb("variables").$type<string[]>().notNull().default([]),
+    status: varchar("status", { length: 20 })
+      .$type<CommunicationTemplateStatus>()
+      .notNull()
+      .default("DRAFT"),
+    createdAt: createdAt(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+  },
+  (table) => [
+    foreignKey({
+      name: "communication_template_versions_template_fk",
+      columns: [table.organizationId, table.templateId],
+      foreignColumns: [
+        communicationTemplates.organizationId,
+        communicationTemplates.id,
+      ],
+    }).onDelete("cascade"),
+    unique("communication_template_versions_org_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    unique("communication_template_versions_template_version_locale_unique").on(
+      table.organizationId,
+      table.templateId,
+      table.version,
+      table.locale,
+    ),
+    uniqueIndex("communication_template_versions_one_published_locale_idx")
+      .on(table.organizationId, table.templateId, table.locale)
+      .where(sql`${table.status} = 'PUBLISHED'`),
+    index("communication_template_versions_org_locale_status_idx").on(
+      table.organizationId,
+      table.locale,
+      table.status,
+    ),
+    check(
+      "communication_template_versions_version_check",
+      sql`${table.version} > 0`,
+    ),
+    check(
+      "communication_template_versions_body_size_check",
+      sql`octet_length(${table.body}) <= 16384 and octet_length(coalesce(${table.subject}, '')) <= 1000 and octet_length(${table.variables}::text) <= 8192`,
+    ),
+  ],
+);
+
+export const notificationPreferences = pgTable(
+  "notification_preferences",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id"),
+    channel: communicationChannel("channel").notNull(),
+    category: varchar("category", { length: 100 }).notNull(),
+    enabled: boolean("enabled").notNull(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    foreignKey({
+      name: "notification_preferences_user_membership_fk",
+      columns: [table.organizationId, table.userId],
+      foreignColumns: [
+        organizationMemberships.organizationId,
+        organizationMemberships.userId,
+      ],
+    }).onDelete("cascade"),
+    uniqueIndex("notification_preferences_org_default_unique")
+      .on(table.organizationId, table.channel, table.category)
+      .where(sql`${table.userId} is null`),
+    uniqueIndex("notification_preferences_user_unique")
+      .on(table.organizationId, table.userId, table.channel, table.category)
+      .where(sql`${table.userId} is not null`),
+    index("notification_preferences_user_channel_idx").on(
+      table.organizationId,
+      table.userId,
+      table.channel,
+    ),
+  ],
+);
+
+export const communicationMessages = pgTable(
+  "communication_messages",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    recipientUserId: uuid("recipient_user_id").notNull(),
+    channel: communicationChannel("channel").notNull(),
+    category: varchar("category", { length: 100 }).notNull(),
+    templateVersionId: uuid("template_version_id"),
+    subject: varchar("subject", { length: 250 }),
+    renderedContent: text("rendered_content").notNull(),
+    contentHashSha256: varchar("content_hash_sha256", { length: 64 }).notNull(),
+    metadata: jsonObject("metadata"),
+    status: varchar("status", { length: 20 })
+      .$type<CommunicationStatus>()
+      .notNull()
+      .default("QUEUED"),
+    priority: integer("priority").notNull().default(0),
+    correlationId: uuid("correlation_id").notNull(),
+    sourceEventId: uuid("source_event_id"),
+    idempotencyKey: varchar("idempotency_key", { length: 200 }),
+    createdByUserId: uuid("created_by_user_id"),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    unique("communication_messages_org_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    uniqueIndex("communication_messages_idempotency_unique")
+      .on(table.organizationId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
+    foreignKey({
+      name: "communication_messages_recipient_membership_fk",
+      columns: [table.organizationId, table.recipientUserId],
+      foreignColumns: [
+        organizationMemberships.organizationId,
+        organizationMemberships.userId,
+      ],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "communication_messages_template_version_fk",
+      columns: [table.organizationId, table.templateVersionId],
+      foreignColumns: [
+        communicationTemplateVersions.organizationId,
+        communicationTemplateVersions.id,
+      ],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "communication_messages_source_event_fk",
+      columns: [table.organizationId, table.sourceEventId],
+      foreignColumns: [outboxEvents.organizationId, outboxEvents.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "communication_messages_creator_membership_fk",
+      columns: [table.organizationId, table.createdByUserId],
+      foreignColumns: [
+        organizationMemberships.organizationId,
+        organizationMemberships.userId,
+      ],
+    }).onDelete("restrict"),
+    index("communication_messages_org_status_schedule_idx").on(
+      table.organizationId,
+      table.status,
+      table.scheduledAt,
+    ),
+    index("communication_messages_recipient_created_idx").on(
+      table.organizationId,
+      table.recipientUserId,
+      table.createdAt,
+    ),
+    check(
+      "communication_messages_status_check",
+      sql`${table.status} in ('QUEUED', 'SENDING', 'SENT', 'DELIVERED', 'FAILED', 'RETRYING', 'DEAD_LETTER', 'CANCELLED')`,
+    ),
+    check(
+      "communication_messages_content_size_check",
+      sql`octet_length(${table.renderedContent}) <= 16384 and octet_length(coalesce(${table.subject}, '')) <= 1000 and octet_length(${table.metadata}::text) <= 16384`,
+    ),
+    check(
+      "communication_messages_priority_check",
+      sql`${table.priority} between 0 and 100`,
+    ),
+    check(
+      "communication_messages_content_hash_check",
+      sql`${table.contentHashSha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);
+
+export const communicationDeliveries = pgTable(
+  "communication_deliveries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    messageId: uuid("message_id").notNull(),
+    providerConfigId: uuid("provider_config_id"),
+    status: varchar("status", { length: 20 })
+      .$type<CommunicationStatus>()
+      .notNull()
+      .default("QUEUED"),
+    providerMessageId: varchar("provider_message_id", { length: 200 }),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    leaseToken: uuid("lease_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    lastFailureClass: varchar("last_failure_class", { length: 30 }),
+    lastFailureCode: varchar("last_failure_code", { length: 80 }),
+    retryAfterSeconds: integer("retry_after_seconds"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    unique("communication_deliveries_org_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    unique("communication_deliveries_message_unique").on(
+      table.organizationId,
+      table.messageId,
+    ),
+    foreignKey({
+      name: "communication_deliveries_message_fk",
+      columns: [table.organizationId, table.messageId],
+      foreignColumns: [communicationMessages.organizationId, communicationMessages.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "communication_deliveries_provider_config_fk",
+      columns: [table.organizationId, table.providerConfigId],
+      foreignColumns: [communicationProviderConfigs.organizationId, communicationProviderConfigs.id],
+    }).onDelete("restrict"),
+    index("communication_deliveries_queue_idx").on(
+      table.organizationId,
+      table.status,
+      table.nextAttemptAt,
+      table.createdAt,
+    ),
+    check(
+      "communication_deliveries_status_check",
+      sql`${table.status} in ('QUEUED', 'SENDING', 'SENT', 'DELIVERED', 'FAILED', 'RETRYING', 'DEAD_LETTER', 'CANCELLED')`,
+    ),
+    check(
+      "communication_deliveries_attempts_check",
+      sql`${table.attemptCount} >= 0 and ${table.maxAttempts} between 1 and 20`,
+    ),
+    check(
+      "communication_deliveries_retry_after_check",
+      sql`${table.retryAfterSeconds} is null or ${table.retryAfterSeconds} between 0 and 86400`,
+    ),
+  ],
+);
+
+export const communicationDeliveryAttempts = pgTable(
+  "communication_delivery_attempts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    deliveryId: uuid("delivery_id").notNull(),
+    attemptNumber: integer("attempt_number").notNull(),
+    status: varchar("status", { length: 20 })
+      .$type<CommunicationAttemptStatus>()
+      .notNull(),
+    providerMessageId: varchar("provider_message_id", { length: 200 }),
+    failureClass: varchar("failure_class", { length: 30 }),
+    failureCode: varchar("failure_code", { length: 80 }),
+    retryAfterSeconds: integer("retry_after_seconds"),
+    createdAt: createdAt(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    foreignKey({
+      name: "communication_delivery_attempts_delivery_fk",
+      columns: [table.organizationId, table.deliveryId],
+      foreignColumns: [communicationDeliveries.organizationId, communicationDeliveries.id],
+    }).onDelete("cascade"),
+    unique("communication_delivery_attempts_number_unique").on(
+      table.organizationId,
+      table.deliveryId,
+      table.attemptNumber,
+    ),
+    index("communication_delivery_attempts_org_delivery_idx").on(
+      table.organizationId,
+      table.deliveryId,
+    ),
+    check(
+      "communication_delivery_attempts_status_check",
+      sql`${table.status} in ('SENDING', 'SENT', 'DELIVERED', 'RETRYING', 'FAILED', 'DEAD_LETTER')`,
+    ),
+    check(
+      "communication_delivery_attempts_number_check",
+      sql`${table.attemptNumber} > 0`,
+    ),
+    check(
+      "communication_delivery_attempts_retry_after_check",
+      sql`${table.retryAfterSeconds} is null or ${table.retryAfterSeconds} between 0 and 86400`,
     ),
   ],
 );

@@ -198,6 +198,20 @@ const eventDefinitions = {
       })
       .strict(),
   },
+  COMMUNICATION_QUEUED: {
+    version: 1,
+    owningModule: "core.organization",
+    description: "A tenant-scoped communication intent was queued.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        messageId: z.uuid(),
+        deliveryId: z.uuid(),
+        channel: z.enum(["EMAIL", "SMS", "WHATSAPP"]),
+        category: z.string().trim().min(1).max(100),
+      })
+      .strict(),
+  },
   STORAGE_OBJECT_CREATED: {
     version: 1,
     owningModule: "core.organization",

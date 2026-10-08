@@ -20,6 +20,7 @@ import { registerAuthentication } from "./authentication.js";
 import { registerAuthorizationRoutes } from "./authorization.js";
 import { registerConfigurationRoutes } from "./configuration.js";
 import { registerConfigurationResourceRoutes } from "./configuration-resources.js";
+import { registerCommunicationRoutes } from "./communications.js";
 import { registerIntegrationSecurityRoutes } from "./integration-resources.js";
 import { registerEventRoutes } from "./events.js";
 import { registerModuleRoutes } from "./modules.js";
@@ -154,6 +155,7 @@ export function buildApp(
   registerAuthorizationRoutes(app, correlatedAuthorization);
   registerConfigurationRoutes(app, correlatedAuthorization);
   registerConfigurationResourceRoutes(app, correlatedAuthorization);
+  registerCommunicationRoutes(app, correlatedAuthorization);
   registerIntegrationSecurityRoutes(
     app,
     correlatedAuthorization,

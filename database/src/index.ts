@@ -53,6 +53,21 @@ export {
   type WebhookResponseDisposition,
 } from "./webhooks.js";
 export {
+  createCommunicationService,
+  type CommunicationService,
+  type QueueCommunicationOutcome,
+} from "./communications.js";
+export {
+  createCommunicationDeliveryWorker,
+  createCommunicationProviderRegistry,
+  emailOnlyRecipientResolver,
+  type CommunicationDeliveryWorker,
+  type CommunicationProviderRegistry,
+  type CommunicationRecipientResolver,
+  type CommunicationWorkerOptions,
+  type CommunicationWorkerResult,
+} from "./communication-worker.js";
+export {
   createIdentityRepository,
   type AuthenticationAuditEvent,
   type IdentityBranch,
