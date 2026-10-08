@@ -100,20 +100,24 @@ let dashboardLoadSequence = 0;
 let workflowNavigationSequence = 0;
 let resourceLoadSequence = 0;
 let resourceNavigationSequence = 0;
+let businessResourceSequence = 0;
+let businessResourceContext = "";
+const businessResourceOffsets = { customers: 0, products: 0 };
+const businessResourceFilters = { customers: {}, products: {} };
 const resourceOffsets = { notifications: 0, templates: 0, deliveries: 0 };
 let preferenceLocale = workflowLocale;
 const resourceViews = {
   organization: {
-    title: "Organization",
+    title: "Business profile",
     description:
-      "Organization profile and regional configuration available in this context.",
-    eyebrow: "Organization",
+      "Review business identity and configuration returned for your verified organization.",
+    eyebrow: "Business Manager",
   },
   settings: {
-    title: "Configuration",
+    title: "Business Manager settings",
     description:
       "Review organization settings and update supported regional preferences.",
-    eyebrow: "Configuration",
+    eyebrow: "Business Manager",
   },
   notifications: {
     title: "Notifications",
@@ -163,6 +167,18 @@ const boundaryViews = {
     description:
       "Branches below are only the active branches authorized for your signed-in membership.",
     eyebrow: "Organization",
+  },
+  customers: {
+    title: "Customers",
+    description:
+      "Manage organization customers and contacts using tenant-authorized records.",
+    eyebrow: "Business Manager",
+  },
+  products: {
+    title: "Products & services",
+    description:
+      "Maintain reusable product and service master data for authorized organization branches.",
+    eyebrow: "Business Manager catalog",
   },
   members: {
     title: "Users & members",
@@ -256,6 +272,13 @@ function updateWorkflowNavigation(session) {
 
 function sessionExpired() {
   currentSession = undefined;
+  businessResourceSequence += 1;
+  businessResourceContext = "";
+  businessResourceOffsets.customers = 0;
+  businessResourceOffsets.products = 0;
+  businessResourceFilters.customers = {};
+  businessResourceFilters.products = {};
+  document.querySelector("#boundary-content").replaceChildren();
   hide(appView);
   hide(loadingView);
   hide(errorView);
@@ -675,6 +698,35 @@ function renderRegionalSettingsForm(container, result, organizationId) {
   legalName.value = result.business?.legalName ?? "";
   businessField.append(businessLabel, legalName);
   grid.append(businessField);
+  for (const field of [
+    {
+      id: "organization-registration-number",
+      name: "registrationNumber",
+      label: "Business registration number",
+      value: result.business?.registrationNumber ?? "",
+    },
+    {
+      id: "organization-tax-number",
+      name: "taxNumber",
+      label: "Business tax number",
+      value: result.business?.taxNumber ?? "",
+    },
+  ]) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "oc-field";
+    const label = document.createElement("label");
+    label.htmlFor = field.id;
+    label.textContent = field.label;
+    const input = document.createElement("input");
+    input.id = field.id;
+    input.className = "oc-input";
+    input.name = field.name;
+    input.maxLength = 100;
+    input.value = field.value;
+    input.addEventListener("input", () => setFieldError(input, ""));
+    wrapper.append(label, input);
+    grid.append(wrapper);
+  }
   const error = document.createElement("p");
   error.className = "oc-alert oc-alert--error";
   error.setAttribute("role", "alert");
@@ -726,6 +778,12 @@ function renderRegionalSettingsForm(container, result, organizationId) {
       if (updatedLegalName !== (result.business?.legalName ?? "")) {
         body.legalName = updatedLegalName || null;
       }
+      for (const name of ["registrationNumber", "taxNumber"]) {
+        const value = form.elements.namedItem(name).value.trim();
+        if (value !== (result.business?.[name] ?? "")) {
+          body[name] = value || null;
+        }
+      }
       await authenticatedRequest(
         `/organizations/${encodeURIComponent(organizationId)}/configuration`,
         { method: "PATCH", body },
@@ -753,7 +811,7 @@ function renderResource(view, result, container) {
   }
   if (view === "organization" || view === "settings") {
     const { organization, settings, business, capabilities } = result;
-    appendText(container, "h2", "Organization profile", "oc-section-title");
+    appendText(container, "h2", "Business profile", "oc-section-title");
     renderDefinitionList(container, [
       ["Organization", organization?.name],
       ["Industry", organization?.industry],
@@ -774,10 +832,17 @@ function renderResource(view, result, container) {
       ["Business type", business?.businessType],
     ]);
     if (view === "organization") {
+      appendText(container, "h2", "Regional configuration", "oc-section-title");
+      renderDefinitionList(container, [
+        ["Country", settings?.countryCode],
+        ["Currency", settings?.currencyCode],
+        ["Time zone", settings?.timezone],
+        ["Locale", settings?.locale],
+      ]);
       appendText(
         container,
         "p",
-        "Organization lifecycle status and full profile management are not exposed by the current organization-scoped APIs.",
+        "The available API does not expose organization lifecycle status, a separate display name, or a stable address/contact profile contract. Those fields are not inferred or fabricated here.",
         "oc-help",
       );
       return true;
@@ -1109,6 +1174,10 @@ function loadBoundaryView(view) {
     metadata.description;
   const content = document.querySelector("#boundary-content");
   content.replaceChildren();
+  if (view === "customers" || view === "products") {
+    void loadBusinessManagerView(view);
+    return;
+  }
   if (view === "branches") {
     const branches = currentSession?.availableBranches ?? [];
     if (branches.length === 0) {
@@ -1162,6 +1231,766 @@ function loadBoundaryView(view) {
     "Audit records are written by the platform, but there is no tenant-authorized audit read API available to this workspace. No activity is fabricated or inferred from unrelated data.",
     "oc-state oc-state--empty",
   );
+}
+
+function businessResourceEndpoint(view) {
+  const resource = view === "customers" ? "customers" : "catalog";
+  const organizationId = currentSession?.organization?.organizationId;
+  if (!organizationId) return null;
+  return `/organizations/${encodeURIComponent(organizationId)}/business/${resource}`;
+}
+
+function clearBusinessManagerContext() {
+  businessResourceSequence += 1;
+  businessResourceContext = "";
+  businessResourceOffsets.customers = 0;
+  businessResourceOffsets.products = 0;
+  businessResourceFilters.customers = {};
+  businessResourceFilters.products = {};
+  const content = document.querySelector("#boundary-content");
+  content.replaceChildren();
+  if (["customers", "products"].includes(location.hash.slice(1))) {
+    appendText(
+      content,
+      "p",
+      "Loading authorized records for the selected context…",
+      "oc-state oc-state--loading",
+    ).setAttribute("role", "status");
+  }
+}
+
+function reloadBusinessManagerViewIfSelected() {
+  const view = location.hash.slice(1);
+  if (view === "customers" || view === "products") {
+    void loadBusinessManagerView(view);
+  }
+}
+
+function businessBranchLabel(branchId) {
+  if (!branchId) return "Organization-wide";
+  return (
+    currentSession?.availableBranches.find(
+      (branch) => branch.branchId === branchId,
+    )?.name ?? "Authorized branch"
+  );
+}
+
+function businessField(
+  form,
+  { name, label, type = "text", value, required, maxLength, options },
+) {
+  const field = document.createElement("div");
+  field.className = "oc-field";
+  const id = `business-${name}`;
+  const labelElement = document.createElement("label");
+  labelElement.htmlFor = id;
+  labelElement.textContent = label;
+  const input = options
+    ? document.createElement("select")
+    : document.createElement("input");
+  input.id = id;
+  input.name = name;
+  input.required = Boolean(required);
+  if (maxLength) input.maxLength = maxLength;
+  if (options) {
+    for (const [optionValue, optionLabel] of options) {
+      const option = document.createElement("option");
+      option.value = optionValue;
+      option.textContent = optionLabel;
+      input.append(option);
+    }
+  } else {
+    input.type = type;
+  }
+  if (type === "email") input.autocomplete = "email";
+  if (type === "tel") input.autocomplete = "tel";
+  if (name === "price") input.inputMode = "decimal";
+  if (name === "currency") input.maxLength = 3;
+  input.value = value ?? "";
+  field.append(labelElement, input);
+  form.append(field);
+  return input;
+}
+
+function renderBusinessTable(view, items, container, handlers) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "oc-table-wrap";
+  const table = document.createElement("table");
+  table.className = "oc-table";
+  const headings =
+    view === "customers"
+      ? [
+          "Customer",
+          "Reference",
+          "Phone / email",
+          "Branch",
+          "Status",
+          "Updated",
+          "Actions",
+        ]
+      : [
+          "Name",
+          "SKU / reference",
+          "Type",
+          "Price",
+          "Branch",
+          "Status",
+          "Updated",
+          "Actions",
+        ];
+  const head = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  for (const heading of headings) {
+    const cell = appendText(headerRow, "th", heading);
+    cell.scope = "col";
+  }
+  head.append(headerRow);
+  const body = document.createElement("tbody");
+  for (const item of items) {
+    const row = document.createElement("tr");
+    const values =
+      view === "customers"
+        ? [
+            item.name,
+            item.reference || "—",
+            [item.phone, item.email].filter(Boolean).join(" · ") || "—",
+            businessBranchLabel(item.branchId),
+            item.status,
+            formatDateTime(new Date(item.updatedAt), {
+              locale: preferenceLocale,
+            }),
+          ]
+        : [
+            item.name,
+            item.reference || "—",
+            item.type,
+            `${item.price} ${item.currency}`,
+            businessBranchLabel(item.branchId),
+            item.status,
+            formatDateTime(new Date(item.updatedAt), {
+              locale: preferenceLocale,
+            }),
+          ];
+    for (let index = 0; index < values.length; index += 1) {
+      const cell = document.createElement("td");
+      if (
+        (view === "customers" && index === 4) ||
+        (view === "products" && index === 5)
+      ) {
+        cell.append(
+          createStatusBadge(
+            String(values[index]),
+            statusVariant(String(values[index])),
+          ),
+        );
+      } else {
+        cell.textContent = String(values[index] ?? "—");
+      }
+      row.append(cell);
+    }
+    const actions = document.createElement("td");
+    const viewButton = document.createElement("button");
+    viewButton.className = "oc-button oc-button--quiet";
+    viewButton.type = "button";
+    viewButton.textContent = "View";
+    viewButton.setAttribute("aria-label", `View ${item.name}`);
+    viewButton.addEventListener("click", () => void handlers.view(item.id));
+    const editButton = document.createElement("button");
+    editButton.className = "oc-button oc-button--quiet";
+    editButton.type = "button";
+    editButton.textContent = "Edit";
+    editButton.setAttribute("aria-label", `Edit ${item.name}`);
+    editButton.addEventListener("click", () => void handlers.edit(item.id));
+    const deleteButton = document.createElement("button");
+    actions.append(viewButton, editButton);
+    if (item.status === "ACTIVE") {
+      deleteButton.className = "oc-button oc-button--quiet";
+      deleteButton.type = "button";
+      deleteButton.textContent = "Deactivate";
+      deleteButton.setAttribute("aria-label", `Deactivate ${item.name}`);
+      deleteButton.addEventListener(
+        "click",
+        () => void handlers.delete(item, deleteButton),
+      );
+      actions.append(deleteButton);
+    }
+    row.append(actions);
+    body.append(row);
+  }
+  table.append(head, body);
+  wrapper.append(table);
+  container.append(wrapper);
+}
+
+function renderBusinessFilters(view, container, state, onSubmit) {
+  const form = document.createElement("form");
+  form.className = "oc-card oc-grid";
+  form.setAttribute(
+    "aria-label",
+    `${view === "customers" ? "Customer" : "Catalog"} filters`,
+  );
+  const search = businessField(form, {
+    name: "search",
+    label: "Search",
+    value: state.search,
+    maxLength: 100,
+  });
+  const status = businessField(form, {
+    name: "status",
+    label: "Status",
+    options: [
+      ["", "All statuses"],
+      ["ACTIVE", "Active"],
+      ["INACTIVE", "Inactive"],
+    ],
+    value: state.status,
+  });
+  if (view === "products") {
+    businessField(form, {
+      name: "type",
+      label: "Type",
+      options: [
+        ["", "All types"],
+        ["PRODUCT", "Product"],
+        ["SERVICE", "Service"],
+      ],
+      value: state.type,
+    });
+  }
+  if (currentSession?.branch?.branchId) {
+    businessField(form, {
+      name: "branchFilter",
+      label: "Branch",
+      options: [
+        ["", "All authorized records"],
+        ["CURRENT", "Current branch only"],
+      ],
+      value: state.branchFilter,
+    });
+  }
+  const actions = document.createElement("div");
+  actions.className = "oc-cluster";
+  const submit = document.createElement("button");
+  submit.className = "oc-button oc-button--secondary";
+  submit.type = "submit";
+  submit.textContent = "Apply filters";
+  actions.append(submit);
+  form.append(actions);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    onSubmit({
+      search: search.value.trim(),
+      status: status.value,
+      type: form.elements.namedItem("type")?.value ?? "",
+      branchFilter: form.elements.namedItem("branchFilter")?.value ?? "",
+    });
+  });
+  container.append(form);
+}
+
+function renderBusinessForm(view, mode, item, container, onCancel) {
+  const isCustomer = view === "customers";
+  const form = document.createElement("form");
+  form.className = "oc-card oc-grid";
+  form.noValidate = false;
+  const editing = mode === "edit";
+  const heading = appendText(
+    form,
+    "h2",
+    `${editing ? "Edit" : "Create"} ${isCustomer ? "customer" : "catalog item"}`,
+    "oc-section-title",
+  );
+  heading.id = "business-form-title";
+  if (isCustomer) {
+    businessField(form, {
+      name: "name",
+      label: "Name",
+      value: item?.name,
+      required: true,
+      maxLength: 200,
+    });
+    businessField(form, {
+      name: "reference",
+      label: "Reference",
+      value: item?.reference,
+      maxLength: 100,
+    });
+    businessField(form, {
+      name: "customerType",
+      label: "Customer type",
+      value: item?.customerType ?? "INDIVIDUAL",
+      options: [
+        ["INDIVIDUAL", "Individual"],
+        ["BUSINESS", "Business"],
+      ],
+      required: true,
+    });
+    businessField(form, {
+      name: "phone",
+      label: "Phone",
+      type: "tel",
+      value: item?.phone,
+      maxLength: 50,
+    });
+    businessField(form, {
+      name: "email",
+      label: "Email",
+      type: "email",
+      value: item?.email,
+      maxLength: 320,
+    });
+    businessField(form, {
+      name: "status",
+      label: "Status",
+      value: item?.status ?? "ACTIVE",
+      options: [
+        ["ACTIVE", "Active"],
+        ["INACTIVE", "Inactive"],
+      ],
+    });
+    const notesField = document.createElement("div");
+    notesField.className = "oc-field";
+    const notesLabel = document.createElement("label");
+    notesLabel.htmlFor = "business-notes";
+    notesLabel.textContent = "Notes";
+    const notes = document.createElement("textarea");
+    notes.id = "business-notes";
+    notes.name = "notes";
+    notes.maxLength = 2000;
+    notes.rows = 4;
+    notes.value = item?.notes ?? "";
+    notesField.append(notesLabel, notes);
+    form.append(notesField);
+  } else {
+    businessField(form, {
+      name: "name",
+      label: "Name",
+      value: item?.name,
+      required: true,
+      maxLength: 200,
+    });
+    businessField(form, {
+      name: "reference",
+      label: "SKU / reference",
+      value: item?.reference,
+      maxLength: 100,
+    });
+    businessField(form, {
+      name: "type",
+      label: "Type",
+      value: item?.type ?? "PRODUCT",
+      options: [
+        ["PRODUCT", "Product"],
+        ["SERVICE", "Service"],
+      ],
+      required: true,
+    });
+    businessField(form, {
+      name: "description",
+      label: "Description",
+      value: item?.description,
+      maxLength: 2000,
+    });
+    businessField(form, {
+      name: "unit",
+      label: "Unit",
+      value: item?.unit,
+      required: true,
+      maxLength: 50,
+    });
+    businessField(form, {
+      name: "price",
+      label: "Price (decimal)",
+      value: item?.price,
+      required: true,
+      maxLength: 19,
+    });
+    businessField(form, {
+      name: "currency",
+      label: "Currency (ISO 4217)",
+      value: item?.currency,
+      required: true,
+      maxLength: 3,
+    });
+    businessField(form, {
+      name: "status",
+      label: "Status",
+      value: item?.status ?? "ACTIVE",
+      options: [
+        ["ACTIVE", "Active"],
+        ["INACTIVE", "Inactive"],
+      ],
+    });
+  }
+  const error = document.createElement("p");
+  error.className = "oc-alert oc-alert--error";
+  error.setAttribute("role", "alert");
+  error.hidden = true;
+  const actions = document.createElement("div");
+  actions.className = "oc-cluster";
+  const submit = document.createElement("button");
+  submit.className = "oc-button";
+  submit.type = "submit";
+  submit.textContent = editing ? "Save changes" : "Create";
+  const cancel = document.createElement("button");
+  cancel.className = "oc-button oc-button--secondary";
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", onCancel);
+  actions.append(submit, cancel);
+  form.append(error, actions);
+  container.append(form);
+  return { form, error };
+}
+
+async function loadBusinessManagerView(view, options = {}) {
+  const sequence = ++businessResourceSequence;
+  const session = currentSession;
+  const organizationId = session?.organization?.organizationId;
+  const contextKey = `${organizationId ?? ""}:${session?.branch?.branchId ?? ""}`;
+  if (contextKey !== businessResourceContext) {
+    businessResourceContext = contextKey;
+    businessResourceOffsets.customers = 0;
+    businessResourceOffsets.products = 0;
+    businessResourceFilters.customers = {};
+    businessResourceFilters.products = {};
+  }
+  const filterState = options.filters ?? businessResourceFilters[view];
+  const content = document.querySelector("#boundary-content");
+  content.replaceChildren();
+  if (!organizationId) {
+    appendText(
+      content,
+      "p",
+      "Select an organization to continue.",
+      "oc-state oc-state--empty",
+    );
+    return;
+  }
+  const endpoint = businessResourceEndpoint(view);
+  if (!endpoint) return;
+  const detailLoading =
+    options.mode && options.mode !== "create"
+      ? appendText(
+          content,
+          "p",
+          "Loading record…",
+          "oc-state oc-state--loading",
+        )
+      : null;
+  detailLoading?.setAttribute("role", "status");
+  if (
+    options.mode === "create" ||
+    options.mode === "edit" ||
+    options.mode === "view"
+  ) {
+    try {
+      let item = options.item;
+      if (options.mode !== "create") {
+        const response = await authenticatedRequest(
+          `${endpoint}/${encodeURIComponent(options.id)}`,
+        );
+        item = view === "customers" ? response.customer : response.item;
+      }
+      if (sequence !== businessResourceSequence || currentSession !== session)
+        return;
+      detailLoading?.remove();
+      if (options.mode === "view") {
+        renderDefinitionList(
+          content,
+          view === "customers"
+            ? [
+                ["Name", item.name],
+                ["Reference", item.reference],
+                ["Type", item.customerType],
+                ["Phone", item.phone],
+                ["Email", item.email],
+                ["Branch", businessBranchLabel(item.branchId)],
+                ["Status", item.status],
+                ["Notes", item.notes],
+                [
+                  "Created",
+                  formatDateTime(new Date(item.createdAt), {
+                    locale: preferenceLocale,
+                  }),
+                ],
+                [
+                  "Updated",
+                  formatDateTime(new Date(item.updatedAt), {
+                    locale: preferenceLocale,
+                  }),
+                ],
+              ]
+            : [
+                ["Name", item.name],
+                ["Reference", item.reference],
+                ["Type", item.type],
+                ["Description", item.description],
+                ["Unit", item.unit],
+                ["Price", `${item.price} ${item.currency}`],
+                ["Branch", businessBranchLabel(item.branchId)],
+                ["Status", item.status],
+                [
+                  "Created",
+                  formatDateTime(new Date(item.createdAt), {
+                    locale: preferenceLocale,
+                  }),
+                ],
+                [
+                  "Updated",
+                  formatDateTime(new Date(item.updatedAt), {
+                    locale: preferenceLocale,
+                  }),
+                ],
+              ],
+        );
+        const back = document.createElement("button");
+        back.className = "oc-button oc-button--secondary";
+        back.type = "button";
+        back.textContent = "Back to list";
+        back.addEventListener(
+          "click",
+          () => void loadBusinessManagerView(view),
+        );
+        content.append(back);
+        return;
+      }
+      const { form, error } = renderBusinessForm(
+        view,
+        options.mode,
+        item,
+        content,
+        () => void loadBusinessManagerView(view),
+      );
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        const values = Object.fromEntries(new FormData(form));
+        for (const key of [
+          "reference",
+          "phone",
+          "email",
+          "notes",
+          "description",
+        ]) {
+          if (key in values && values[key] === "") values[key] = null;
+        }
+        if (view === "customers") {
+          delete values.description;
+          delete values.unit;
+          delete values.price;
+          delete values.currency;
+          delete values.type;
+        } else {
+          delete values.customerType;
+          delete values.phone;
+          delete values.email;
+          delete values.notes;
+        }
+        const controls = [
+          ...form.querySelectorAll("input, select, textarea, button"),
+        ];
+        controls.forEach((control) => {
+          control.disabled = true;
+        });
+        form.setAttribute("aria-busy", "true");
+        try {
+          await authenticatedRequest(
+            options.mode === "edit"
+              ? `${endpoint}/${encodeURIComponent(options.id)}`
+              : endpoint,
+            {
+              method: options.mode === "edit" ? "PATCH" : "POST",
+              body: values,
+            },
+          );
+          announce(
+            options.mode === "edit" ? "Record updated." : "Record created.",
+            "success",
+          );
+          businessResourceOffsets[view] = 0;
+          await loadBusinessManagerView(view, { filters: filterState });
+        } catch (requestError) {
+          error.textContent = errorMessage(requestError);
+          show(error);
+        } finally {
+          controls.forEach((control) => {
+            control.disabled = false;
+          });
+          form.removeAttribute("aria-busy");
+        }
+      });
+      return;
+    } catch (requestError) {
+      if (sequence !== businessResourceSequence || currentSession !== session)
+        return;
+      detailLoading?.remove();
+      appendBusinessError(
+        content,
+        requestError,
+        () => void loadBusinessManagerView(view),
+      );
+      return;
+    }
+  }
+
+  const heading = document.createElement("div");
+  heading.className = "oc-main-header";
+  const createButton = document.createElement("button");
+  createButton.className = "oc-button";
+  createButton.type = "button";
+  createButton.textContent =
+    view === "customers" ? "Create customer" : "Create catalog item";
+  createButton.addEventListener(
+    "click",
+    () => void loadBusinessManagerView(view, { mode: "create" }),
+  );
+  heading.append(createButton);
+  content.append(heading);
+  renderBusinessFilters(view, content, filterState, (filters) => {
+    businessResourceOffsets[view] = 0;
+    businessResourceFilters[view] = filters;
+    void loadBusinessManagerView(view, { filters });
+  });
+  const loading = appendText(
+    content,
+    "p",
+    "Loading records…",
+    "oc-state oc-state--loading",
+  );
+  loading.setAttribute("role", "status");
+  try {
+    const params = new globalThis.URLSearchParams({
+      limit: "20",
+      offset: String(businessResourceOffsets[view]),
+    });
+    if (filterState.search) params.set("search", filterState.search);
+    if (filterState.status) params.set("status", filterState.status);
+    if (filterState.type) params.set("type", filterState.type);
+    if (filterState.branchFilter === "CURRENT" && session?.branch?.branchId) {
+      params.set("branchId", session.branch.branchId);
+    }
+    const response = await authenticatedRequest(`${endpoint}?${params}`);
+    if (sequence !== businessResourceSequence || currentSession !== session)
+      return;
+    loading.remove();
+    if (!response.items?.length) {
+      appendText(
+        content,
+        "p",
+        businessResourceOffsets[view]
+          ? "No more records."
+          : `No ${view === "customers" ? "customers" : "catalog items"} found.`,
+        "oc-state oc-state--empty",
+      ).setAttribute("role", "status");
+    } else {
+      renderBusinessTable(view, response.items, content, {
+        view: (id) =>
+          void loadBusinessManagerView(view, {
+            mode: "view",
+            id,
+            filters: filterState,
+          }),
+        edit: (id) =>
+          void loadBusinessManagerView(view, {
+            mode: "edit",
+            id,
+            filters: filterState,
+          }),
+        delete: async (item, button) => {
+          if (
+            !window.confirm(
+              `Deactivate ${item.name}? This keeps its record for future references.`,
+            )
+          )
+            return;
+          button.disabled = true;
+          try {
+            await authenticatedRequest(
+              `${endpoint}/${encodeURIComponent(item.id)}`,
+              { method: "DELETE" },
+            );
+            announce("Record deactivated.", "success");
+            await loadBusinessManagerView(view, { filters: filterState });
+          } catch (requestError) {
+            appendBusinessError(
+              content,
+              requestError,
+              () =>
+                void loadBusinessManagerView(view, { filters: filterState }),
+            );
+          } finally {
+            button.disabled = false;
+          }
+        },
+      });
+    }
+    const pagination = document.createElement("nav");
+    pagination.className = "oc-pagination";
+    pagination.setAttribute(
+      "aria-label",
+      `${view === "customers" ? "Customers" : "Catalog"} pages`,
+    );
+    const pageStatus = appendText(
+      pagination,
+      "span",
+      `Showing ${response.items?.length ?? 0} of ${response.total ?? 0}`,
+    );
+    pageStatus.setAttribute("role", "status");
+    const controls = document.createElement("div");
+    controls.className = "oc-pagination__controls";
+    const previous = document.createElement("button");
+    previous.type = "button";
+    previous.className = "oc-button oc-button--secondary";
+    previous.textContent = "Previous";
+    previous.disabled = businessResourceOffsets[view] === 0;
+    previous.addEventListener("click", () => {
+      businessResourceOffsets[view] = Math.max(
+        0,
+        businessResourceOffsets[view] - 20,
+      );
+      void loadBusinessManagerView(view, { filters: filterState });
+    });
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "oc-button oc-button--secondary";
+    next.textContent = "Next";
+    next.disabled = businessResourceOffsets[view] + 20 >= (response.total ?? 0);
+    next.addEventListener("click", () => {
+      businessResourceOffsets[view] += 20;
+      void loadBusinessManagerView(view, { filters: filterState });
+    });
+    controls.append(previous, next);
+    pagination.append(controls);
+    content.append(pagination);
+  } catch (requestError) {
+    if (sequence !== businessResourceSequence || currentSession !== session)
+      return;
+    loading.remove();
+    appendBusinessError(
+      content,
+      requestError,
+      () => void loadBusinessManagerView(view, { filters: filterState }),
+    );
+  }
+}
+
+function appendBusinessError(container, error, retry) {
+  const alert = appendText(
+    container,
+    "div",
+    error instanceof ApiError && error.status === 403
+      ? "You are not authorized to access this Business Manager resource."
+      : errorMessage(error),
+    "oc-alert oc-alert--error",
+  );
+  alert.setAttribute("role", "alert");
+  const button = document.createElement("button");
+  button.className = "oc-button oc-button--secondary";
+  button.type = "button";
+  button.textContent = "Retry";
+  button.addEventListener("click", retry);
+  container.append(button);
 }
 
 function renderDashboardStatus(container, text, state = "empty") {
@@ -1363,6 +2192,16 @@ async function updateResourceNavigation(session) {
   const organizationId = session.organization?.organizationId;
   const sequence = ++resourceNavigationSequence;
   const probes = [
+    [
+      "customers-nav",
+      organizationId &&
+        `/organizations/${encodeURIComponent(organizationId)}/business/customers?limit=1`,
+    ],
+    [
+      "products-nav",
+      organizationId &&
+        `/organizations/${encodeURIComponent(organizationId)}/business/catalog?limit=1`,
+    ],
     [
       "notifications-nav",
       organizationId &&
@@ -1603,6 +2442,7 @@ function setFormPending(form, pending, submitLabel, pendingLabel) {
 }
 
 function selectView(view) {
+  businessResourceSequence += 1;
   const validViews = [
     "overview",
     "security",
@@ -1786,6 +2626,7 @@ organizationSelect.addEventListener("change", async () => {
       currentSession?.organization?.organizationId ?? "";
     return;
   }
+  clearBusinessManagerContext();
   organizationSelect.disabled = true;
   try {
     await authenticatedRequest("/auth/organization", {
@@ -1799,6 +2640,7 @@ organizationSelect.addEventListener("change", async () => {
     show(appError);
     organizationSelect.value =
       currentSession?.organization?.organizationId ?? "";
+    reloadBusinessManagerViewIfSelected();
   } finally {
     organizationSelect.disabled = false;
   }
@@ -1809,6 +2651,7 @@ branchSelect.addEventListener("change", async () => {
     branchSelect.value = currentSession?.branch?.branchId ?? "";
     return;
   }
+  clearBusinessManagerContext();
   branchSelect.disabled = true;
   try {
     await authenticatedRequest("/auth/branch", {
@@ -1821,6 +2664,7 @@ branchSelect.addEventListener("change", async () => {
     appError.textContent = errorMessage(error);
     show(appError);
     branchSelect.value = currentSession?.branch?.branchId ?? "";
+    reloadBusinessManagerViewIfSelected();
   } finally {
     branchSelect.disabled = false;
   }

@@ -113,17 +113,32 @@
             <span>OneCore</span>
           </a>
           <nav class="oc-nav" aria-label="Workspace">
+            <span class="oc-nav__group-label">Business Manager</span>
             <a href="#overview" data-view="overview" aria-current="page"
-              >Dashboard</a
+              >Overview</a
             >
             <a
               id="organization-nav"
               href="#organization"
               data-view="organization"
               hidden
-              >Organization</a
+              >Business profile</a
+            >
+            <a id="customers-nav" href="#customers" data-view="customers" hidden
+              >Customers</a
+            >
+            <a id="products-nav" href="#products" data-view="products" hidden
+              >Products &amp; services</a
             >
             <a href="#branches" data-view="branches">Branches</a>
+            <a id="workflow-nav" href="#workflows" data-view="workflows" hidden
+              >Workflow activity</a
+            >
+            <a id="settings-nav" href="#settings" data-view="settings" hidden
+              >Settings</a
+            >
+
+            <span class="oc-nav__group-label">Workspace</span>
             <a href="#members" data-view="members">Users & members</a>
             <a
               id="notifications-nav"
@@ -155,16 +170,10 @@
             <a id="roles-nav" href="#roles" data-view="roles" hidden
               >Roles & permissions</a
             >
-            <a id="settings-nav" href="#settings" data-view="settings" hidden
-              >Configuration</a
-            >
             <a id="features-nav" href="#features" data-view="features" hidden
               >Feature availability</a
             >
-            <a id="workflow-nav" href="#workflows" data-view="workflows" hidden
-              >Workflow activity</a
-            >
-            <a href="#audit" data-view="audit">Audit & activity</a>
+            <a href="#audit" data-view="audit">Audit log</a>
             <a href="#profile" data-view="profile">Profile</a>
             <a href="#security" data-view="security">Account security</a>
           </nav>
@@ -243,9 +252,7 @@
               <header class="oc-main-header">
                 <div class="oc-stack">
                   <span class="oc-status">Organization workspace</span>
-                  <h1 id="overview-title" class="oc-title">
-                    Welcome to OneCore
-                  </h1>
+                  <h1 id="overview-title" class="oc-title">Business Manager</h1>
                   <p id="organization-summary" class="oc-muted"></p>
                 </div>
               </header>
@@ -254,7 +261,7 @@
                 aria-labelledby="workspace-title"
               >
                 <h2 id="workspace-title" class="oc-section-title">
-                  Organization overview
+                  Business overview
                 </h2>
                 <div id="workspace-empty" class="oc-empty" role="status" hidden>
                   <p><strong>No organization is selected.</strong></p>

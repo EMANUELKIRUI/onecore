@@ -112,3 +112,106 @@ describe("authenticated business shell", () => {
     expect(styles).toContain(".oc-table-wrap");
   });
 });
+
+describe("Business Manager capability boundary", () => {
+  it("integrates Business Manager routes into the existing authenticated shell", () => {
+    expect(page).toContain('class="oc-nav__group-label">Business Manager');
+    for (const view of [
+      "overview",
+      "organization",
+      "customers",
+      "products",
+      "branches",
+      "workflows",
+      "settings",
+    ]) {
+      expect(page).toContain(`data-view="${view}"`);
+    }
+    expect(page).toContain('id="app-view"');
+    expect(page).toContain('id="loading-view"');
+    expect(application).toContain('"/auth/session"');
+  });
+
+  it("uses tenant-scoped Business Manager APIs for customer and catalog CRUD", () => {
+    expect(application).toContain(
+      'view === "customers" ? "customers" : "catalog"',
+    );
+    expect(application).toContain("/business/${resource}");
+    expect(application).toContain("function loadBusinessManagerView");
+    expect(application).toContain("function renderBusinessForm");
+    expect(application).toContain("function renderBusinessTable");
+    expect(application).toContain(
+      'method: options.mode === "edit" ? "PATCH" : "POST"',
+    );
+    expect(application).toContain('method: "DELETE"');
+    expect(application).toContain("window.confirm");
+    expect(application).not.toMatch(/localStorage|sessionStorage/);
+    expect(application).not.toMatch(
+      /customers\s*:\s*\[\s*\{|products\s*:\s*\[\s*\{/,
+    );
+  });
+
+  it("handles business-resource loading, empty, forbidden, retry, pagination and context changes", () => {
+    expect(application).toContain("Loading records…");
+    expect(application).toContain("Loading record…");
+    expect(application).toContain(
+      'No ${view === "customers" ? "customers" : "catalog items"} found.',
+    );
+    expect(application).toContain("requestError.status === 403");
+    expect(application).toContain('button.textContent = "Retry"');
+    expect(application).toContain('pagination.setAttribute("aria-label"');
+    expect(application).toContain("businessResourceSequence");
+    expect(application).toContain("currentSession !== session");
+    expect(application).toContain("businessResourceFilters.customers = {}");
+    expect(application).toContain("function clearBusinessManagerContext()");
+    expect(application).toContain("clearBusinessManagerContext();");
+    expect(application).toContain("reloadBusinessManagerViewIfSelected();");
+    expect(page).toContain('id="customers-nav"');
+    expect(page).toContain('id="products-nav"');
+  });
+
+  it("uses the existing configuration contract for supported profile mutations", () => {
+    expect(application).toContain(
+      "`/organizations/${encodeURIComponent(organizationId)}/configuration`",
+    );
+    expect(application).toContain('method: "PATCH"');
+    for (const field of [
+      "legalName",
+      "registrationNumber",
+      "taxNumber",
+      "countryCode",
+      "currencyCode",
+      "timezone",
+      "locale",
+    ]) {
+      expect(application).toContain(field);
+    }
+    expect(application).toContain('announce("Organization settings saved."');
+    expect(application).toContain(
+      "error.textContent = errorMessage(requestError)",
+    );
+    expect(application).toContain(
+      "The API validates and authorizes every update.",
+    );
+    expect(application).toContain("organization lifecycle status");
+  });
+
+  it("reuses server-verified branch context and registry entitlements", () => {
+    expect(application).toContain("session.availableBranches");
+    expect(application).toContain('"/auth/branch"');
+    expect(application).toContain('authenticatedRequest("/modules")');
+    expect(application).toContain("/modules`");
+    expect(application).toContain("entitlements.get(item.name)");
+    expect(application).toContain("organizationId");
+    expect(application).toContain("customers-nav");
+    expect(application).toContain("products-nav");
+  });
+
+  it("limits activity to the workflow API and distinguishes missing audit reads", () => {
+    expect(application).toContain("/workflow-executions");
+    expect(application).toContain("no tenant-authorized audit read API");
+    expect(application).toContain("workflow activity");
+    expect(application).toContain("requestError.status === 403");
+    expect(application).toContain("error.status === 404");
+  });
+});

@@ -148,6 +148,58 @@ const eventDefinitions = {
       })
       .strict(),
   },
+  CUSTOMER_CREATED: {
+    version: 1,
+    owningModule: "core.business_manager",
+    description: "A customer master-data record was created.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z.object({ customerId: z.uuid() }).strict(),
+  },
+  CUSTOMER_UPDATED: {
+    version: 1,
+    owningModule: "core.business_manager",
+    description: "A customer master-data record was updated.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        customerId: z.uuid(),
+        changedFields: z.array(z.string().trim().min(1).max(100)).max(20),
+      })
+      .strict(),
+  },
+  CUSTOMER_DELETED: {
+    version: 1,
+    owningModule: "core.business_manager",
+    description: "A customer master-data record was deactivated.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z.object({ customerId: z.uuid() }).strict(),
+  },
+  CATALOG_ITEM_CREATED: {
+    version: 1,
+    owningModule: "core.business_manager",
+    description: "A catalog item was created.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z.object({ catalogItemId: z.uuid() }).strict(),
+  },
+  CATALOG_ITEM_UPDATED: {
+    version: 1,
+    owningModule: "core.business_manager",
+    description: "A catalog item was updated.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        catalogItemId: z.uuid(),
+        changedFields: z.array(z.string().trim().min(1).max(100)).max(20),
+      })
+      .strict(),
+  },
+  CATALOG_ITEM_DELETED: {
+    version: 1,
+    owningModule: "core.business_manager",
+    description: "A catalog item was deactivated.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z.object({ catalogItemId: z.uuid() }).strict(),
+  },
   JOB_ENQUEUED: {
     version: 1,
     owningModule: "core.jobs",

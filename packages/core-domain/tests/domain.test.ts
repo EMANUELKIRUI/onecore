@@ -27,9 +27,68 @@ import {
   defaultOrganizationRoleTemplates,
   organizationSelfServicePermissionKeys,
   permissionCatalog,
+  customerCreateInputSchema,
+  customerUpdateInputSchema,
+  catalogItemCreateInputSchema,
+  catalogItemUpdateInputSchema,
+  catalogListQuerySchema,
+  workflowTriggerEventTypes,
 } from "../src/index.js";
 
 describe("platform domain values", () => {
+  it("validates customer and catalog input without monetary float coercion", () => {
+    expect(
+      customerCreateInputSchema.parse({
+        name: "  Acme Ltd ",
+        customerType: "BUSINESS",
+        email: " SALES@ACME.EXAMPLE ",
+        reference: "ac-1",
+      }),
+    ).toMatchObject({
+      name: "Acme Ltd",
+      email: "sales@acme.example",
+      reference: "AC-1",
+      status: "ACTIVE",
+    });
+    expect(() =>
+      customerCreateInputSchema.parse({
+        name: " ",
+        customerType: "PERSON",
+      }),
+    ).toThrow();
+    expect(() => customerUpdateInputSchema.parse({})).toThrow();
+    expect(
+      catalogItemCreateInputSchema.parse({
+        name: " Consulting ",
+        type: "SERVICE",
+        unit: "hour",
+        price: "0.100001",
+        currency: "KES",
+      }),
+    ).toMatchObject({ name: "Consulting", price: "0.100001" });
+    for (const price of ["-1", "1e3", "1.1234567", "01.00"]) {
+      expect(() =>
+        catalogItemCreateInputSchema.parse({
+          name: "Item",
+          type: "PRODUCT",
+          unit: "each",
+          price,
+          currency: "KES",
+        }),
+      ).toThrow();
+    }
+    expect(() =>
+      catalogItemUpdateInputSchema.parse({ currency: "BAD" }),
+    ).toThrow();
+    expect(catalogListQuerySchema.parse({ limit: "25" }).limit).toBe(25);
+    expect(() => catalogListQuerySchema.parse({ offset: "-1" })).toThrow();
+  });
+
+  it("keeps Business Manager mutation events outside the workflow trigger allowlist", () => {
+    expect(workflowTriggerEventTypes).not.toContain("CUSTOMER_CREATED");
+    expect(workflowTriggerEventTypes).not.toContain("CATALOG_ITEM_CREATED");
+  });
+
   it("defines self-only notification permissions without granting notification creation", () => {
     const catalogKeys = new Set(permissionCatalog.map(({ key }) => key));
     for (const key of organizationSelfServicePermissionKeys) {
@@ -56,6 +115,9 @@ describe("platform domain values", () => {
   it("registers the required versioned platform event contracts", () => {
     expect(Object.keys(eventRegistry).sort()).toEqual(
       [
+        "CATALOG_ITEM_CREATED",
+        "CATALOG_ITEM_UPDATED",
+        "CATALOG_ITEM_DELETED",
         "ORGANIZATION_CREATED",
         "ORGANIZATION_ACTIVATED",
         "USER_CREATED",
@@ -64,6 +126,9 @@ describe("platform domain values", () => {
         "MODULE_ENABLED",
         "MODULE_DISABLED",
         "CONFIGURATION_CHANGED",
+        "CUSTOMER_CREATED",
+        "CUSTOMER_UPDATED",
+        "CUSTOMER_DELETED",
         "FEATURE_FLAG_CHANGED",
         "JOB_ENQUEUED",
         "JOB_COMPLETED",

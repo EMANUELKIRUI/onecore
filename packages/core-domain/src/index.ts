@@ -5,6 +5,7 @@ export * from "./platform-services.js";
 export * from "./regionalization.js";
 export * from "./communications.js";
 export * from "./workflows.js";
+export * from "./business-manager.js";
 
 export const deploymentTypes = [
   "SAAS",
@@ -478,6 +479,23 @@ export const permissionCatalog = [
   },
   ...(
     [
+      ["customer", "create"],
+      ["customer", "read"],
+      ["customer", "update"],
+      ["customer", "delete"],
+      ["catalog", "create"],
+      ["catalog", "read"],
+      ["catalog", "update"],
+      ["catalog", "delete"],
+    ] as const
+  ).map(([resource, action]) => ({
+    module: "core.business_manager",
+    resource,
+    action,
+    description: `${action} Business Manager ${resource} records.`,
+  })),
+  ...(
+    [
       ["sales", "sale", "create"],
       ["sales", "sale", "read"],
       ["sales", "sale", "update"],
@@ -560,6 +578,14 @@ export const defaultOrganizationRoleTemplates = [
       ...roleAdministrationPermissionKeys,
       ...organizationConfigurationPermissionKeys,
       ...organizationSelfServicePermissionKeys,
+      "core.business_manager.customer.read",
+      "core.business_manager.customer.create",
+      "core.business_manager.customer.update",
+      "core.business_manager.customer.delete",
+      "core.business_manager.catalog.read",
+      "core.business_manager.catalog.create",
+      "core.business_manager.catalog.update",
+      "core.business_manager.catalog.delete",
     ],
   },
   {
@@ -568,6 +594,12 @@ export const defaultOrganizationRoleTemplates = [
       "core.organization.organization.read",
       "core.organization.user.read",
       "core.organization.settings.read",
+      "core.business_manager.customer.read",
+      "core.business_manager.customer.create",
+      "core.business_manager.customer.update",
+      "core.business_manager.catalog.read",
+      "core.business_manager.catalog.create",
+      "core.business_manager.catalog.update",
       ...organizationSelfServicePermissionKeys,
     ],
   },
@@ -575,6 +607,8 @@ export const defaultOrganizationRoleTemplates = [
     name: "Staff",
     permissionKeys: [
       "core.organization.organization.read",
+      "core.business_manager.customer.read",
+      "core.business_manager.catalog.read",
       ...organizationSelfServicePermissionKeys,
     ],
   },
@@ -583,6 +617,8 @@ export const defaultOrganizationRoleTemplates = [
     permissionKeys: [
       "core.organization.organization.read",
       "core.organization.settings.read",
+      "core.business_manager.customer.read",
+      "core.business_manager.catalog.read",
       ...organizationSelfServicePermissionKeys,
     ],
   },

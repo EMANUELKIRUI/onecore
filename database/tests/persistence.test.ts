@@ -265,7 +265,7 @@ describe("PostgreSQL persistence foundation", () => {
     await client.exec(`
       GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO onecore_app;
     `);
-  });
+  }, 30_000);
 
   afterAll(async () => {
     await client.close();

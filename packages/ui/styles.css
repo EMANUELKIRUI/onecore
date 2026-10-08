@@ -521,7 +521,8 @@ p {
   color: var(--oc-color-muted);
 }
 
-.oc-state--empty {
+.oc-state--empty,
+.oc-state--unavailable {
   color: var(--oc-color-muted);
 }
 
@@ -647,6 +648,16 @@ p {
 .oc-nav {
   display: grid;
   gap: var(--oc-space-2);
+}
+
+.oc-nav__group-label {
+  margin-top: var(--oc-space-3);
+  padding: 0.25rem 0.8rem;
+  color: var(--oc-color-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .oc-nav a {

@@ -1,4 +1,4 @@
-import { and, eq, or, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { ResolvedAuthorizationContext } from "./authorization.js";
@@ -6,6 +6,7 @@ import type { ResolvedAuthorizationContext } from "./authorization.js";
 export interface ResourceScopeColumns {
   organizationId: AnyPgColumn;
   branchId?: AnyPgColumn;
+  includeOrganizationWideRowsInBranchScope?: boolean;
   ownerUserId?: AnyPgColumn;
   assignedUserId?: AnyPgColumn;
 }
@@ -33,6 +34,10 @@ export function resourceScopePredicate(
 ): SQL | undefined {
   const assignedBranch =
     context.branchAccessMode === "ASSIGNED" ? context.branchId : null;
+  const branchPredicate = (branchId: string) =>
+    columns.includeOrganizationWideRowsInBranchScope
+      ? or(eq(columns.branchId!, branchId), isNull(columns.branchId!))!
+      : eq(columns.branchId!, branchId);
   if (context.branchAccessMode === "ASSIGNED" && !assignedBranch) {
     return undefined;
   }
@@ -43,7 +48,7 @@ export function resourceScopePredicate(
     if (scope === "ORGANIZATION") {
       rowScopes.push(sql`true`);
     } else if (scope === "BRANCH" && context.branchId && columns.branchId) {
-      rowScopes.push(eq(columns.branchId, context.branchId));
+      rowScopes.push(branchPredicate(context.branchId));
     } else if ((scope === "OWN" || scope === "SELF") && columns.ownerUserId) {
       rowScopes.push(eq(columns.ownerUserId, context.userId));
     } else if (scope === "ASSIGNED" && columns.assignedUserId) {
@@ -57,7 +62,7 @@ export function resourceScopePredicate(
     or(...rowScopes),
   ];
   if (assignedBranch && columns.branchId) {
-    predicates.push(eq(columns.branchId, assignedBranch));
+    predicates.push(branchPredicate(assignedBranch));
   }
   return and(...predicates);
 }

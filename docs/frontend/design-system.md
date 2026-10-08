@@ -37,6 +37,36 @@ or tenant audit-log reads to this application. These boundaries are explicit
 and display no fabricated records. `apps/superadmin`, `apps/support`, and
 `apps/status` remain reserved.
 
+## Business Manager frontend boundary
+
+Business Manager is a section of the existing authenticated application, not a
+second shell or a new module registry entry. Its overview is composed from
+verified session context, registered module/entitlement data, recent
+notifications, and workflow execution history. It does not display metrics
+that those APIs do not provide.
+
+The business profile and settings views reuse the organization configuration
+API. The existing `core.organization.settings.read` and
+`core.organization.settings.update` permissions govern reads and mutations on
+the server. The UI offers the existing legal-name, registration-number,
+tax-number, country, currency, locale, and time-zone fields. Organization
+status/name mutation and typed contact/address editing are not exposed by the
+current contract. Arbitrary address/tax JSON is not rendered.
+
+Customers and Products & Services use the tenant-authorized Business Manager
+APIs for customer and catalog-item search, pagination, detail, create, update,
+and deactivate. The API and database enforce the registered module
+entitlement, canonical permissions, active organization/branch context, data
+scopes, transactional audit/outbox mutations, and forced tenant RLS.
+Organization and branch changes clear the visible resource state before
+reloading it. Branch listing and switching reuse the session's authorized
+branch choices and `/auth/branch`. Workflow activity uses the existing
+tenant-authorized execution-history API; the audit log has no corresponding
+tenant read API.
+
+See [Business Manager capability map](../modules/business-manager.md) for the
+resource fields, schema, API, permission, lifecycle, and security boundaries.
+
 The shared `@onecore/ui` workspace uses native HTML, CSS, and browser ES
 modules. There is no framework, router, component runtime, or client state
 dependency to duplicate. Static applications should be hosted behind a

@@ -124,6 +124,11 @@ const moduleDefinitions = [
     name: "Module Registry and Entitlements",
     features: [],
   },
+  {
+    key: "core.business_manager",
+    name: "Business Manager",
+    features: [],
+  },
 ];
 
 try {
@@ -560,6 +565,14 @@ try {
           "core.organization.user.update",
           "core.organization.settings.read",
           "core.organization.settings.update",
+          "core.business_manager.customer.read",
+          "core.business_manager.customer.create",
+          "core.business_manager.customer.update",
+          "core.business_manager.customer.delete",
+          "core.business_manager.catalog.read",
+          "core.business_manager.catalog.create",
+          "core.business_manager.catalog.update",
+          "core.business_manager.catalog.delete",
         ]) {
           adminMembershipPermissions.add(key);
         }
@@ -581,6 +594,7 @@ try {
           "core.organization",
           "core.rbac",
           "core.modules",
+          "core.business_manager",
         ]) {
           const module = moduleByKey.get(moduleKey);
           if (!module)

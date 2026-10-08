@@ -108,6 +108,18 @@ export {
   type ResourceScopeValues,
 } from "./resource-authorization.js";
 export {
+  createCatalogItem,
+  createCustomer,
+  deleteCatalogItem,
+  deleteCustomer,
+  getCatalogItem,
+  getCustomer,
+  listCatalogItems,
+  listCustomers,
+  updateCatalogItem,
+  updateCustomer,
+} from "./business-manager.js";
+export {
   createModuleRegistry,
   moduleVersionSatisfies,
   type ModuleRegistry,

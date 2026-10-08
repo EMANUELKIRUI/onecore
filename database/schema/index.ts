@@ -196,6 +196,153 @@ export const branches = pgTable(
   ],
 );
 
+export const customers = pgTable(
+  "customers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    branchId: uuid("branch_id"),
+    reference: varchar("reference", { length: 100 }),
+    name: varchar("name", { length: 200 }).notNull(),
+    customerType: varchar("customer_type", { length: 20 }).notNull(),
+    phone: varchar("phone", { length: 50 }),
+    email: varchar("email", { length: 320 }),
+    status: varchar("status", { length: 20 }).notNull().default("ACTIVE"),
+    notes: text("notes"),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    unique("customers_organization_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    uniqueIndex("customers_org_reference_unique")
+      .on(table.organizationId, sql`lower(${table.reference})`)
+      .where(sql`${table.reference} IS NOT NULL`),
+    foreignKey({
+      name: "customers_organization_fk",
+      columns: [table.organizationId],
+      foreignColumns: [organizations.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "customers_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+    index("customers_org_status_updated_idx").on(
+      table.organizationId,
+      table.status,
+      table.updatedAt,
+    ),
+    index("customers_org_branch_status_idx").on(
+      table.organizationId,
+      table.branchId,
+      table.status,
+    ),
+    index("customers_org_name_idx").on(table.organizationId, table.name),
+    check(
+      "customers_type_check",
+      sql`${table.customerType} IN ('INDIVIDUAL', 'BUSINESS')`,
+    ),
+    check(
+      "customers_status_check",
+      sql`${table.status} IN ('ACTIVE', 'INACTIVE')`,
+    ),
+    check("customers_name_nonempty", sql`length(btrim(${table.name})) > 0`),
+    check(
+      "customers_reference_normalized",
+      sql`${table.reference} IS NULL OR ${table.reference} = upper(${table.reference})`,
+    ),
+    check(
+      "customers_email_valid",
+      sql`${table.email} IS NULL OR ${table.email} ~* '^[^[:space:]@]+@[^[:space:]@]+\\.[^[:space:]@]+$'`,
+    ),
+    check(
+      "customers_notes_length",
+      sql`${table.notes} IS NULL OR char_length(${table.notes}) <= 2000`,
+    ),
+  ],
+);
+
+export const catalogItems = pgTable(
+  "catalog_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    branchId: uuid("branch_id"),
+    reference: varchar("reference", { length: 100 }),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    type: varchar("type", { length: 20 }).notNull(),
+    unit: varchar("unit", { length: 50 }).notNull(),
+    price: numeric("price", { precision: 18, scale: 6 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("ACTIVE"),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    unique("catalog_items_organization_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    uniqueIndex("catalog_items_org_reference_unique")
+      .on(table.organizationId, sql`lower(${table.reference})`)
+      .where(sql`${table.reference} IS NOT NULL`),
+    foreignKey({
+      name: "catalog_items_organization_fk",
+      columns: [table.organizationId],
+      foreignColumns: [organizations.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "catalog_items_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+    index("catalog_items_org_status_updated_idx").on(
+      table.organizationId,
+      table.status,
+      table.updatedAt,
+    ),
+    index("catalog_items_org_branch_status_idx").on(
+      table.organizationId,
+      table.branchId,
+      table.status,
+    ),
+    index("catalog_items_org_name_idx").on(table.organizationId, table.name),
+    check(
+      "catalog_items_type_check",
+      sql`${table.type} IN ('PRODUCT', 'SERVICE')`,
+    ),
+    check(
+      "catalog_items_status_check",
+      sql`${table.status} IN ('ACTIVE', 'INACTIVE')`,
+    ),
+    check("catalog_items_price_nonnegative", sql`${table.price} >= 0`),
+    check(
+      "catalog_items_currency_format",
+      sql`${table.currency} ~ '^[A-Z]{3}$'`,
+    ),
+    check("catalog_items_name_nonempty", sql`length(btrim(${table.name})) > 0`),
+    check("catalog_items_unit_nonempty", sql`length(btrim(${table.unit})) > 0`),
+    check(
+      "catalog_items_reference_normalized",
+      sql`${table.reference} IS NULL OR ${table.reference} = upper(${table.reference})`,
+    ),
+    check(
+      "catalog_items_description_length",
+      sql`${table.description} IS NULL OR char_length(${table.description}) <= 2000`,
+    ),
+  ],
+);
+
 export const users = pgTable(
   "users",
   {

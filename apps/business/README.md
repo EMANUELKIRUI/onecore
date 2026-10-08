@@ -1,5 +1,47 @@
 # Business application
 
+## Business Manager
+
+The existing authenticated workspace now groups its supported organization
+operations under Business Manager. The overview reuses the verified session,
+organization module/entitlement, notification, and workflow APIs; it does not
+invent customer counts, sales metrics, or organization lifecycle state.
+
+The Business profile reads organization and business settings from the existing
+configuration API. Authorized changes to the legal name, registration/tax
+numbers, country, currency, locale, and time zone use that API's existing
+`PATCH` contract and `core.organization.settings.update` authorization. The
+organization name, lifecycle state, and a typed contact/address profile are
+not editable or fully exposed by this contract. Branch choices continue to
+come from the authenticated session and switching uses the existing
+session-bound branch API.
+
+Customers and Products & Services use the tenant-authorized Business Manager
+domain and APIs. The UI reads server-paginated records and sends create,
+update, and deactivate operations to the organization-scoped endpoints.
+Branch selection comes from the authenticated session; changing organization
+or branch clears and reloads the view. Workflow activity is available from the
+existing Phase 18 execution-history API; a tenant audit-log read API is not
+available.
+
+Branch-scoped customer and catalog reads include organization-wide records and
+records for the verified current branch, never records for other branches.
+Branch-scoped updates and deactivation are limited to current-branch records.
+
+Customer and catalog access requires the `core.business_manager` module
+entitlement and the corresponding `core.business_manager.customer.*` or
+`core.business_manager.catalog.*` permission. The API remains authoritative
+for organization membership, module entitlement, permissions, branch context,
+data scopes, and database row-level security. See
+[`docs/modules/business-manager.md`](../../docs/modules/business-manager.md)
+for resource fields, routes, lifecycle, and security boundaries.
+
+Business Manager owns product/service master data only. Inventory owns
+quantities, locations, and stock movements. The app does not implement POS,
+Inventory, Finance, Sales, or CRM transactions.
+
+## Existing workspace capabilities
+
 The authenticated workspace provides a data-backed dashboard with verified
 organization and branch context, registered module/entitlement status, recent
 notifications, and workflow execution status. Authorized screens use existing
