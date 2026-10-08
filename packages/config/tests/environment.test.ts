@@ -18,11 +18,41 @@ describe("loadConfig", () => {
   });
 
   it("parses a valid port and deployment environment", () => {
-    expect(loadConfig({ NODE_ENV: "production", PORT: "8443" })).toMatchObject({
+    expect(
+      loadConfig({ NODE_ENV: "production", PORT: "8443" }),
+    ).toMatchObject({
       NODE_ENV: "production",
+      HOST: "0.0.0.0",
       PORT: 8443,
     });
   });
+
+  it("uses the server interface when a deployment port is provided", () => {
+    expect(loadConfig({ PORT: "10000" })).toMatchObject({
+      HOST: "0.0.0.0",
+      PORT: 10000,
+    });
+  });
+
+  it("uses the server interface in staging without a supplied port", () => {
+    expect(loadConfig({ NODE_ENV: "staging" })).toMatchObject({
+      HOST: "0.0.0.0",
+      PORT: 3000,
+    });
+  });
+
+  it("preserves an explicitly configured host", () => {
+    expect(
+      loadConfig({ HOST: "127.0.0.1", PORT: "3000" }).HOST,
+    ).toBe("127.0.0.1");
+  });
+
+  it.each(["Production", "production ", "preview"])(
+    "rejects unsupported NODE_ENV value %j",
+    (NODE_ENV) => {
+      expect(() => loadConfig({ NODE_ENV })).toThrow(ConfigurationError);
+    },
+  );
 
   it("validates database URLs and authentication origin configuration", () => {
     expect(

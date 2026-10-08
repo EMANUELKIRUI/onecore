@@ -1,6 +1,16 @@
 # Deployment and governance
 
-Phase 2 adds a production-database migration boundary but does not provision production infrastructure or deploy applications. No hosting provider, database environment, release workflow, backup schedule, or production network has been confirmed; the repository does not invent one.
+Phase 2 adds a production-database migration boundary. Hosting and release procedures remain deployment-specific; this guide documents the runtime configuration contract without provisioning infrastructure.
+
+## Runtime environment
+
+The API validates environment variables at startup through `@onecore/config`. `NODE_ENV` must be exactly one of `development`, `test`, `staging`, or `production`; production is explicitly supported, and other values are rejected. The `.env.example` file uses `development` for local work. Staging/production or a supplied `PORT` defaults the listener to `0.0.0.0`; local development retains `127.0.0.1`. The port uses `process.env.PORT` when provided and otherwise defaults to `3000`. Set `NODE_ENV=production` for a production service and provide Render's `PORT` and PostgreSQL `DATABASE_URL`. `AUTH_ALLOWED_ORIGINS` must contain the exact comma-separated browser origins.
+
+## Static frontend deployment
+
+Marketing, Business, Superadmin, and Support are separate native static HTML, CSS, and ES-module applications. Each Vercel project uses its corresponding `apps/<name>` Root Directory, runs the checked-in build command, and publishes `dist`. Enable Vercel's **Include files outside the Root Directory** setting so the build can read `scripts/build-static-app.mjs` and `packages/ui`; the build copies the required shared stylesheet and modules into each app output. No bundler or external frontend dependency is required. Superadmin provides the existing organization application review API; Support has no connected support API and displays an unavailable state without customer data.
+
+Set `ONECORE_BUSINESS_URL` on Marketing and `ONECORE_MARKETING_URL` on Business, Superadmin, and Support to the corresponding public app URLs; each Vercel build fails if its required cross-app URL is missing. The static build injects these values into cross-app links. `ONECORE_API_BASE_PATH` may set a same-origin API path prefix such as `/api`; the current API client intentionally rejects cross-origin URLs and sends same-origin cookies. Route that prefix through a reviewed same-origin proxy to the Render API. These values are public URL/path configuration only; never put credentials or service secrets in frontend build variables.
 
 ## Organization deployment types
 

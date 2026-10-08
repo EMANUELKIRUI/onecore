@@ -64,10 +64,23 @@ export class ConfigurationError extends Error {
   }
 }
 
+function defaultHost(environment: NodeJS.ProcessEnv): string {
+  if (environment.HOST !== undefined) return environment.HOST;
+
+  const serverEnvironment =
+    environment.PORT !== undefined ||
+    environment.NODE_ENV === "staging" ||
+    environment.NODE_ENV === "production";
+  return serverEnvironment ? "0.0.0.0" : "127.0.0.1";
+}
+
 export function loadConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): RuntimeConfig {
-  const result = environmentSchema.safeParse(environment);
+  const result = environmentSchema.safeParse({
+    ...environment,
+    HOST: defaultHost(environment),
+  });
 
   if (!result.success) {
     const invalidKeys = [
