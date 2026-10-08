@@ -31,8 +31,9 @@ abstract class DeterministicTestProvider implements CommunicationProvider {
 
   async send(
     input: CommunicationProviderInput,
-    _credential: Uint8Array,
+    credential: Uint8Array,
   ): Promise<CommunicationProviderResult> {
+    void credential;
     this.calls.push({
       channel: input.channel,
       deliveryId: input.deliveryId,

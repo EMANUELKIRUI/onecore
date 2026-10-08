@@ -2,11 +2,8 @@ import { z } from "zod";
 
 export * from "./events.js";
 export * from "./platform-services.js";
-<<<<<<< HEAD
 export * from "./regionalization.js";
-=======
 export * from "./communications.js";
->>>>>>> 14422d7 (feat: complete phase 17 communications services)
 
 export const deploymentTypes = [
   "SAAS",

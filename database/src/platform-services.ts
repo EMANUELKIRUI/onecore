@@ -187,12 +187,21 @@ export function createPlatformServices(
                 .from(notificationPreferences)
                 .where(
                   and(
-                    eq(notificationPreferences.organizationId, resolved.organizationId),
+                    eq(
+                      notificationPreferences.organizationId,
+                      resolved.organizationId,
+                    ),
                     eq(notificationPreferences.channel, "IN_APP"),
-                    eq(notificationPreferences.category, parsed.notificationType),
+                    eq(
+                      notificationPreferences.category,
+                      parsed.notificationType,
+                    ),
                     or(
                       isNull(notificationPreferences.userId),
-                      eq(notificationPreferences.userId, parsed.recipientUserId),
+                      eq(
+                        notificationPreferences.userId,
+                        parsed.recipientUserId,
+                      ),
                     ),
                   ),
                 );

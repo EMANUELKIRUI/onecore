@@ -75,9 +75,7 @@ function stableContentHash(input: {
     }
     return JSON.stringify(value);
   }
-  return createHash("sha256")
-    .update(canonicalJson(input))
-    .digest("hex");
+  return createHash("sha256").update(canonicalJson(input)).digest("hex");
 }
 
 export function createCommunicationService(
@@ -100,7 +98,10 @@ export function createCommunicationService(
             .innerJoin(users, eq(users.id, organizationMemberships.userId))
             .where(
               and(
-                eq(organizationMemberships.organizationId, resolved.organizationId),
+                eq(
+                  organizationMemberships.organizationId,
+                  resolved.organizationId,
+                ),
                 eq(organizationMemberships.userId, parsed.recipientUserId),
                 eq(organizationMemberships.status, "ACTIVE"),
                 eq(users.status, "ACTIVE"),
@@ -110,11 +111,17 @@ export function createCommunicationService(
           if (!recipient) return { outcome: "SUPPRESSED" };
 
           const preferenceRows = await transaction
-            .select({ userId: notificationPreferences.userId, enabled: notificationPreferences.enabled })
+            .select({
+              userId: notificationPreferences.userId,
+              enabled: notificationPreferences.enabled,
+            })
             .from(notificationPreferences)
             .where(
               and(
-                eq(notificationPreferences.organizationId, resolved.organizationId),
+                eq(
+                  notificationPreferences.organizationId,
+                  resolved.organizationId,
+                ),
                 eq(notificationPreferences.channel, parsed.channel),
                 eq(notificationPreferences.category, parsed.category),
                 or(
@@ -144,7 +151,9 @@ export function createCommunicationService(
           const [settings] = await transaction
             .select({ locale: organizationSettings.locale })
             .from(organizationSettings)
-            .where(eq(organizationSettings.organizationId, resolved.organizationId))
+            .where(
+              eq(organizationSettings.organizationId, resolved.organizationId),
+            )
             .limit(1);
           const organizationLocale = settings?.locale ?? "en";
           const requestedLocale =
@@ -169,13 +178,22 @@ export function createCommunicationService(
             .innerJoin(
               communicationTemplates,
               and(
-                eq(communicationTemplates.organizationId, communicationTemplateVersions.organizationId),
-                eq(communicationTemplates.id, communicationTemplateVersions.templateId),
+                eq(
+                  communicationTemplates.organizationId,
+                  communicationTemplateVersions.organizationId,
+                ),
+                eq(
+                  communicationTemplates.id,
+                  communicationTemplateVersions.templateId,
+                ),
               ),
             )
             .where(
               and(
-                eq(communicationTemplateVersions.organizationId, resolved.organizationId),
+                eq(
+                  communicationTemplateVersions.organizationId,
+                  resolved.organizationId,
+                ),
                 eq(communicationTemplateVersions.status, "PUBLISHED"),
                 eq(communicationTemplates.status, "ACTIVE"),
                 eq(communicationTemplates.key, parsed.templateKey),
@@ -184,7 +202,9 @@ export function createCommunicationService(
               ),
             );
           const version = localeFallbacks
-            .map((locale) => versions.find((candidate) => candidate.locale === locale))
+            .map((locale) =>
+              versions.find((candidate) => candidate.locale === locale),
+            )
             .find((candidate) => candidate !== undefined);
           if (!version) return { outcome: "TEMPLATE_NOT_FOUND" };
 
@@ -196,7 +216,10 @@ export function createCommunicationService(
             body: version.body,
             variables: version.variables,
           });
-          const rendered = renderCommunicationTemplate(template, parsed.variables);
+          const rendered = renderCommunicationTemplate(
+            template,
+            parsed.variables,
+          );
           const [providerConfig] = await transaction
             .select({
               id: communicationProviderConfigs.id,
@@ -208,13 +231,19 @@ export function createCommunicationService(
             .innerJoin(
               integrations,
               and(
-                eq(integrations.organizationId, communicationProviderConfigs.organizationId),
+                eq(
+                  integrations.organizationId,
+                  communicationProviderConfigs.organizationId,
+                ),
                 eq(integrations.id, communicationProviderConfigs.integrationId),
               ),
             )
             .where(
               and(
-                eq(communicationProviderConfigs.organizationId, resolved.organizationId),
+                eq(
+                  communicationProviderConfigs.organizationId,
+                  resolved.organizationId,
+                ),
                 eq(communicationProviderConfigs.channel, parsed.channel),
                 eq(communicationProviderConfigs.status, "ACTIVE"),
               ),
@@ -249,8 +278,14 @@ export function createCommunicationService(
               .from(communicationMessages)
               .where(
                 and(
-                  eq(communicationMessages.organizationId, resolved.organizationId),
-                  eq(communicationMessages.idempotencyKey, parsed.idempotencyKey),
+                  eq(
+                    communicationMessages.organizationId,
+                    resolved.organizationId,
+                  ),
+                  eq(
+                    communicationMessages.idempotencyKey,
+                    parsed.idempotencyKey,
+                  ),
                 ),
               )
               .limit(1);
@@ -266,7 +301,10 @@ export function createCommunicationService(
                 .from(communicationDeliveries)
                 .where(
                   and(
-                    eq(communicationDeliveries.organizationId, resolved.organizationId),
+                    eq(
+                      communicationDeliveries.organizationId,
+                      resolved.organizationId,
+                    ),
                     eq(communicationDeliveries.messageId, existing.id),
                   ),
                 )
@@ -301,7 +339,9 @@ export function createCommunicationService(
               sourceEventId: parsed.sourceEventId ?? null,
               idempotencyKey: parsed.idempotencyKey ?? null,
               createdByUserId: resolved.userId,
-              scheduledAt: parsed.scheduledAt ? new Date(parsed.scheduledAt) : new Date(),
+              scheduledAt: parsed.scheduledAt
+                ? new Date(parsed.scheduledAt)
+                : new Date(),
             })
             .onConflictDoNothing()
             .returning({ id: communicationMessages.id });
@@ -318,8 +358,14 @@ export function createCommunicationService(
               .from(communicationMessages)
               .where(
                 and(
-                  eq(communicationMessages.organizationId, resolved.organizationId),
-                  eq(communicationMessages.idempotencyKey, parsed.idempotencyKey),
+                  eq(
+                    communicationMessages.organizationId,
+                    resolved.organizationId,
+                  ),
+                  eq(
+                    communicationMessages.idempotencyKey,
+                    parsed.idempotencyKey,
+                  ),
                 ),
               )
               .limit(1);
@@ -334,7 +380,10 @@ export function createCommunicationService(
               .from(communicationDeliveries)
               .where(
                 and(
-                  eq(communicationDeliveries.organizationId, resolved.organizationId),
+                  eq(
+                    communicationDeliveries.organizationId,
+                    resolved.organizationId,
+                  ),
                   eq(communicationDeliveries.messageId, existing.id),
                 ),
               )
@@ -358,10 +407,13 @@ export function createCommunicationService(
               providerConfigId: providerConfig.id,
               status: "QUEUED",
               maxAttempts: 5,
-              nextAttemptAt: parsed.scheduledAt ? new Date(parsed.scheduledAt) : new Date(),
+              nextAttemptAt: parsed.scheduledAt
+                ? new Date(parsed.scheduledAt)
+                : new Date(),
             })
             .returning({ id: communicationDeliveries.id });
-          if (!delivery) throw new Error("COMMUNICATION_DELIVERY_INSERT_FAILED");
+          if (!delivery)
+            throw new Error("COMMUNICATION_DELIVERY_INSERT_FAILED");
 
           await writeAuthorizationMutationEvent(
             transaction,
@@ -385,7 +437,9 @@ export function createCommunicationService(
               organizationId: resolved.organizationId,
               actorUserId: resolved.userId,
               correlationId: metadata.correlationId ?? metadata.requestId,
-              ...(parsed.sourceEventId ? { causationId: parsed.sourceEventId } : {}),
+              ...(parsed.sourceEventId
+                ? { causationId: parsed.sourceEventId }
+                : {}),
               aggregateType: "communication_message",
               aggregateId: message.id,
               payload: {

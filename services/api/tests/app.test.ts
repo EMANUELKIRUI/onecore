@@ -1106,7 +1106,10 @@ describe("API foundation", () => {
     const versionId = crypto.randomUUID();
     const deliveryId = crypto.randomUUID();
     const cases = [
-      app.inject({ method: "GET", url: `/organizations/${organizationId}/communication-templates` }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/communication-templates`,
+      }),
       app.inject({
         method: "POST",
         url: `/organizations/${organizationId}/communication-templates`,
@@ -1123,17 +1126,27 @@ describe("API foundation", () => {
         method: "POST",
         url: `/organizations/${organizationId}/communication-templates/${templateId}/versions/${versionId}/publish`,
       }),
-      app.inject({ method: "GET", url: `/organizations/${organizationId}/notification-preferences` }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/notification-preferences`,
+      }),
       app.inject({
         method: "PUT",
         url: `/organizations/${organizationId}/notification-preferences`,
         payload: { locale: "fr-CA" },
       }),
-      app.inject({ method: "GET", url: `/organizations/${organizationId}/notification-preferences/defaults` }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/notification-preferences/defaults`,
+      }),
       app.inject({
         method: "PUT",
         url: `/organizations/${organizationId}/notification-preferences/defaults`,
-        payload: { preferences: [{ channel: "EMAIL", category: "ACCOUNT_NOTICE", enabled: true }] },
+        payload: {
+          preferences: [
+            { channel: "EMAIL", category: "ACCOUNT_NOTICE", enabled: true },
+          ],
+        },
       }),
       app.inject({
         method: "POST",
@@ -1146,12 +1159,18 @@ describe("API foundation", () => {
           variables: { "customer.name": "Test" },
         },
       }),
-      app.inject({ method: "GET", url: `/organizations/${organizationId}/communications/deliveries` }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/communications/deliveries`,
+      }),
       app.inject({
         method: "GET",
         url: `/organizations/${organizationId}/communications/deliveries/${deliveryId}/attempts`,
       }),
-      app.inject({ method: "GET", url: `/organizations/${organizationId}/communication-providers` }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/communication-providers`,
+      }),
       app.inject({
         method: "POST",
         url: `/organizations/${organizationId}/communication-providers`,
@@ -1162,7 +1181,10 @@ describe("API foundation", () => {
           configuration: { senderName: "Test" },
         },
       }),
-      app.inject({ method: "GET", url: `/organizations/${organizationId}/notifications` }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/notifications`,
+      }),
       app.inject({
         method: "POST",
         url: `/organizations/${organizationId}/notifications/${crypto.randomUUID()}/read`,

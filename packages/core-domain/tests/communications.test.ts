@@ -77,18 +77,14 @@ describe("communications domain contracts", () => {
       "en",
     ]);
     expect(
-      selectCommunicationTemplateLocale(
-        ["en", "sw", "fr"],
-        "fr-CA",
-        "sw-KE",
-      ),
+      selectCommunicationTemplateLocale(["en", "sw", "fr"], "fr-CA", "sw-KE"),
     ).toBe("fr");
-    expect(
-      selectCommunicationTemplateLocale(["sw"], "fr-CA", "sw-KE"),
-    ).toBe("sw");
-    expect(
-      selectCommunicationTemplateLocale(["en"], "fr-CA", "sw-KE"),
-    ).toBe("en");
+    expect(selectCommunicationTemplateLocale(["sw"], "fr-CA", "sw-KE")).toBe(
+      "sw",
+    );
+    expect(selectCommunicationTemplateLocale(["en"], "fr-CA", "sw-KE")).toBe(
+      "en",
+    );
   });
 
   it("resolves preferences by user, organization, then platform precedence", () => {

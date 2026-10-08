@@ -2666,12 +2666,18 @@ export const communicationDeliveries = pgTable(
     foreignKey({
       name: "communication_deliveries_message_fk",
       columns: [table.organizationId, table.messageId],
-      foreignColumns: [communicationMessages.organizationId, communicationMessages.id],
+      foreignColumns: [
+        communicationMessages.organizationId,
+        communicationMessages.id,
+      ],
     }).onDelete("cascade"),
     foreignKey({
       name: "communication_deliveries_provider_config_fk",
       columns: [table.organizationId, table.providerConfigId],
-      foreignColumns: [communicationProviderConfigs.organizationId, communicationProviderConfigs.id],
+      foreignColumns: [
+        communicationProviderConfigs.organizationId,
+        communicationProviderConfigs.id,
+      ],
     }).onDelete("restrict"),
     index("communication_deliveries_queue_idx").on(
       table.organizationId,
@@ -2717,7 +2723,10 @@ export const communicationDeliveryAttempts = pgTable(
     foreignKey({
       name: "communication_delivery_attempts_delivery_fk",
       columns: [table.organizationId, table.deliveryId],
-      foreignColumns: [communicationDeliveries.organizationId, communicationDeliveries.id],
+      foreignColumns: [
+        communicationDeliveries.organizationId,
+        communicationDeliveries.id,
+      ],
     }).onDelete("cascade"),
     unique("communication_delivery_attempts_number_unique").on(
       table.organizationId,

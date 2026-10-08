@@ -76,7 +76,11 @@ function communicationTestAuthorization(): AuthorizationService {
       ) => Promise<T>,
     ): Promise<AuthorizationResult<T>> => {
       if (!context?.organizationId || !context.membershipId) {
-        return { allowed: false, statusCode: context ? 403 : 401, dataScopes: [] };
+        return {
+          allowed: false,
+          statusCode: context ? 403 : 401,
+          dataScopes: [],
+        };
       }
       const resolved: ResolvedAuthorizationContext = {
         userId: context.userId,
@@ -159,7 +163,8 @@ describe("communication tenant persistence", () => {
         status: "ACTIVE",
       })
       .returning();
-    if (!userA || !userB) throw new Error("Communication users were not created");
+    if (!userA || !userB)
+      throw new Error("Communication users were not created");
     await database.insert(schema.organizationMemberships).values([
       {
         organizationId: organizationA.id,
@@ -342,9 +347,11 @@ describe("communication tenant persistence", () => {
       visible.deliveries.rows,
       visible.attempts.rows,
     ]) {
-      expect(rows.every(({ organization_id }) => organization_id === organizationA.id)).toBe(
-        true,
-      );
+      expect(
+        rows.every(
+          ({ organization_id }) => organization_id === organizationA.id,
+        ),
+      ).toBe(true);
       expect(rows.length).toBeGreaterThan(0);
     }
     expect(visible.foreignMessageUpdate.rows).toEqual([]);
@@ -363,7 +370,9 @@ describe("communication tenant persistence", () => {
     });
     expect(missingContext.messageRows.rows).toEqual([]);
     expect(missingContext.preferenceRows.rows).toEqual([]);
-    expect(resourcesA.message.organizationId).not.toBe(resourcesB.message.organizationId);
+    expect(resourcesA.message.organizationId).not.toBe(
+      resourcesB.message.organizationId,
+    );
   });
 
   it("queues a rendered message transactionally with locale, preferences, and idempotency", async () => {
@@ -387,7 +396,8 @@ describe("communication tenant persistence", () => {
         locale: "fr-CA",
       })
       .returning();
-    if (!membership) throw new Error("Communication membership was not created");
+    if (!membership)
+      throw new Error("Communication membership was not created");
     await database.insert(schema.organizationSettings).values({
       organizationId: organization.id,
       countryCode: "KE",
@@ -437,19 +447,19 @@ describe("communication tenant persistence", () => {
       })
       .returning();
     if (!version) throw new Error("Published template was not created");
-      await expect(
-        database
-          .update(schema.communicationTemplateVersions)
-          .set({ body: "tampered published template" })
-          .where(eq(schema.communicationTemplateVersions.id, version.id)),
-      ).rejects.toThrow();
-      const [immutableVersion] = await database
-        .select({ body: schema.communicationTemplateVersions.body })
-        .from(schema.communicationTemplateVersions)
-        .where(eq(schema.communicationTemplateVersions.id, version.id));
-      expect(immutableVersion?.body).toBe(
-        "Hujambo {{customer.name}}, akaunti yako iko tayari.",
-      );
+    await expect(
+      database
+        .update(schema.communicationTemplateVersions)
+        .set({ body: "tampered published template" })
+        .where(eq(schema.communicationTemplateVersions.id, version.id)),
+    ).rejects.toThrow();
+    const [immutableVersion] = await database
+      .select({ body: schema.communicationTemplateVersions.body })
+      .from(schema.communicationTemplateVersions)
+      .where(eq(schema.communicationTemplateVersions.id, version.id));
+    expect(immutableVersion?.body).toBe(
+      "Hujambo {{customer.name}}, akaunti yako iko tayari.",
+    );
     await database.insert(schema.notificationPreferences).values({
       organizationId: organization.id,
       userId: null,
@@ -458,7 +468,9 @@ describe("communication tenant persistence", () => {
       enabled: true,
     });
 
-    const service = createCommunicationService(communicationTestAuthorization());
+    const service = createCommunicationService(
+      communicationTestAuthorization(),
+    );
     const context: AuthorizationContext = {
       userId: user.id,
       sessionId: crypto.randomUUID(),
@@ -528,15 +540,13 @@ describe("communication tenant persistence", () => {
       "opaque-test-reference-only",
     );
 
-    await database
-      .insert(schema.notificationPreferences)
-      .values({
-        organizationId: organization.id,
-        userId: user.id,
-        channel: "EMAIL",
-        category: "ACCOUNT_NOTICE",
-        enabled: false,
-      });
+    await database.insert(schema.notificationPreferences).values({
+      organizationId: organization.id,
+      userId: user.id,
+      channel: "EMAIL",
+      category: "ACCOUNT_NOTICE",
+      enabled: false,
+    });
     const suppressed = await service.enqueue(context, metadata, {
       ...request,
       idempotencyKey: "welcome-suppressed",
@@ -579,9 +589,7 @@ describe("communication tenant persistence", () => {
         expect(input.purpose).toBe("INTEGRATION_CREDENTIAL");
         expect(input.reference).toBe("opaque-test-reference-only");
         return use(
-          new TextEncoder().encode(
-            "deterministic-test-provider-credential",
-          ),
+          new TextEncoder().encode("deterministic-test-provider-credential"),
         );
       },
       delete: async () => undefined,
@@ -608,19 +616,23 @@ describe("communication tenant persistence", () => {
     const attempts = await database
       .select()
       .from(schema.communicationDeliveryAttempts)
-      .where(eq(schema.communicationDeliveryAttempts.deliveryId, first.value.deliveryId));
-    expect(attempts.map(({ status }) => status)).toEqual([
-      "RETRYING",
-      "SENT",
-    ]);
+      .where(
+        eq(
+          schema.communicationDeliveryAttempts.deliveryId,
+          first.value.deliveryId,
+        ),
+      );
+    expect(attempts.map(({ status }) => status)).toEqual(["RETRYING", "SENT"]);
     const [deliveredMessage] = await database
       .select({
         status: schema.communicationMessages.status,
+        subject: schema.communicationMessages.subject,
         renderedContent: schema.communicationMessages.renderedContent,
       })
       .from(schema.communicationMessages)
       .where(eq(schema.communicationMessages.id, first.value.messageId));
     expect(deliveredMessage?.status).toBe("SENT");
+    expect(deliveredMessage?.subject).toBeNull();
     expect(deliveredMessage?.renderedContent).toBe("");
 
     await database
@@ -631,9 +643,16 @@ describe("communication tenant persistence", () => {
       ...request,
       idempotencyKey: "welcome-dead-letter",
     };
-    const retryOnlyQueued = await service.enqueue(context, metadata, retryOnlyRequest);
+    const retryOnlyQueued = await service.enqueue(
+      context,
+      metadata,
+      retryOnlyRequest,
+    );
     expect(retryOnlyQueued.allowed).toBe(true);
-    if (!retryOnlyQueued.allowed || retryOnlyQueued.value.outcome !== "QUEUED") {
+    if (
+      !retryOnlyQueued.allowed ||
+      retryOnlyQueued.value.outcome !== "QUEUED"
+    ) {
       throw new Error("Retry-only communication message was not queued");
     }
     const retryDeliveryIds: string[] = [];
@@ -699,6 +718,110 @@ describe("communication tenant persistence", () => {
       );
     expect(retryAttempts).toHaveLength(5);
     expect(retryAttempts.at(-1)?.status).toBe("DEAD_LETTER");
+
+    const permanentFailureQueued = await service.enqueue(context, metadata, {
+      ...request,
+      idempotencyKey: "welcome-permanent-failure",
+    });
+    expect(permanentFailureQueued.allowed).toBe(true);
+    if (
+      !permanentFailureQueued.allowed ||
+      permanentFailureQueued.value.outcome !== "QUEUED"
+    ) {
+      throw new Error("Permanent-failure communication message was not queued");
+    }
+    const permanentFailureWorker = createCommunicationDeliveryWorker(
+      database as unknown as import("../src/index.js").Database,
+      testSecretStore,
+      createCommunicationProviderRegistry([
+        {
+          providerKey: "test.email",
+          channel: "EMAIL",
+          validateConfiguration: () => true,
+          async send() {
+            return {
+              outcome: "PERMANENT_FAILURE",
+              failureCode: "TEST_PERMANENT_FAILURE",
+            };
+          },
+        },
+      ]),
+    );
+    const permanentFailureResult =
+      await permanentFailureWorker.processTenantBatch(organization.id, {
+        now: new Date(retryStart.getTime() + 20 * 60_000),
+      });
+    expect(permanentFailureResult).toMatchObject({ claimed: 1, failed: 1 });
+    const [permanentlyFailedMessage] = await database
+      .select({
+        status: schema.communicationMessages.status,
+        subject: schema.communicationMessages.subject,
+        renderedContent: schema.communicationMessages.renderedContent,
+      })
+      .from(schema.communicationMessages)
+      .where(
+        eq(
+          schema.communicationMessages.id,
+          permanentFailureQueued.value.messageId,
+        ),
+      );
+    expect(permanentlyFailedMessage).toEqual({
+      status: "FAILED",
+      subject: null,
+      renderedContent: "",
+    });
+
+    const staleLeaseQueued = await service.enqueue(context, metadata, {
+      ...request,
+      idempotencyKey: "welcome-stale-lease",
+    });
+    expect(staleLeaseQueued.allowed).toBe(true);
+    if (
+      !staleLeaseQueued.allowed ||
+      staleLeaseQueued.value.outcome !== "QUEUED"
+    ) {
+      throw new Error("Stale-lease communication message was not queued");
+    }
+    await database
+      .update(schema.communicationDeliveries)
+      .set({
+        status: "SENDING",
+        attemptCount: 5,
+        leaseExpiresAt: new Date(retryStart.getTime() - 1),
+      })
+      .where(
+        eq(
+          schema.communicationDeliveries.id,
+          staleLeaseQueued.value.deliveryId,
+        ),
+      );
+    await database
+      .update(schema.communicationMessages)
+      .set({ status: "SENDING" })
+      .where(
+        eq(schema.communicationMessages.id, staleLeaseQueued.value.messageId),
+      );
+
+    const staleLeaseResult = await retryOnlyWorker.processTenantBatch(
+      organization.id,
+      { now: new Date(retryStart.getTime() + 10 * 60_000) },
+    );
+    expect(staleLeaseResult).toMatchObject({ claimed: 0 });
+    const [staleLeaseMessage] = await database
+      .select({
+        status: schema.communicationMessages.status,
+        subject: schema.communicationMessages.subject,
+        renderedContent: schema.communicationMessages.renderedContent,
+      })
+      .from(schema.communicationMessages)
+      .where(
+        eq(schema.communicationMessages.id, staleLeaseQueued.value.messageId),
+      );
+    expect(staleLeaseMessage).toEqual({
+      status: "DEAD_LETTER",
+      subject: null,
+      renderedContent: "",
+    });
   });
 
   it("applies user-over-organization preferences to existing in-app notifications", async () => {
@@ -771,11 +894,10 @@ describe("communication tenant persistence", () => {
       category: input.notificationType,
       enabled: true,
     });
-    const userOverride = await platform.createNotification(
-      context,
-      metadata,
-      { ...input, title: "User override" },
-    );
+    const userOverride = await platform.createNotification(context, metadata, {
+      ...input,
+      title: "User override",
+    });
     expect(userOverride).toMatchObject({
       allowed: true,
       value: { id: expect.any(String) },

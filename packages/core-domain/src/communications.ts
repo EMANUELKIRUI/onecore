@@ -7,9 +7,7 @@ export const communicationChannels = [
   "IN_APP",
 ] as const;
 export const communicationChannelSchema = z.enum(communicationChannels);
-export type CommunicationChannel = z.infer<
-  typeof communicationChannelSchema
->;
+export type CommunicationChannel = z.infer<typeof communicationChannelSchema>;
 
 export const communicationStatuses = [
   "QUEUED",
@@ -73,7 +71,10 @@ export const templateVariableNameSchema = z
   .max(100)
   .regex(/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)*$/)
   .refine(
-    (name) => !name.split(".").some((segment) => sensitiveVariableSegment.test(segment)),
+    (name) =>
+      !name
+        .split(".")
+        .some((segment) => sensitiveVariableSegment.test(segment)),
     "Sensitive variables are not permitted",
   );
 
@@ -94,8 +95,18 @@ export const queueCommunicationInputSchema = z
   .object({
     channel: z.enum(["EMAIL", "SMS", "WHATSAPP"]),
     recipientUserId: z.uuid(),
-    category: z.string().trim().min(1).max(100).regex(/^[A-Z][A-Z0-9_.-]*$/),
-    templateKey: z.string().trim().min(1).max(100).regex(/^[a-z][a-z0-9_.-]*$/),
+    category: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(/^[A-Z][A-Z0-9_.-]*$/),
+    templateKey: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(/^[a-z][a-z0-9_.-]*$/),
     locale: z.string().trim().min(2).max(35).optional(),
     variables: templateVariablesSchema.default({}),
     idempotencyKey: z.string().trim().min(1).max(200).optional(),
@@ -111,7 +122,12 @@ export type QueueCommunicationInput = z.infer<
 
 export const communicationTemplateInputSchema = z
   .object({
-    key: z.string().trim().min(1).max(100).regex(/^[a-z][a-z0-9_.-]*$/),
+    key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(/^[a-z][a-z0-9_.-]*$/),
     channel: communicationChannelSchema,
     locale: z.string().trim().min(2).max(35),
     subject: z.string().trim().max(250).optional(),
@@ -135,9 +151,10 @@ export const communicationTemplateInputSchema = z
       });
     }
     const placeholders = [template.body, template.subject ?? ""].flatMap(
-      (content) => [...content.matchAll(/{{\s*([^{}]+?)\s*}}/g)].map(
-        (match) => match[1] ?? "",
-      ),
+      (content) =>
+        [...content.matchAll(/{{\s*([^{}]+?)\s*}}/g)].map(
+          (match) => match[1] ?? "",
+        ),
     );
     if (/[{}]/.test(template.body.replace(/{{\s*[^{}]+?\s*}}/g, ""))) {
       context.addIssue({
@@ -284,9 +301,9 @@ export function selectCommunicationTemplateLocale(
   organizationLocale: string,
   platformLocale = "en",
 ): string | undefined {
-  const available = new Set(availableLocales.map((locale) =>
-    Intl.getCanonicalLocales(locale)[0],
-  ));
+  const available = new Set(
+    availableLocales.map((locale) => Intl.getCanonicalLocales(locale)[0]),
+  );
   return communicationLocaleFallbackChain(
     requestedLocale,
     organizationLocale,
@@ -305,9 +322,7 @@ export function resolveCommunicationPreference(input: {
 }
 
 export type CommunicationProviderFailureClass =
-  | "RETRYABLE"
-  | "PERMANENT"
-  | "RATE_LIMITED";
+  "RETRYABLE" | "PERMANENT" | "RATE_LIMITED";
 
 export const communicationProviderResultSchema = z
   .object({
@@ -319,7 +334,10 @@ export const communicationProviderResultSchema = z
       "RATE_LIMITED",
     ]),
     providerMessageId: z.string().trim().min(1).max(200).optional(),
-    failureCode: z.string().regex(/^[A-Z][A-Z0-9_]{0,79}$/).optional(),
+    failureCode: z
+      .string()
+      .regex(/^[A-Z][A-Z0-9_]{0,79}$/)
+      .optional(),
     retryAfterSeconds: z.number().int().min(0).max(86_400).optional(),
   })
   .strict();

@@ -6,7 +6,7 @@ import {
   type SecretReference,
   type SecretStore,
 } from "@onecore/core-domain";
-import { and, asc, eq, inArray, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, or } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import {
   auditLogs,
@@ -24,9 +24,10 @@ import { withOrganizationTransaction } from "./tenant-context.js";
 import { calculateWebhookRetryDelay } from "./webhooks.js";
 
 export interface CommunicationProviderRegistry {
-  get(channel: Exclude<CommunicationChannel, "IN_APP">, providerKey: string):
-    | CommunicationProvider
-    | undefined;
+  get(
+    channel: Exclude<CommunicationChannel, "IN_APP">,
+    providerKey: string,
+  ): CommunicationProvider | undefined;
 }
 
 export function createCommunicationProviderRegistry(
@@ -34,9 +35,7 @@ export function createCommunicationProviderRegistry(
 ): CommunicationProviderRegistry {
   const entries = new Map<string, CommunicationProvider>();
   for (const provider of providers) {
-    if (
-      !/^[a-z][a-z0-9_.-]{2,79}$/.test(provider.providerKey)
-    ) {
+    if (!/^[a-z][a-z0-9_.-]{2,79}$/.test(provider.providerKey)) {
       throw new TypeError("Invalid communication provider contract");
     }
     const key = `${provider.channel}:${provider.providerKey}`;
@@ -197,224 +196,267 @@ async function claimBatch(
   organizationId: string,
   options: CommunicationWorkerOptionsResolved,
 ): Promise<DeliveryClaim[] | undefined> {
-  return withOrganizationTransaction(database, organizationId, async (transaction) => {
-    const [organization] = await transaction
-      .select({ status: organizations.status })
-      .from(organizations)
-      .where(eq(organizations.id, organizationId))
-      .limit(1);
-    if (!organization || organization.status !== "ACTIVE") return undefined;
+  return withOrganizationTransaction(
+    database,
+    organizationId,
+    async (transaction) => {
+      const [organization] = await transaction
+        .select({ status: organizations.status })
+        .from(organizations)
+        .where(eq(organizations.id, organizationId))
+        .limit(1);
+      if (!organization || organization.status !== "ACTIVE") return undefined;
 
-    const eligible = await transaction
-      .select()
-      .from(communicationDeliveries)
-      .where(
-        and(
-          eq(communicationDeliveries.organizationId, organizationId),
-          lte(communicationDeliveries.nextAttemptAt, options.now),
-          or(
-            inArray(communicationDeliveries.status, ["QUEUED", "RETRYING"]),
-            and(
-              eq(communicationDeliveries.status, "SENDING"),
-              lte(communicationDeliveries.leaseExpiresAt, options.now),
+      const eligible = await transaction
+        .select()
+        .from(communicationDeliveries)
+        .where(
+          and(
+            eq(communicationDeliveries.organizationId, organizationId),
+            lte(communicationDeliveries.nextAttemptAt, options.now),
+            or(
+              inArray(communicationDeliveries.status, ["QUEUED", "RETRYING"]),
+              and(
+                eq(communicationDeliveries.status, "SENDING"),
+                lte(communicationDeliveries.leaseExpiresAt, options.now),
+              ),
             ),
           ),
-        ),
-      )
-      .orderBy(asc(communicationDeliveries.nextAttemptAt), asc(communicationDeliveries.createdAt))
-      .limit(options.batchSize)
-      .for("update", { skipLocked: true });
+        )
+        .orderBy(
+          asc(communicationDeliveries.nextAttemptAt),
+          asc(communicationDeliveries.createdAt),
+        )
+        .limit(options.batchSize)
+        .for("update", { skipLocked: true });
 
-    const claims: DeliveryClaim[] = [];
-    for (const delivery of eligible) {
-      if (delivery.status === "SENDING") {
-        await transaction
-          .update(communicationDeliveryAttempts)
-          .set({
-            status: "FAILED",
-            failureClass: "RETRYABLE",
-            failureCode: "WORKER_LEASE_EXPIRED",
-            completedAt: options.now,
-          })
-          .where(
-            and(
-              eq(communicationDeliveryAttempts.organizationId, organizationId),
-              eq(communicationDeliveryAttempts.deliveryId, delivery.id),
-              eq(communicationDeliveryAttempts.attemptNumber, delivery.attemptCount),
-              eq(communicationDeliveryAttempts.status, "SENDING"),
-            ),
+      const claims: DeliveryClaim[] = [];
+      for (const delivery of eligible) {
+        if (delivery.status === "SENDING") {
+          await transaction
+            .update(communicationDeliveryAttempts)
+            .set({
+              status: "FAILED",
+              failureClass: "RETRYABLE",
+              failureCode: "WORKER_LEASE_EXPIRED",
+              completedAt: options.now,
+            })
+            .where(
+              and(
+                eq(
+                  communicationDeliveryAttempts.organizationId,
+                  organizationId,
+                ),
+                eq(communicationDeliveryAttempts.deliveryId, delivery.id),
+                eq(
+                  communicationDeliveryAttempts.attemptNumber,
+                  delivery.attemptCount,
+                ),
+                eq(communicationDeliveryAttempts.status, "SENDING"),
+              ),
+            );
+        }
+        if (delivery.attemptCount >= delivery.maxAttempts) {
+          await transaction
+            .update(communicationDeliveries)
+            .set({
+              status: "DEAD_LETTER",
+              lastFailureClass: "RETRYABLE",
+              lastFailureCode: "MAX_ATTEMPTS_EXHAUSTED",
+              leaseToken: null,
+              leaseExpiresAt: null,
+              completedAt: options.now,
+              updatedAt: options.now,
+            })
+            .where(eq(communicationDeliveries.id, delivery.id));
+          await transaction
+            .update(communicationMessages)
+            .set({
+              status: "DEAD_LETTER",
+              subject: null,
+              renderedContent: "",
+              completedAt: options.now,
+              updatedAt: options.now,
+            })
+            .where(eq(communicationMessages.id, delivery.messageId));
+          await writeDeadLetterAudit(
+            transaction,
+            {
+              deliveryId: delivery.id,
+              messageId: delivery.messageId,
+              organizationId,
+              leaseToken: delivery.leaseToken ?? "",
+              attemptNumber: delivery.attemptCount,
+              maxAttempts: delivery.maxAttempts,
+            },
+            "MAX_ATTEMPTS_EXHAUSTED",
           );
-      }
-      if (delivery.attemptCount >= delivery.maxAttempts) {
+          continue;
+        }
+
+        const attemptNumber = delivery.attemptCount + 1;
+        const leaseToken = randomUUID();
         await transaction
           .update(communicationDeliveries)
           .set({
-            status: "DEAD_LETTER",
-            lastFailureClass: "RETRYABLE",
-            lastFailureCode: "MAX_ATTEMPTS_EXHAUSTED",
-            leaseToken: null,
-            leaseExpiresAt: null,
-            completedAt: options.now,
+            status: "SENDING",
+            attemptCount: attemptNumber,
+            leaseToken,
+            leaseExpiresAt: new Date(
+              options.now.getTime() + options.leaseMilliseconds,
+            ),
             updatedAt: options.now,
           })
           .where(eq(communicationDeliveries.id, delivery.id));
         await transaction
           .update(communicationMessages)
-          .set({ status: "DEAD_LETTER", completedAt: options.now, updatedAt: options.now })
-          .where(eq(communicationMessages.id, delivery.messageId));
-        await writeDeadLetterAudit(
-          transaction,
-          {
-            deliveryId: delivery.id,
-            messageId: delivery.messageId,
-            organizationId,
-            leaseToken: delivery.leaseToken ?? "",
-            attemptNumber: delivery.attemptCount,
-            maxAttempts: delivery.maxAttempts,
-          },
-          "MAX_ATTEMPTS_EXHAUSTED",
-        );
-        continue;
-      }
-
-      const attemptNumber = delivery.attemptCount + 1;
-      const leaseToken = randomUUID();
-      await transaction
-        .update(communicationDeliveries)
-        .set({
+          .set({ status: "SENDING", updatedAt: options.now })
+          .where(
+            and(
+              eq(communicationMessages.organizationId, organizationId),
+              eq(communicationMessages.id, delivery.messageId),
+            ),
+          );
+        await transaction.insert(communicationDeliveryAttempts).values({
+          organizationId,
+          deliveryId: delivery.id,
+          attemptNumber,
           status: "SENDING",
-          attemptCount: attemptNumber,
+        });
+        claims.push({
+          deliveryId: delivery.id,
+          organizationId,
+          messageId: delivery.messageId,
           leaseToken,
-          leaseExpiresAt: new Date(options.now.getTime() + options.leaseMilliseconds),
-          updatedAt: options.now,
-        })
-        .where(eq(communicationDeliveries.id, delivery.id));
-      await transaction
-        .update(communicationMessages)
-        .set({ status: "SENDING", updatedAt: options.now })
-        .where(
-          and(
-            eq(communicationMessages.organizationId, organizationId),
-            eq(communicationMessages.id, delivery.messageId),
-          ),
-        );
-      await transaction.insert(communicationDeliveryAttempts).values({
-        organizationId,
-        deliveryId: delivery.id,
-        attemptNumber,
-        status: "SENDING",
-      });
-      claims.push({
-        deliveryId: delivery.id,
-        organizationId,
-        messageId: delivery.messageId,
-        leaseToken,
-        attemptNumber,
-        maxAttempts: delivery.maxAttempts,
-      });
-    }
-    return claims;
-  });
+          attemptNumber,
+          maxAttempts: delivery.maxAttempts,
+        });
+      }
+      return claims;
+    },
+  );
 }
 
 async function loadClaim(
   database: Database,
   claim: DeliveryClaim,
 ): Promise<LoadedDelivery | undefined> {
-  return withOrganizationTransaction(database, claim.organizationId, async (transaction) => {
-    const [row] = await transaction
-      .select({
-        deliveryStatus: communicationDeliveries.status,
-        deliveryLeaseToken: communicationDeliveries.leaseToken,
-        messageId: communicationMessages.id,
-        channel: communicationMessages.channel,
-        recipientUserId: communicationMessages.recipientUserId,
-        subject: communicationMessages.subject,
-        body: communicationMessages.renderedContent,
-        providerConfigId: communicationDeliveries.providerConfigId,
-        providerKey: communicationProviderConfigs.providerKey,
-        providerStatus: communicationProviderConfigs.status,
-        configuration: communicationProviderConfigs.configuration,
-        secretReference: integrations.secretReference,
-        integrationStatus: integrations.status,
-        email: users.email,
-        idempotencyKey: communicationMessages.idempotencyKey,
-      })
-      .from(communicationDeliveries)
-      .innerJoin(
-        communicationMessages,
-        and(
-          eq(communicationMessages.organizationId, communicationDeliveries.organizationId),
-          eq(communicationMessages.id, communicationDeliveries.messageId),
-        ),
-      )
-      .leftJoin(
-        communicationProviderConfigs,
-        and(
-          eq(communicationProviderConfigs.organizationId, communicationDeliveries.organizationId),
-          eq(communicationProviderConfigs.id, communicationDeliveries.providerConfigId),
-        ),
-      )
-      .leftJoin(
-        integrations,
-        and(
-          eq(integrations.organizationId, communicationProviderConfigs.organizationId),
-          eq(integrations.id, communicationProviderConfigs.integrationId),
-        ),
-      )
-      .innerJoin(
-        organizationMemberships,
-        and(
-          eq(organizationMemberships.organizationId, communicationMessages.organizationId),
-          eq(organizationMemberships.userId, communicationMessages.recipientUserId),
-          eq(organizationMemberships.status, "ACTIVE"),
-        ),
-      )
-      .innerJoin(
-        users,
-        and(
-          eq(users.id, communicationMessages.recipientUserId),
-          eq(users.status, "ACTIVE"),
-        ),
-      )
-      .where(
-        and(
-          eq(communicationDeliveries.organizationId, claim.organizationId),
-          eq(communicationDeliveries.id, claim.deliveryId),
-          eq(communicationDeliveries.leaseToken, claim.leaseToken),
-          eq(communicationDeliveries.status, "SENDING"),
-        ),
-      )
-      .limit(1);
-    if (
-      !row ||
-      row.messageId !== claim.messageId ||
-      row.deliveryStatus !== "SENDING" ||
-      row.deliveryLeaseToken !== claim.leaseToken ||
-      row.channel === "IN_APP" ||
-      !row.providerConfigId ||
-      !row.providerKey ||
-      row.providerStatus !== "ACTIVE" ||
-      !row.configuration ||
-      !row.secretReference ||
-      !["PENDING", "ACTIVE"].includes(row.integrationStatus ?? "") ||
-      !row.idempotencyKey
-    ) {
-      return undefined;
-    }
-    return {
-      ...claim,
-      channel: row.channel,
-      recipientUserId: row.recipientUserId,
-      recipientEmail: row.email,
-      subject: row.subject,
-      body: row.body,
-      providerKey: row.providerKey,
-      providerConfiguration: row.configuration,
-      secretReference: secretReference(row.secretReference),
-      idempotencyKey: row.idempotencyKey,
-    };
-  });
+  return withOrganizationTransaction(
+    database,
+    claim.organizationId,
+    async (transaction) => {
+      const [row] = await transaction
+        .select({
+          deliveryStatus: communicationDeliveries.status,
+          deliveryLeaseToken: communicationDeliveries.leaseToken,
+          messageId: communicationMessages.id,
+          channel: communicationMessages.channel,
+          recipientUserId: communicationMessages.recipientUserId,
+          subject: communicationMessages.subject,
+          body: communicationMessages.renderedContent,
+          providerConfigId: communicationDeliveries.providerConfigId,
+          providerKey: communicationProviderConfigs.providerKey,
+          providerStatus: communicationProviderConfigs.status,
+          configuration: communicationProviderConfigs.configuration,
+          secretReference: integrations.secretReference,
+          integrationStatus: integrations.status,
+          email: users.email,
+          idempotencyKey: communicationMessages.idempotencyKey,
+        })
+        .from(communicationDeliveries)
+        .innerJoin(
+          communicationMessages,
+          and(
+            eq(
+              communicationMessages.organizationId,
+              communicationDeliveries.organizationId,
+            ),
+            eq(communicationMessages.id, communicationDeliveries.messageId),
+          ),
+        )
+        .leftJoin(
+          communicationProviderConfigs,
+          and(
+            eq(
+              communicationProviderConfigs.organizationId,
+              communicationDeliveries.organizationId,
+            ),
+            eq(
+              communicationProviderConfigs.id,
+              communicationDeliveries.providerConfigId,
+            ),
+          ),
+        )
+        .leftJoin(
+          integrations,
+          and(
+            eq(
+              integrations.organizationId,
+              communicationProviderConfigs.organizationId,
+            ),
+            eq(integrations.id, communicationProviderConfigs.integrationId),
+          ),
+        )
+        .innerJoin(
+          organizationMemberships,
+          and(
+            eq(
+              organizationMemberships.organizationId,
+              communicationMessages.organizationId,
+            ),
+            eq(
+              organizationMemberships.userId,
+              communicationMessages.recipientUserId,
+            ),
+            eq(organizationMemberships.status, "ACTIVE"),
+          ),
+        )
+        .innerJoin(
+          users,
+          and(
+            eq(users.id, communicationMessages.recipientUserId),
+            eq(users.status, "ACTIVE"),
+          ),
+        )
+        .where(
+          and(
+            eq(communicationDeliveries.organizationId, claim.organizationId),
+            eq(communicationDeliveries.id, claim.deliveryId),
+            eq(communicationDeliveries.leaseToken, claim.leaseToken),
+            eq(communicationDeliveries.status, "SENDING"),
+          ),
+        )
+        .limit(1);
+      if (
+        !row ||
+        row.messageId !== claim.messageId ||
+        row.deliveryStatus !== "SENDING" ||
+        row.deliveryLeaseToken !== claim.leaseToken ||
+        row.channel === "IN_APP" ||
+        !row.providerConfigId ||
+        !row.providerKey ||
+        row.providerStatus !== "ACTIVE" ||
+        !row.configuration ||
+        !row.secretReference ||
+        !["PENDING", "ACTIVE"].includes(row.integrationStatus ?? "") ||
+        !row.idempotencyKey
+      ) {
+        return undefined;
+      }
+      return {
+        ...claim,
+        channel: row.channel,
+        recipientUserId: row.recipientUserId,
+        recipientEmail: row.email,
+        subject: row.subject,
+        body: row.body,
+        providerKey: row.providerKey,
+        providerConfiguration: row.configuration,
+        secretReference: secretReference(row.secretReference),
+        idempotencyKey: row.idempotencyKey,
+      };
+    },
+  );
 }
 
 interface AttemptOutcome {
@@ -431,19 +473,27 @@ async function sendClaim(
   const provider = providers.get(claim.channel, claim.providerKey);
   if (!provider || provider.channel !== claim.channel) {
     return {
-      result: { outcome: "PERMANENT_FAILURE", failureCode: "PROVIDER_ADAPTER_UNAVAILABLE" },
+      result: {
+        outcome: "PERMANENT_FAILURE",
+        failureCode: "PROVIDER_ADAPTER_UNAVAILABLE",
+      },
       failureClass: "PERMANENT",
     };
   }
-  let configurationValid = false;
+  let configurationValid: boolean;
   try {
-    configurationValid = provider.validateConfiguration(claim.providerConfiguration);
+    configurationValid = provider.validateConfiguration(
+      claim.providerConfiguration,
+    );
   } catch {
     configurationValid = false;
   }
   if (!configurationValid) {
     return {
-      result: { outcome: "PERMANENT_FAILURE", failureCode: "PROVIDER_CONFIGURATION_INVALID" },
+      result: {
+        outcome: "PERMANENT_FAILURE",
+        failureCode: "PROVIDER_CONFIGURATION_INVALID",
+      },
       failureClass: "PERMANENT",
     };
   }
@@ -457,13 +507,19 @@ async function sendClaim(
     });
   } catch {
     return {
-      result: { outcome: "PERMANENT_FAILURE", failureCode: "RECIPIENT_RESOLUTION_FAILED" },
+      result: {
+        outcome: "PERMANENT_FAILURE",
+        failureCode: "RECIPIENT_RESOLUTION_FAILED",
+      },
       failureClass: "PERMANENT",
     };
   }
   if (!address) {
     return {
-      result: { outcome: "PERMANENT_FAILURE", failureCode: "RECIPIENT_ADDRESS_UNAVAILABLE" },
+      result: {
+        outcome: "PERMANENT_FAILURE",
+        failureCode: "RECIPIENT_ADDRESS_UNAVAILABLE",
+      },
       failureClass: "PERMANENT",
     };
   }
@@ -490,14 +546,20 @@ async function sendClaim(
     );
     if (!providerResult) {
       return {
-        result: { outcome: "RETRYABLE_FAILURE", failureCode: "SECRET_BACKEND_UNAVAILABLE" },
+        result: {
+          outcome: "RETRYABLE_FAILURE",
+          failureCode: "SECRET_BACKEND_UNAVAILABLE",
+        },
         failureClass: "RETRYABLE",
       };
     }
     const parsed = communicationProviderResultSchema.safeParse(providerResult);
     if (!parsed.success) {
       return {
-        result: { outcome: "PERMANENT_FAILURE", failureCode: "PROVIDER_RESPONSE_INVALID" },
+        result: {
+          outcome: "PERMANENT_FAILURE",
+          failureCode: "PROVIDER_RESPONSE_INVALID",
+        },
         failureClass: "PERMANENT",
       };
     }
@@ -514,7 +576,10 @@ async function sendClaim(
     };
   } catch {
     return {
-      result: { outcome: "RETRYABLE_FAILURE", failureCode: "PROVIDER_CALL_FAILED" },
+      result: {
+        outcome: "RETRYABLE_FAILURE",
+        failureCode: "PROVIDER_CALL_FAILED",
+      },
       failureClass: "RETRYABLE",
     };
   }
@@ -526,136 +591,149 @@ async function completeAttempt(
   outcome: AttemptOutcome,
   options: CommunicationWorkerOptionsResolved,
 ): Promise<
-  | "sent"
-  | "delivered"
-  | "retrying"
-  | "failed"
-  | "deadLettered"
-  | "skipped"
+  "sent" | "delivered" | "retrying" | "failed" | "deadLettered" | "skipped"
 > {
-  return withOrganizationTransaction(database, claim.organizationId, async (transaction) => {
-    const [current] = await transaction
-      .select({
-        status: communicationDeliveries.status,
-        leaseToken: communicationDeliveries.leaseToken,
-      })
-      .from(communicationDeliveries)
-      .where(
-        and(
-          eq(communicationDeliveries.organizationId, claim.organizationId),
-          eq(communicationDeliveries.id, claim.deliveryId),
-          eq(communicationDeliveries.status, "SENDING"),
-          eq(communicationDeliveries.leaseToken, claim.leaseToken),
-        ),
-      )
-      .for("update")
-      .limit(1);
-    if (!current) return "skipped";
+  return withOrganizationTransaction(
+    database,
+    claim.organizationId,
+    async (transaction) => {
+      const [current] = await transaction
+        .select({
+          status: communicationDeliveries.status,
+          leaseToken: communicationDeliveries.leaseToken,
+        })
+        .from(communicationDeliveries)
+        .where(
+          and(
+            eq(communicationDeliveries.organizationId, claim.organizationId),
+            eq(communicationDeliveries.id, claim.deliveryId),
+            eq(communicationDeliveries.status, "SENDING"),
+            eq(communicationDeliveries.leaseToken, claim.leaseToken),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!current) return "skipped";
 
-    const retryable = outcome.failureClass === "RETRYABLE" || outcome.failureClass === "RATE_LIMITED";
-    const retryExhausted = retryable && claim.attemptNumber >= claim.maxAttempts;
-    const nextStatus =
-      outcome.result.outcome === "DELIVERED"
-        ? "DELIVERED"
-        : outcome.result.outcome === "SENT"
-          ? "SENT"
-          : retryable && !retryExhausted
-            ? "RETRYING"
-            : retryExhausted
+      const retryable =
+        outcome.failureClass === "RETRYABLE" ||
+        outcome.failureClass === "RATE_LIMITED";
+      const retryExhausted =
+        retryable && claim.attemptNumber >= claim.maxAttempts;
+      const nextStatus =
+        outcome.result.outcome === "DELIVERED"
+          ? "DELIVERED"
+          : outcome.result.outcome === "SENT"
+            ? "SENT"
+            : retryable && !retryExhausted
+              ? "RETRYING"
+              : retryExhausted
+                ? "DEAD_LETTER"
+                : "FAILED";
+      const failureCode = retryExhausted
+        ? "MAX_ATTEMPTS_EXHAUSTED"
+        : (outcome.result.failureCode ?? null);
+      const nextAttemptAt =
+        nextStatus === "RETRYING"
+          ? new Date(
+              options.now.getTime() +
+                retryDelay(
+                  claim.attemptNumber,
+                  claim.deliveryId,
+                  outcome.result,
+                  options,
+                ),
+            )
+          : options.now;
+      await transaction
+        .update(communicationDeliveryAttempts)
+        .set({
+          status:
+            nextStatus === "DEAD_LETTER"
               ? "DEAD_LETTER"
-              : "FAILED";
-    const failureCode = retryExhausted
-      ? "MAX_ATTEMPTS_EXHAUSTED"
-      : outcome.result.failureCode ?? null;
-    const nextAttemptAt =
-      nextStatus === "RETRYING"
-        ? new Date(
-            options.now.getTime() +
-              retryDelay(claim.attemptNumber, claim.deliveryId, outcome.result, options),
-          )
-        : options.now;
-    await transaction
-      .update(communicationDeliveryAttempts)
-      .set({
-        status:
-          nextStatus === "DEAD_LETTER"
-            ? "DEAD_LETTER"
-            : nextStatus === "FAILED"
-              ? "FAILED"
-              : nextStatus,
-        providerMessageId: outcome.result.providerMessageId ?? null,
-        failureClass: outcome.failureClass,
-        failureCode,
-        retryAfterSeconds: outcome.result.retryAfterSeconds ?? null,
-        completedAt: options.now,
-      })
-      .where(
-        and(
-          eq(communicationDeliveryAttempts.organizationId, claim.organizationId),
-          eq(communicationDeliveryAttempts.deliveryId, claim.deliveryId),
-          eq(communicationDeliveryAttempts.attemptNumber, claim.attemptNumber),
-          eq(communicationDeliveryAttempts.status, "SENDING"),
-        ),
-      );
-    await transaction
-      .update(communicationDeliveries)
-      .set({
-        status: nextStatus,
-        providerMessageId: outcome.result.providerMessageId ?? null,
-        nextAttemptAt,
-        leaseToken: null,
-        leaseExpiresAt: null,
-        lastFailureClass: outcome.failureClass,
-        lastFailureCode: failureCode,
-        retryAfterSeconds: outcome.result.retryAfterSeconds ?? null,
-        completedAt:
-          nextStatus === "RETRYING" ? null : options.now,
-        updatedAt: options.now,
-      })
-      .where(eq(communicationDeliveries.id, claim.deliveryId));
-    await transaction
-      .update(communicationMessages)
-      .set({
-        status: nextStatus,
-        renderedContent: nextStatus === "RETRYING" ? undefined : "",
-        completedAt: nextStatus === "RETRYING" ? null : options.now,
-        updatedAt: options.now,
-      })
-      .where(eq(communicationMessages.id, claim.messageId));
-
-    if (nextStatus === "DEAD_LETTER" || nextStatus === "FAILED") {
-      await transaction.insert(auditLogs).values({
-        organizationId: claim.organizationId,
-        action:
-          nextStatus === "DEAD_LETTER"
-            ? "COMMUNICATION_DELIVERY_DEAD_LETTERED"
-            : "COMMUNICATION_DELIVERY_FAILED",
-        resource: "communication_delivery",
-        resourceId: claim.deliveryId,
-        result: "FAILURE",
-        requestMetadata: {
-          messageId: claim.messageId,
-          attempt: claim.attemptNumber,
+              : nextStatus === "FAILED"
+                ? "FAILED"
+                : nextStatus,
+          providerMessageId: outcome.result.providerMessageId ?? null,
           failureClass: outcome.failureClass,
           failureCode,
-        },
-      });
-    }
-    switch (nextStatus) {
-      case "SENT":
-        return "sent";
-      case "DELIVERED":
-        return "delivered";
-      case "RETRYING":
-        return "retrying";
-      case "FAILED":
-        return "failed";
-      case "DEAD_LETTER":
-        return "deadLettered";
-      default:
-        return "skipped";
-    }
-  });
+          retryAfterSeconds: outcome.result.retryAfterSeconds ?? null,
+          completedAt: options.now,
+        })
+        .where(
+          and(
+            eq(
+              communicationDeliveryAttempts.organizationId,
+              claim.organizationId,
+            ),
+            eq(communicationDeliveryAttempts.deliveryId, claim.deliveryId),
+            eq(
+              communicationDeliveryAttempts.attemptNumber,
+              claim.attemptNumber,
+            ),
+            eq(communicationDeliveryAttempts.status, "SENDING"),
+          ),
+        );
+      await transaction
+        .update(communicationDeliveries)
+        .set({
+          status: nextStatus,
+          providerMessageId: outcome.result.providerMessageId ?? null,
+          nextAttemptAt,
+          leaseToken: null,
+          leaseExpiresAt: null,
+          lastFailureClass: outcome.failureClass,
+          lastFailureCode: failureCode,
+          retryAfterSeconds: outcome.result.retryAfterSeconds ?? null,
+          completedAt: nextStatus === "RETRYING" ? null : options.now,
+          updatedAt: options.now,
+        })
+        .where(eq(communicationDeliveries.id, claim.deliveryId));
+      await transaction
+        .update(communicationMessages)
+        .set({
+          status: nextStatus,
+          subject: nextStatus === "RETRYING" ? undefined : null,
+          renderedContent: nextStatus === "RETRYING" ? undefined : "",
+          completedAt: nextStatus === "RETRYING" ? null : options.now,
+          updatedAt: options.now,
+        })
+        .where(eq(communicationMessages.id, claim.messageId));
+
+      if (nextStatus === "DEAD_LETTER" || nextStatus === "FAILED") {
+        await transaction.insert(auditLogs).values({
+          organizationId: claim.organizationId,
+          action:
+            nextStatus === "DEAD_LETTER"
+              ? "COMMUNICATION_DELIVERY_DEAD_LETTERED"
+              : "COMMUNICATION_DELIVERY_FAILED",
+          resource: "communication_delivery",
+          resourceId: claim.deliveryId,
+          result: "FAILURE",
+          requestMetadata: {
+            messageId: claim.messageId,
+            attempt: claim.attemptNumber,
+            failureClass: outcome.failureClass,
+            failureCode,
+          },
+        });
+      }
+      switch (nextStatus) {
+        case "SENT":
+          return "sent";
+        case "DELIVERED":
+          return "delivered";
+        case "RETRYING":
+          return "retrying";
+        case "FAILED":
+          return "failed";
+        case "DEAD_LETTER":
+          return "deadLettered";
+        default:
+          return "skipped";
+      }
+    },
+  );
 }
 
 export function createCommunicationDeliveryWorker(
@@ -691,8 +769,18 @@ export function createCommunicationDeliveryWorker(
           result.skipped += 1;
           continue;
         }
-        const outcome = await sendClaim(loaded, secretStore, providers, recipientResolver);
-        const completed = await completeAttempt(database, loaded, outcome, options);
+        const outcome = await sendClaim(
+          loaded,
+          secretStore,
+          providers,
+          recipientResolver,
+        );
+        const completed = await completeAttempt(
+          database,
+          loaded,
+          outcome,
+          options,
+        );
         if (completed === "skipped") result.skipped += 1;
         else {
           result[completed] += 1;

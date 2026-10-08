@@ -26,7 +26,10 @@ describe("deterministic communication test providers", () => {
     ]);
     const result = await provider.send(input, credential);
 
-    expect(result).toEqual({ outcome: "SENT", providerMessageId: "email-test-id" });
+    expect(result).toEqual({
+      outcome: "SENT",
+      providerMessageId: "email-test-id",
+    });
     expect(provider.calls).toEqual([
       {
         channel: "EMAIL",
@@ -35,8 +38,12 @@ describe("deterministic communication test providers", () => {
         recipientUserId: input.recipient.userId,
       },
     ]);
-    expect(JSON.stringify(provider.calls)).not.toContain("test-only-credential-material");
-    expect(JSON.stringify(provider.calls)).not.toContain(input.recipient.address);
+    expect(JSON.stringify(provider.calls)).not.toContain(
+      "test-only-credential-material",
+    );
+    expect(JSON.stringify(provider.calls)).not.toContain(
+      input.recipient.address,
+    );
     expect(JSON.stringify(provider.calls)).not.toContain(input.body);
   });
 
