@@ -38,6 +38,8 @@ import {
   type EventDeliveryStatus,
   type EventFailureKind,
   type EventProcessingStatus,
+  type WorkflowActionStatus,
+  type WorkflowExecutionStatus,
   type WebhookAttemptStatus,
   type WebhookDeliveryStatus,
   type WebhookSubscriptionStatus,
@@ -1130,6 +1132,79 @@ export const customFieldValues = pgTable(
   ],
 );
 
+export const outboxEvents = pgTable(
+  "outbox_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    eventType: varchar("event_type", { length: 150 }).notNull(),
+    aggregateType: varchar("aggregate_type", { length: 100 })
+      .notNull()
+      .default("legacy"),
+    aggregateId: uuid("aggregate_id").notNull(),
+    organizationId: uuid("organization_id").references(() => organizations.id, {
+      onDelete: "restrict",
+    }),
+    branchId: uuid("branch_id"),
+    actorUserId: uuid("actor_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    correlationId: uuid("correlation_id").notNull().defaultRandom(),
+    causationId: uuid("causation_id"),
+    occurredAt: timestamp("occurred_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    payload: jsonObject("payload"),
+    metadata: jsonObject("metadata"),
+    version: integer("version").notNull().default(1),
+    status: outboxStatus("status").notNull().default("PENDING"),
+    deliveryStatus: varchar("delivery_status", { length: 20 })
+      .$type<EventDeliveryStatus>()
+      .notNull()
+      .default("PENDING"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastError: varchar("last_error", { length: 2_000 }),
+    processingStartedAt: timestamp("processing_started_at", {
+      withTimezone: true,
+    }),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    updatedAt: updatedAt(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    unique("outbox_events_org_id_unique").on(table.organizationId, table.id),
+    index("outbox_events_pending_idx").on(
+      table.organizationId,
+      table.deliveryStatus,
+      table.nextAttemptAt,
+      table.createdAt,
+    ),
+    index("outbox_events_aggregate_idx").on(
+      table.organizationId,
+      table.aggregateId,
+      table.occurredAt,
+    ),
+    index("outbox_events_org_idx").on(table.organizationId, table.occurredAt),
+    index("outbox_events_type_idx").on(
+      table.organizationId,
+      table.eventType,
+      table.createdAt,
+    ),
+    check("outbox_events_attempts_nonnegative", sql`${table.attempts} >= 0`),
+    check(
+      "outbox_events_delivery_status_check",
+      sql`${table.deliveryStatus} in ('PENDING', 'PROCESSING', 'PUBLISHED', 'FAILED', 'DEAD_LETTERED')`,
+    ),
+    foreignKey({
+      name: "outbox_events_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+  ],
+);
+
 export const workflowDefinitions = pgTable(
   "workflow_definitions",
   {
@@ -1304,6 +1379,10 @@ export const workflowActions = pgTable(
       columns: [table.organizationId, table.workflowStepId],
       foreignColumns: [workflowSteps.organizationId, workflowSteps.id],
     }).onDelete("cascade"),
+    unique("workflow_actions_org_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
   ],
 );
 
@@ -1332,24 +1411,117 @@ export const workflowExecutions = pgTable(
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
     workflowVersionId: uuid("workflow_version_id").notNull(),
-    status: varchar("status", { length: 30 }).notNull().default("PENDING"),
+    sourceEventId: uuid("source_event_id"),
+    branchId: uuid("branch_id"),
+    status: varchar("status", { length: 30 })
+      .$type<WorkflowExecutionStatus>()
+      .notNull()
+      .default("PENDING"),
     resourceType: varchar("resource_type", { length: 100 }).notNull(),
     resourceId: uuid("resource_id").notNull(),
     context: jsonObject("context"),
+    failureCode: varchar("failure_code", { length: 100 }),
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
   (table) => [
+    unique("workflow_executions_org_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
     foreignKey({
       name: "workflow_executions_version_fk",
       columns: [table.organizationId, table.workflowVersionId],
       foreignColumns: [workflowVersions.organizationId, workflowVersions.id],
     }).onDelete("restrict"),
+    foreignKey({
+      name: "workflow_executions_source_event_fk",
+      columns: [table.organizationId, table.sourceEventId],
+      foreignColumns: [outboxEvents.organizationId, outboxEvents.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "workflow_executions_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+    uniqueIndex("workflow_executions_event_version_unique")
+      .on(table.organizationId, table.workflowVersionId, table.sourceEventId)
+      .where(sql`${table.sourceEventId} is not null`),
     index("workflow_executions_org_status_idx").on(
       table.organizationId,
       table.status,
+    ),
+    index("workflow_executions_org_branch_started_idx").on(
+      table.organizationId,
+      table.branchId,
+      table.startedAt,
+    ),
+    check(
+      "workflow_executions_status_check",
+      sql`${table.status} in ('PENDING', 'RUNNING', 'RETRYING', 'SUCCEEDED', 'FAILED', 'SKIPPED')`,
+    ),
+    check(
+      "workflow_executions_failure_code_check",
+      sql`${table.failureCode} is null or ${table.failureCode} ~ '^[A-Z0-9_]{1,100}$'`,
+    ),
+  ],
+);
+
+export const workflowExecutionActions = pgTable(
+  "workflow_execution_actions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    executionId: uuid("execution_id").notNull(),
+    workflowActionId: uuid("workflow_action_id").notNull(),
+    status: varchar("status", { length: 20 })
+      .$type<WorkflowActionStatus>()
+      .notNull()
+      .default("PENDING"),
+    attempts: integer("attempts").notNull().default(0),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    failureCode: varchar("failure_code", { length: 100 }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    foreignKey({
+      name: "workflow_execution_actions_execution_fk",
+      columns: [table.organizationId, table.executionId],
+      foreignColumns: [
+        workflowExecutions.organizationId,
+        workflowExecutions.id,
+      ],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "workflow_execution_actions_action_fk",
+      columns: [table.organizationId, table.workflowActionId],
+      foreignColumns: [workflowActions.organizationId, workflowActions.id],
+    }).onDelete("restrict"),
+    unique("workflow_execution_actions_action_unique").on(
+      table.organizationId,
+      table.executionId,
+      table.workflowActionId,
+    ),
+    index("workflow_execution_actions_org_status_idx").on(
+      table.organizationId,
+      table.executionId,
+      table.status,
+    ),
+    check(
+      "workflow_execution_actions_status_check",
+      sql`${table.status} in ('PENDING', 'RUNNING', 'RETRYING', 'SUCCEEDED', 'FAILED', 'SKIPPED')`,
+    ),
+    check(
+      "workflow_execution_actions_attempts_check",
+      sql`${table.attempts} between 0 and 20`,
+    ),
+    check(
+      "workflow_execution_actions_failure_code_check",
+      sql`${table.failureCode} is null or ${table.failureCode} ~ '^[A-Z0-9_]{1,100}$'`,
     ),
   ],
 );
@@ -1792,79 +1964,6 @@ export const rateLimitBuckets = pgTable(
       sql`${table.keyHash} ~ '^[0-9a-f]{64}$'`,
     ),
     check("rate_limit_buckets_hits_check", sql`${table.hitCount} > 0`),
-  ],
-);
-
-export const outboxEvents = pgTable(
-  "outbox_events",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    eventType: varchar("event_type", { length: 150 }).notNull(),
-    aggregateType: varchar("aggregate_type", { length: 100 })
-      .notNull()
-      .default("legacy"),
-    aggregateId: uuid("aggregate_id").notNull(),
-    organizationId: uuid("organization_id").references(() => organizations.id, {
-      onDelete: "restrict",
-    }),
-    branchId: uuid("branch_id"),
-    actorUserId: uuid("actor_user_id").references(() => users.id, {
-      onDelete: "set null",
-    }),
-    correlationId: uuid("correlation_id").notNull().defaultRandom(),
-    causationId: uuid("causation_id"),
-    occurredAt: timestamp("occurred_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    payload: jsonObject("payload"),
-    metadata: jsonObject("metadata"),
-    version: integer("version").notNull().default(1),
-    status: outboxStatus("status").notNull().default("PENDING"),
-    deliveryStatus: varchar("delivery_status", { length: 20 })
-      .$type<EventDeliveryStatus>()
-      .notNull()
-      .default("PENDING"),
-    attempts: integer("attempts").notNull().default(0),
-    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    lastError: varchar("last_error", { length: 2_000 }),
-    processingStartedAt: timestamp("processing_started_at", {
-      withTimezone: true,
-    }),
-    publishedAt: timestamp("published_at", { withTimezone: true }),
-    updatedAt: updatedAt(),
-    createdAt: createdAt(),
-  },
-  (table) => [
-    unique("outbox_events_org_id_unique").on(table.organizationId, table.id),
-    index("outbox_events_pending_idx").on(
-      table.organizationId,
-      table.deliveryStatus,
-      table.nextAttemptAt,
-      table.createdAt,
-    ),
-    index("outbox_events_aggregate_idx").on(
-      table.organizationId,
-      table.aggregateId,
-      table.occurredAt,
-    ),
-    index("outbox_events_org_idx").on(table.organizationId, table.occurredAt),
-    index("outbox_events_type_idx").on(
-      table.organizationId,
-      table.eventType,
-      table.createdAt,
-    ),
-    check("outbox_events_attempts_nonnegative", sql`${table.attempts} >= 0`),
-    check(
-      "outbox_events_delivery_status_check",
-      sql`${table.deliveryStatus} in ('PENDING', 'PROCESSING', 'PUBLISHED', 'FAILED', 'DEAD_LETTERED')`,
-    ),
-    foreignKey({
-      name: "outbox_events_branch_fk",
-      columns: [table.organizationId, table.branchId],
-      foreignColumns: [branches.organizationId, branches.id],
-    }).onDelete("restrict"),
   ],
 );
 

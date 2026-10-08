@@ -124,9 +124,16 @@ export {
 } from "./module-entitlements.js";
 export {
   createPlatformServices,
+  createInAppNotificationInTransaction,
   type PlatformServices,
   type SearchResult,
 } from "./platform-services.js";
+export {
+  createWorkflowEventHandlers,
+  createWorkflowJobHandler,
+  validateWorkflowVersionForExecution,
+  type WorkflowJobPayload,
+} from "./workflows.js";
 export {
   calculateJobRetryDelay,
   createJobHandlerRegistry,

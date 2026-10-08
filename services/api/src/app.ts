@@ -23,6 +23,7 @@ import { registerConfigurationResourceRoutes } from "./configuration-resources.j
 import { registerCommunicationRoutes } from "./communications.js";
 import { registerIntegrationSecurityRoutes } from "./integration-resources.js";
 import { registerEventRoutes } from "./events.js";
+import { registerWorkflowRoutes } from "./workflows.js";
 import { registerModuleRoutes } from "./modules.js";
 import { registerLifecycleRoutes } from "./lifecycle.js";
 import { createApiFastify } from "./fastify-instance.js";
@@ -162,6 +163,7 @@ export function buildApp(
     options.secretStore ?? unavailableSecretStore,
   );
   registerEventRoutes(app, correlatedAuthorization);
+  registerWorkflowRoutes(app, correlatedAuthorization);
   registerModuleRoutes(app, correlatedAuthorization);
   if (options.lifecycleMutations) {
     registerLifecycleRoutes(

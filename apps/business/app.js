@@ -1,5 +1,10 @@
 import { ApiError, createApiClient } from "../../packages/ui/src/api-client.js";
 import { announce, setTheme } from "../../packages/ui/src/elements.js";
+import {
+  formatDateTime,
+  resolveLocale,
+  translate,
+} from "../../packages/ui/src/localization.js";
 
 const apiBase =
   document
@@ -23,8 +28,247 @@ const sidebar = document.querySelector("#app-sidebar");
 const menuToggle = document.querySelector("#menu-toggle");
 const themeToggle = document.querySelector("#theme-toggle");
 const themeOptions = ["system", "light", "dark"];
+const workflowLocale = resolveLocale(globalThis.navigator.language);
+const workflowMessages = {
+  en: {
+    "workflow.nav": "Workflow activity",
+    "workflow.eyebrow": "Automation",
+    "workflow.title": "Workflow activity",
+    "workflow.description":
+      "Review recent event-triggered workflow executions and their action status.",
+    "workflow.refresh": "Refresh activity",
+    "workflow.loading": "Loading workflow activity…",
+    "workflow.empty": "No workflow executions are available.",
+    "workflow.started": "Started",
+    "workflow.completed": "Completed",
+    "workflow.event": "Event",
+    "workflow.status": "Status",
+    "workflow.actions": "Actions",
+    "workflow.noActions": "No actions recorded.",
+    "workflow.failure": "Failure",
+    "workflow.accessDenied":
+      "You are not authorized to view workflow activity.",
+    "workflow.loadFailed":
+      "Workflow activity could not be loaded. Please try again.",
+    "workflow.status.PENDING": "Pending",
+    "workflow.status.RUNNING": "Running",
+    "workflow.status.RETRYING": "Retrying",
+    "workflow.status.SUCCEEDED": "Succeeded",
+    "workflow.status.FAILED": "Failed",
+    "workflow.status.SKIPPED": "Skipped",
+    "workflow.action.NOTIFICATION": "In-app notification",
+  },
+  sw: {
+    "workflow.nav": "Shughuli za mtiririko wa kazi",
+    "workflow.eyebrow": "Uendeshaji otomatiki",
+    "workflow.title": "Shughuli za mtiririko wa kazi",
+    "workflow.description":
+      "Kagua utekelezaji wa hivi karibuni wa mtiririko na hali ya vitendo vyake.",
+    "workflow.refresh": "Onyesha upya shughuli",
+    "workflow.loading": "Inapakia shughuli za mtiririko wa kazi…",
+    "workflow.empty": "Hakuna utekelezaji wa mtiririko wa kazi unaopatikana.",
+    "workflow.started": "Ilianza",
+    "workflow.completed": "Ilikamilika",
+    "workflow.event": "Tukio",
+    "workflow.status": "Hali",
+    "workflow.actions": "Vitendo",
+    "workflow.noActions": "Hakuna vitendo vilivyorekodiwa.",
+    "workflow.failure": "Hitilafu",
+    "workflow.accessDenied":
+      "Huna ruhusa ya kuona shughuli za mtiririko wa kazi.",
+    "workflow.loadFailed":
+      "Haikuwezekana kupakia shughuli. Tafadhali jaribu tena.",
+    "workflow.status.PENDING": "Inasubiri",
+    "workflow.status.RUNNING": "Inaendelea",
+    "workflow.status.RETRYING": "Inajaribu tena",
+    "workflow.status.SUCCEEDED": "Imefanikiwa",
+    "workflow.status.FAILED": "Imeshindwa",
+    "workflow.status.SKIPPED": "Imepitwa",
+    "workflow.action.NOTIFICATION": "Arifa ya ndani ya programu",
+  },
+};
 let currentTheme = 0;
 let currentSession;
+let workflowLoadSequence = 0;
+
+function workflowText(key) {
+  return translate(key, {
+    locale: workflowLocale,
+    messages: workflowMessages,
+    fallbackText: key,
+  });
+}
+
+function workflowStatusLabel(status) {
+  return workflowText(`workflow.status.${status}`);
+}
+
+function setWorkflowText() {
+  document.querySelector("#workflow-nav").textContent =
+    workflowText("workflow.nav");
+  document.querySelector("#workflow-eyebrow").textContent =
+    workflowText("workflow.eyebrow");
+  document.querySelector("#workflows-title").textContent =
+    workflowText("workflow.title");
+  document.querySelector("#workflow-description").textContent = workflowText(
+    "workflow.description",
+  );
+  document.querySelector("#workflow-refresh").textContent =
+    workflowText("workflow.refresh");
+  document.querySelector("#workflow-loading").textContent =
+    workflowText("workflow.loading");
+  document.querySelector("#workflow-empty").textContent =
+    workflowText("workflow.empty");
+}
+
+function updateWorkflowNavigation(session) {
+  const navigation = document.querySelector("#workflow-nav");
+  const organizationId = session.organization?.organizationId;
+  if (!organizationId) {
+    navigation.hidden = true;
+    return;
+  }
+  void api
+    .request(
+      `/organizations/${encodeURIComponent(organizationId)}/workflow-executions?limit=1`,
+    )
+    .then(() => {
+      if (currentSession?.organization?.organizationId === organizationId) {
+        navigation.hidden = false;
+      }
+    })
+    .catch((error) => {
+      if (currentSession?.organization?.organizationId !== organizationId) {
+        return;
+      }
+      navigation.hidden =
+        error instanceof ApiError && [401, 403].includes(error.status);
+      if (!navigation.hidden) show(navigation);
+    });
+}
+
+function appendWorkflowField(container, label, value) {
+  const row = document.createElement("p");
+  const term = document.createElement("strong");
+  term.textContent = `${label}: `;
+  row.append(term, document.createTextNode(value));
+  container.append(row);
+}
+
+function renderWorkflowExecutions(executions) {
+  const list = document.querySelector("#workflow-list");
+  const empty = document.querySelector("#workflow-empty");
+  list.replaceChildren();
+  empty.hidden = executions.length !== 0;
+  for (const execution of executions) {
+    const card = document.createElement("article");
+    card.className = "oc-card oc-stack";
+    const heading = document.createElement("h2");
+    heading.className = "oc-section-title";
+    heading.textContent = `${execution.workflowName} · v${execution.version}`;
+    card.append(heading);
+    appendWorkflowField(
+      card,
+      workflowText("workflow.event"),
+      execution.eventType,
+    );
+    appendWorkflowField(
+      card,
+      workflowText("workflow.status"),
+      workflowStatusLabel(execution.status),
+    );
+    appendWorkflowField(
+      card,
+      workflowText("workflow.started"),
+      formatDateTime(new Date(execution.startedAt), { locale: workflowLocale }),
+    );
+    if (execution.completedAt) {
+      appendWorkflowField(
+        card,
+        workflowText("workflow.completed"),
+        formatDateTime(new Date(execution.completedAt), {
+          locale: workflowLocale,
+        }),
+      );
+    }
+    if (execution.failureCode) {
+      appendWorkflowField(
+        card,
+        workflowText("workflow.failure"),
+        execution.failureCode,
+      );
+    }
+    const actionsTitle = document.createElement("h3");
+    actionsTitle.className = "oc-section-title";
+    actionsTitle.textContent = workflowText("workflow.actions");
+    card.append(actionsTitle);
+    const actions = Array.isArray(execution.actions) ? execution.actions : [];
+    if (actions.length === 0) {
+      const noActions = document.createElement("p");
+      noActions.className = "oc-muted";
+      noActions.textContent = workflowText("workflow.noActions");
+      card.append(noActions);
+    } else {
+      const actionList = document.createElement("ul");
+      for (const action of actions) {
+        const item = document.createElement("li");
+        const actionName =
+          workflowText(`workflow.action.${action.type}`) ===
+          `workflow.action.${action.type}`
+            ? action.type
+            : workflowText(`workflow.action.${action.type}`);
+        item.textContent = `${actionName} — ${workflowStatusLabel(action.status)}`;
+        if (action.failureCode) {
+          item.textContent += ` (${workflowText("workflow.failure")}: ${action.failureCode})`;
+        }
+        actionList.append(item);
+      }
+      card.append(actionList);
+    }
+    list.append(card);
+  }
+}
+
+async function loadWorkflowExecutions() {
+  const session = currentSession;
+  const organizationId = session?.organization?.organizationId;
+  const sequence = ++workflowLoadSequence;
+  const loading = document.querySelector("#workflow-loading");
+  const error = document.querySelector("#workflow-error");
+  if (!organizationId) {
+    loading.hidden = true;
+    error.textContent = workflowText("workflow.accessDenied");
+    show(error);
+    return;
+  }
+  hide(error);
+  show(loading);
+  try {
+    const result = await api.request(
+      `/organizations/${encodeURIComponent(organizationId)}/workflow-executions?limit=50`,
+    );
+    if (
+      sequence !== workflowLoadSequence ||
+      currentSession?.organization?.organizationId !== organizationId
+    ) {
+      return;
+    }
+    renderWorkflowExecutions(
+      Array.isArray(result.executions) ? result.executions : [],
+    );
+  } catch (requestError) {
+    if (sequence !== workflowLoadSequence) return;
+    error.textContent =
+      requestError instanceof ApiError && requestError.status === 401
+        ? workflowText("workflow.accessDenied")
+        : requestError instanceof ApiError && requestError.status === 403
+          ? workflowText("workflow.accessDenied")
+          : workflowText("workflow.loadFailed");
+    show(error);
+  } finally {
+    if (sequence === workflowLoadSequence) hide(loading);
+  }
+}
 
 function show(element) {
   element.hidden = false;
@@ -47,9 +291,10 @@ function setFormPending(form, pending, submitLabel, pendingLabel) {
 }
 
 function selectView(view) {
-  const selected = view === "security" ? "security" : "overview";
+  const selected = ["security", "workflows"].includes(view) ? view : "overview";
   document.querySelector("#overview-view").hidden = selected !== "overview";
   document.querySelector("#security-view").hidden = selected !== "security";
+  document.querySelector("#workflows-view").hidden = selected !== "workflows";
   document.querySelectorAll("[data-view]").forEach((link) => {
     if (link.dataset.view === selected) {
       link.setAttribute("aria-current", "page");
@@ -59,6 +304,7 @@ function selectView(view) {
   });
   sidebar.dataset.open = "false";
   menuToggle.setAttribute("aria-expanded", "false");
+  if (selected === "workflows") void loadWorkflowExecutions();
 }
 
 function renderSession(session) {
@@ -104,6 +350,7 @@ function renderSession(session) {
     session.organization,
   );
   document.querySelector("#modules-empty").hidden = !session.organization;
+  updateWorkflowNavigation(session);
   selectView(location.hash.slice(1));
 }
 
@@ -257,6 +504,9 @@ document.querySelector("#sign-out").addEventListener("click", async (event) => {
 document
   .querySelector("#retry-session")
   .addEventListener("click", refreshSession);
+document
+  .querySelector("#workflow-refresh")
+  .addEventListener("click", loadWorkflowExecutions);
 window.addEventListener("hashchange", () => selectView(location.hash.slice(1)));
 menuToggle.addEventListener("click", () => {
   const expanded = menuToggle.getAttribute("aria-expanded") === "true";
@@ -281,4 +531,5 @@ themeToggle.addEventListener("click", () => {
   themeToggle.textContent = `Theme: ${theme}`;
 });
 
+setWorkflowText();
 void refreshSession();

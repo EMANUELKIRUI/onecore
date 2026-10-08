@@ -22,6 +22,18 @@ The PostgreSQL dispatcher claims eligible rows using `FOR UPDATE SKIP LOCKED` in
 
 Handlers declare a stable name, event type/version, owning module, optional required module entitlement, and optional required permission. `createEventHandlerRegistry` validates registrations and includes independent `core.audit` handlers. A handler with a missing or disabled entitlement, or missing permission, fails closed and does not execute. The API dispatch route also registers event-specific webhook enqueue handlers; those handlers only create separate tenant-scoped delivery rows for subscriptions that explicitly selected the event. External delivery occurs later in a separately claimed worker, never inside the business transaction. See [integration and webhook architecture](integrations.md) for delivery, retries, signing, and the fail-closed egress boundary.
 
+The API dispatcher also registers the bounded workflow event handler for the
+nine registered Phase 18 trigger contracts. It resolves only active workflow
+definitions and their published version, writes an idempotent execution plus
+one existing-queue job in the dispatch transaction, and excludes
+`JOB_*`, `NOTIFICATION_CREATED`, and `COMMUNICATION_QUEUED` events from
+workflow triggers. The worker revalidates the published configuration and
+executes only the in-app `NOTIFICATION` action through the existing
+notification service. It never calls communication providers. Execution and
+action statuses are separately persisted and tenant-isolated; workflow history
+is exposed only through the authorized execution-history API. See
+[workflow foundation](../workflows/README.md).
+
 For each `eventId + handlerName`, `event_processing_records` has a unique key and stores processing status, attempt count, timestamps, and failure details. Handler effects run in a nested transaction/savepoint and successful processing state is recorded in the enclosing transaction. A completed handler is skipped on duplicate delivery. `EVENT_HANDLED` and `EVENT_HANDLER_SUCCEEDED` are written to the existing audit log.
 
 ## Retries and dead letters

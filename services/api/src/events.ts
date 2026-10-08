@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   dispatchOutboxBatch,
+  createWorkflowEventHandlers,
   eventDeadLetterReadPermission,
   eventDispatchPermission,
   listEventDeadLetters,
@@ -119,7 +120,7 @@ export function registerEventRoutes(
           const dispatch = await dispatchOutboxBatch(
             transaction,
             context,
-            platformWebhookEventHandlers,
+            [...platformWebhookEventHandlers, ...createWorkflowEventHandlers()],
             body.data.batchSize === undefined
               ? {}
               : { batchSize: body.data.batchSize },

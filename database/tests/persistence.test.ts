@@ -322,6 +322,19 @@ describe("PostgreSQL persistence foundation", () => {
       "outbox_events:INSERT:version",
       "outbox_events:INSERT:delivery_status",
       "outbox_events:INSERT:next_attempt_at",
+      "outbox_events:SELECT:id",
+      "outbox_events:SELECT:event_type",
+      "outbox_events:SELECT:aggregate_type",
+      "outbox_events:SELECT:aggregate_id",
+      "outbox_events:SELECT:organization_id",
+      "outbox_events:SELECT:branch_id",
+      "outbox_events:SELECT:actor_user_id",
+      "outbox_events:SELECT:correlation_id",
+      "outbox_events:SELECT:causation_id",
+      "outbox_events:SELECT:occurred_at",
+      "outbox_events:SELECT:payload",
+      "outbox_events:SELECT:metadata",
+      "outbox_events:SELECT:version",
       "users:UPDATE:status",
       "users:UPDATE:failed_login_attempts",
       "users:UPDATE:failed_login_window_started_at",
@@ -371,6 +384,14 @@ describe("PostgreSQL persistence foundation", () => {
         false,
       );
     }
+    expect(
+      initialApplicationColumnPrivileges.has(
+        "outbox_events:SELECT:delivery_status",
+      ),
+    ).toBe(false);
+    expect(
+      initialApplicationColumnPrivileges.has("outbox_events:SELECT:attempts"),
+    ).toBe(false);
 
     const forbidden = [
       "users:UPDATE",
@@ -2228,13 +2249,14 @@ describe("PostgreSQL persistence foundation", () => {
           "workflow_triggers",
           "workflow_actions",
           "workflow_conditions",
+          "workflow_execution_actions",
           "integrations",
           "custom_domains",
           "feature_flag_assignments",
         ],
       ],
     );
-    expect(rlsCatalog.rows[0]?.count).toBe(16);
+    expect(rlsCatalog.rows[0]?.count).toBe(17);
   });
 
   it("enforces version activation, append-only audit records, and database constraints", async () => {

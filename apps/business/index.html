@@ -116,6 +116,9 @@
             <a href="#overview" data-view="overview" aria-current="page"
               >Overview</a
             >
+            <a id="workflow-nav" href="#workflows" data-view="workflows" hidden
+              >Workflow activity</a
+            >
             <a href="#security" data-view="security">Account security</a>
           </nav>
           <p class="oc-footer-note">
@@ -271,6 +274,45 @@
                 ></div>
                 <button class="oc-button" type="submit">Update password</button>
               </form>
+            </section>
+
+            <section
+              id="workflows-view"
+              class="oc-stack"
+              aria-labelledby="workflows-title"
+              hidden
+            >
+              <header class="oc-main-header">
+                <div class="oc-stack">
+                  <span class="oc-status" id="workflow-eyebrow"></span>
+                  <h1 id="workflows-title" class="oc-title"></h1>
+                  <p id="workflow-description" class="oc-muted"></p>
+                </div>
+                <button
+                  id="workflow-refresh"
+                  class="oc-button oc-button--secondary"
+                  type="button"
+                ></button>
+              </header>
+              <div
+                id="workflow-loading"
+                class="oc-card oc-empty"
+                role="status"
+                hidden
+              ></div>
+              <div
+                id="workflow-error"
+                class="oc-alert oc-alert--error"
+                role="alert"
+                hidden
+              ></div>
+              <div
+                id="workflow-empty"
+                class="oc-card oc-empty"
+                role="status"
+                hidden
+              ></div>
+              <div id="workflow-list" class="oc-stack" aria-live="polite"></div>
             </section>
           </main>
         </div>

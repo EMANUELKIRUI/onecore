@@ -76,6 +76,16 @@ administration permissions. A branch-scoped manager may read the role catalog
 within an authorized branch but cannot alter organization-level role
 definitions or assignments.
 
+Workflow execution history uses the existing
+`core.organization.workflows.read` permission and `core.configuration`
+entitlement, with a server-side resource-scope predicate on the persisted
+execution branch. Workflow scheduling requires
+`core.organization.workflows.manage`; notification actions additionally
+revalidate `core.organization.notification_inbox.manage` against the live
+dispatch principal before creating an in-app notification. Stored session IDs
+are identifiers only, not credentials; revoked or expired sessions cannot
+authorize an action. UI navigation and route visibility do not grant access.
+
 ## Audit and future boundaries
 
 Permission decisions, prevented privilege escalation, and RBAC mutations use

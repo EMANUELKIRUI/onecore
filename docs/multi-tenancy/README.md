@@ -24,6 +24,14 @@ Without tenant context, tenant rows are invisible and tenant writes fail. Never 
 
 Branches are organization-owned and use the typed lifecycle `ACTIVE`, `INACTIVE`, `SUSPENDED`, or `CLOSED`. Membership branch access defaults to `ASSIGNED` and can include multiple `membership_branches` assignments; trusted organization-wide membership access uses the explicit `ALL` mode. The server persists branch context in the existing session only after verifying the active organization, membership, branch, and assignment. Organization switching clears branch context. This selects a branch but is not complete branch-level data authorization: future branch-bearing business tables must include both organization and branch identity, use a composite `(organization_id, branch_id)` foreign key, apply branch predicates/RLS where appropriate, and query through authorized membership scope.
 
+Phase 18 workflow executions and action-progress records remain owned by the
+source event's organization. Executions retain the event's verified branch
+when present, use same-organization foreign keys, and cannot be read outside
+the caller's effective workflow data scope. Branch-scoped queries require the
+verified branch ID; a tenant ID in the route is only checked against the live
+membership context. `workflow_execution_actions` has forced RLS and does not
+store event payloads or rendered notification content.
+
 ## Operational roles
 
 Migrations use a schema owner separate from runtime. Application roles must neither own tenant tables nor hold `BYPASSRLS`/superuser privileges. Platform-wide catalogs (module/permission definitions) and identity user records are not tenant-owned; access must remain limited by service/database grants. See the [database guide](../../database/README.md) and [security documentation](../security/README.md).

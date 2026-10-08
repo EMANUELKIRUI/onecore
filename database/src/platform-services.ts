@@ -147,6 +147,105 @@ async function validateRecipientBranch(
   return assignment !== undefined;
 }
 
+export async function createInAppNotificationInTransaction(
+  transaction: OrganizationTransaction,
+  resolved: ResolvedAuthorizationContext,
+  metadata: AuthorizationMetadata,
+  input: unknown,
+): Promise<{ id: string } | null> {
+  const parsed = notificationInputSchema.parse(input);
+  if (!branchInputMatches(parsed.branchId, resolved)) return null;
+  const recipientAllowed = await validateRecipientBranch(
+    transaction,
+    resolved,
+    parsed.recipientUserId,
+  );
+  if (!recipientAllowed) return null;
+
+  const preferenceRows = await transaction
+    .select({
+      userId: notificationPreferences.userId,
+      enabled: notificationPreferences.enabled,
+    })
+    .from(notificationPreferences)
+    .where(
+      and(
+        eq(notificationPreferences.organizationId, resolved.organizationId),
+        eq(notificationPreferences.channel, "IN_APP"),
+        eq(notificationPreferences.category, parsed.notificationType),
+        or(
+          isNull(notificationPreferences.userId),
+          eq(notificationPreferences.userId, parsed.recipientUserId),
+        ),
+      ),
+    );
+  const organizationDefault = preferenceRows.find(
+    (preference) => preference.userId === null,
+  )?.enabled;
+  const userOverride = preferenceRows.find(
+    (preference) => preference.userId === parsed.recipientUserId,
+  )?.enabled;
+  if (
+    !resolveCommunicationPreference({
+      platformDefault: true,
+      ...(organizationDefault === undefined ? {} : { organizationDefault }),
+      ...(userOverride === undefined ? {} : { userOverride }),
+    })
+  ) {
+    return null;
+  }
+
+  const [notification] = await transaction
+    .insert(notifications)
+    .values({
+      organizationId: resolved.organizationId,
+      branchId: resolved.branchId,
+      recipientUserId: parsed.recipientUserId,
+      createdByUserId: resolved.userId,
+      notificationType: parsed.notificationType,
+      title: parsed.title,
+      body: parsed.body,
+      metadata: parsed.metadata,
+    })
+    .returning({ id: notifications.id });
+  if (!notification) throw new Error("NOTIFICATION_INSERT_FAILED");
+
+  await transaction.insert(notificationDeliveries).values({
+    organizationId: resolved.organizationId,
+    notificationId: notification.id,
+    channel: "IN_APP",
+    status: "DELIVERED",
+    attempts: 1,
+    deliveredAt: new Date(),
+  });
+  await writeAuthorizationMutationEvent(
+    transaction,
+    resolved,
+    metadata,
+    "NOTIFICATION_CREATED",
+    "notification",
+    notification.id,
+    { recipientUserId: parsed.recipientUserId },
+  );
+  await recordOutboxEvent(
+    transaction,
+    platformEvent(
+      resolved,
+      "NOTIFICATION_CREATED",
+      "notification",
+      notification.id,
+      {
+        notificationId: notification.id,
+        recipientUserId: parsed.recipientUserId,
+        notificationType: parsed.notificationType,
+      },
+      metadata.requestId,
+      metadata.correlationId ?? metadata.requestId,
+    ),
+  );
+  return { id: notification.id };
+}
+
 export function createPlatformServices(
   authorization: AuthorizationService,
 ): PlatformServices {
@@ -170,110 +269,13 @@ export function createPlatformServices(
             context,
             "core.organization.notification_inbox.manage",
             metadata,
-            async (transaction, resolved) => {
-              if (!branchInputMatches(parsed.branchId, resolved)) return null;
-              const recipientAllowed = await validateRecipientBranch(
-                transaction,
-                resolved,
-                parsed.recipientUserId,
-              );
-              if (!recipientAllowed) return null;
-
-              const preferenceRows = await transaction
-                .select({
-                  userId: notificationPreferences.userId,
-                  enabled: notificationPreferences.enabled,
-                })
-                .from(notificationPreferences)
-                .where(
-                  and(
-                    eq(
-                      notificationPreferences.organizationId,
-                      resolved.organizationId,
-                    ),
-                    eq(notificationPreferences.channel, "IN_APP"),
-                    eq(
-                      notificationPreferences.category,
-                      parsed.notificationType,
-                    ),
-                    or(
-                      isNull(notificationPreferences.userId),
-                      eq(
-                        notificationPreferences.userId,
-                        parsed.recipientUserId,
-                      ),
-                    ),
-                  ),
-                );
-              const organizationDefault = preferenceRows.find(
-                (preference) => preference.userId === null,
-              )?.enabled;
-              const userOverride = preferenceRows.find(
-                (preference) => preference.userId === parsed.recipientUserId,
-              )?.enabled;
-              if (
-                !resolveCommunicationPreference({
-                  platformDefault: true,
-                  ...(organizationDefault === undefined
-                    ? {}
-                    : { organizationDefault }),
-                  ...(userOverride === undefined ? {} : { userOverride }),
-                })
-              ) {
-                return null;
-              }
-
-              const [notification] = await transaction
-                .insert(notifications)
-                .values({
-                  organizationId: resolved.organizationId,
-                  branchId: resolved.branchId,
-                  recipientUserId: parsed.recipientUserId,
-                  createdByUserId: resolved.userId,
-                  notificationType: parsed.notificationType,
-                  title: parsed.title,
-                  body: parsed.body,
-                  metadata: parsed.metadata,
-                })
-                .returning({ id: notifications.id });
-              if (!notification)
-                throw new Error("Notification insert returned no row");
-
-              await transaction.insert(notificationDeliveries).values({
-                organizationId: resolved.organizationId,
-                notificationId: notification.id,
-                channel: "IN_APP",
-                status: "DELIVERED",
-                attempts: 1,
-                deliveredAt: new Date(),
-              });
-              await writeAuthorizationMutationEvent(
+            (transaction, resolved) =>
+              createInAppNotificationInTransaction(
                 transaction,
                 resolved,
                 metadata,
-                "NOTIFICATION_CREATED",
-                "notification",
-                notification.id,
-                { recipientUserId: parsed.recipientUserId },
-              );
-              await recordOutboxEvent(
-                transaction,
-                platformEvent(
-                  resolved,
-                  "NOTIFICATION_CREATED",
-                  "notification",
-                  notification.id,
-                  {
-                    notificationId: notification.id,
-                    recipientUserId: parsed.recipientUserId,
-                    notificationType: parsed.notificationType,
-                  },
-                  metadata.requestId,
-                  metadata.correlationId ?? metadata.requestId,
-                ),
-              );
-              return { id: notification.id };
-            },
+                parsed,
+              ),
           ),
         (result) => ({
           notificationId:

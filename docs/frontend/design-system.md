@@ -46,7 +46,14 @@ current session response does not expose those capability lists, so the shell
 does not pretend to show or enforce them. A hidden action is usability only;
 the API and database remain the authorization boundary.
 
-The current shell links only to its overview and account-security views. It
+The business shell includes a workflow activity view backed by the authorized
+execution-history API. Its navigation is exposed only when the server accepts
+the caller's workflow-history request; a failed or hidden UI control is not
+authorization. The view renders safe workflow/version/event/status/timestamp
+and action-status metadata, including accessible loading, empty, and error
+states. New labels and timestamps use the shared English/Kiswahili
+localization and formatting helpers. It does not render event payloads,
+notification content, recipient data, or job internals. The shell otherwise
 shows an explicit empty state until actual business modules are enabled and
 implemented; it must not show fabricated metrics or inactive routes. Public
 content is limited to the existing platform story and links to the workspace.

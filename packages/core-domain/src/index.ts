@@ -4,6 +4,7 @@ export * from "./events.js";
 export * from "./platform-services.js";
 export * from "./regionalization.js";
 export * from "./communications.js";
+export * from "./workflows.js";
 
 export const deploymentTypes = [
   "SAAS",

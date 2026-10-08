@@ -120,6 +120,7 @@ describe("API foundation", () => {
     const integrationId = crypto.randomUUID();
     const webhookId = crypto.randomUUID();
     const deliveryId = crypto.randomUUID();
+    const workflowExecutionId = crypto.randomUUID();
     const fakeSigningValue = "not-a-production-credential-1234567890";
     const responses = await Promise.all([
       app.inject({
@@ -153,10 +154,18 @@ describe("API foundation", () => {
           signingSecret: fakeSigningValue,
         },
       }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/workflow-executions`,
+      }),
+      app.inject({
+        method: "GET",
+        url: `/organizations/${organizationId}/workflow-executions/${workflowExecutionId}`,
+      }),
     ]);
 
     expect(responses.map(({ statusCode }) => statusCode)).toEqual([
-      401, 401, 401, 401, 401, 401,
+      401, 401, 401, 401, 401, 401, 401, 401,
     ]);
     expect(
       responses.every(({ body }) => !body.includes(fakeSigningValue)),

@@ -8,6 +8,8 @@ import {
   workflowActions,
   workflowConditions,
   workflowDefinitions,
+  JobExecutionError,
+  validateWorkflowVersionForExecution,
   workflowTransitions,
   workflowVersions,
   writeAuthorizationMutationEvent,
@@ -702,7 +704,14 @@ export function registerConfigurationResourceRoutes(
                       options,
                       validation,
                     );
-            } catch {
+            } catch (error) {
+              if (
+                !(error instanceof TypeError) &&
+                !(error instanceof z.ZodError) &&
+                !(error instanceof JobExecutionError)
+              ) {
+                throw error;
+              }
               return response(400, {
                 error: {
                   code: "BAD_REQUEST",
@@ -1364,6 +1373,21 @@ export function registerConfigurationResourceRoutes(
               error: {
                 code: "CONFLICT",
                 message: "Only a draft workflow version can be activated.",
+              },
+            });
+          }
+          try {
+            await validateWorkflowVersionForExecution(
+              transaction,
+              context.organizationId,
+              version.id,
+            );
+          } catch {
+            return response(400, {
+              error: {
+                code: "INVALID_WORKFLOW",
+                message:
+                  "The draft workflow contains unsupported or invalid configuration.",
               },
             });
           }

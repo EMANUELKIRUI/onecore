@@ -19,6 +19,22 @@ Authentication is not the complete authorization engine. There are currently no 
 
 Validate every external input at the API boundary. Route handlers should delegate business decisions to application services; domain code must not depend on Fastify.
 
+## Workflow execution history
+
+| Method | Route                                                               | Behavior                                                                                                        |
+| ------ | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/organizations/:organizationId/workflow-executions?limit=&offset=` | Lists recent execution status and safe action status for the verified tenant and effective workflow read scope. |
+| `GET`  | `/organizations/:organizationId/workflow-executions/:executionId`   | Returns safe status for one execution only if it is visible in the caller's organization/branch data scope.     |
+
+Both routes require `core.organization.workflows.read`, an active
+`core.configuration` entitlement, a live session, active organization
+membership, and valid branch context. Route organization IDs are consistency
+checks, not tenant selectors. Responses omit triggering payloads, resource
+identifiers, notification content, recipient identifiers, job payloads, secret
+references, and internal authorization details. The business app uses the
+list route for its localized status surface; backend checks remain
+authoritative.
+
 ## Production lifecycle mutations
 
 - `POST /platform/organizations` creates an organization in `PENDING`, provisions the existing default role templates, and creates or resolves the explicitly supplied bootstrap owner as an active identity with an `ACTIVE` membership and the existing Organization Owner role; email is required. A new identity also requires display name and password, which is Argon2id-hashed; an existing active identity is reused without changing credentials. A live platform `SUPERADMIN` session is required.
