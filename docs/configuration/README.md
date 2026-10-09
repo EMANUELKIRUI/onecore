@@ -67,7 +67,7 @@ Definitions (`feature_flags`) are distinct from scoped assignments and support `
 
 ## Workflow and other metadata
 
-Tenant-authorized APIs manage workflow definitions, draft versions, steps, triggers, bounded condition metadata, transitions, and allow-listed `NOTIFICATION`/`APPROVAL` action metadata. Versions are immutable after publication; activation retires the previous published version, and deactivation retires the active version. One published version per workflow is enforced in PostgreSQL. Metadata is never executed as SQL, shell commands, JavaScript, or application code. There is no visual builder or workflow execution engine.
+Tenant-authorized APIs manage workflow definitions, draft versions, steps, triggers, bounded condition metadata, transitions, and allow-listed `NOTIFICATION`/`APPROVAL` action metadata. Versions are immutable after publication; activation retires the previous published version, and deactivation retires the active version. One published version per workflow is enforced in PostgreSQL. Metadata is never executed as SQL, shell commands, JavaScript, or application code. Phase 18 implements bounded event-triggered scheduling and notification job handlers; it does not add a visual builder or a deployed production worker.
 
 Organization notification preference GET/PATCH APIs validate event, channel, enabled state, recipient mode, and optional session-verified branch scope. Integration GET/POST/PATCH/DELETE APIs allow-list non-secret provider metadata, reject secret-shaped request fields, and redact legacy unknown JSON keys and secret references from responses. No external messaging/provider execution or secret manager is implemented. Custom-domain GET/POST/PATCH/DELETE APIs normalize and globally uniquify domains; new domains remain `PENDING`, and only verified domains can be marked primary. DNS and SSL automation are not implemented.
 
@@ -77,6 +77,21 @@ Configuration APIs use existing organization settings permissions and dedicated 
 
 Deployment type is organization data for future provisioning/billing/support policy; it must not become a collection of scattered code branches. See the [deployment model](../deployment/README.md).
 
-The server-side capability resolver currently exposes the same metadata-only capabilities for `SAAS`, `CUSTOM`, `DEDICATED`, and `ENTERPRISE`. Provider execution and workflow execution remain disabled for every deployment type.
+The server-side capability resolver returns the same values for `SAAS`,
+`CUSTOM`, `DEDICATED`, and `ENTERPRISE`. `workflowExecution: true` means the
+repository supports bounded workflow runtime code for that deployment type.
+It is informational only: it does not indicate tenant entitlement, actor
+authorization, worker or scheduler availability, or production readiness.
+Event dispatch and execution remain independently subject to the
+`core.configuration` entitlement, workflow-management permission, authenticated
+tenant context, and database RLS protections. `externalProviderExecution`
+remains false for all deployment types.
+
+Phase 18 supersedes ADR 0008's earlier statement that workflow execution was
+future work by adding bounded event-triggered execution code. A registered
+handler or persisted job does not establish that a production worker or
+scheduler is deployed or running. Production workflow execution remains
+unverified until the worker/scheduler is configured and operationally tested.
+See the [workflow boundary](../workflows/README.md#jobs-and-operational-boundary).
 
 See the focused notes on [feature flags](feature-flags.md), [custom fields](custom-fields.md), [workflows](workflows.md), [notifications](notifications.md), and [integrations](integrations.md), plus [configuration security](../security/configuration-security.md).

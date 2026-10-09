@@ -19,13 +19,16 @@ organization module/entitlement, notification, and workflow APIs; it does not
 invent customer counts, sales metrics, or organization lifecycle state.
 
 The Business profile reads organization and business settings from the existing
-configuration API. Authorized changes to the legal name, registration/tax
-numbers, country, currency, locale, and time zone use that API's existing
-`PATCH` contract and `core.organization.settings.update` authorization. The
-organization name, lifecycle state, and a typed contact/address profile are
-not editable or fully exposed by this contract. Branch choices continue to
-come from the authenticated session and switching uses the existing
-session-bound branch API.
+configuration API. Authorized changes to legal identity, business contact and
+address fields, country, currency, locale, and time zone use its existing
+`GET/PATCH /organizations/:organizationId/configuration` contract and
+`core.organization.settings.read/update` authorization. Contact and address
+fields use explicit nullable columns in `business_settings`; application
+submissions are backfilled for active organizations by the additive profile
+migration. Owner application details are not returned by the business profile
+response. Organization name and lifecycle status remain read-only. Branch
+choices continue to come from the authenticated session and switching uses
+the existing session-bound branch API.
 
 Customers and Products & Services use the tenant-authorized Business Manager
 domain and APIs. The UI reads server-paginated records and sends create,

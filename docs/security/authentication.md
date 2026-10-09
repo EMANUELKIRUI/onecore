@@ -46,7 +46,15 @@ Authentication audit rows with no organization are allowed only for `resource='a
 
 Login is rate-limited to 5 requests per IP per minute by default. This limit is configurable with `AUTH_LOGIN_RATE_LIMIT_MAX` and `AUTH_LOGIN_RATE_LIMIT_WINDOW_MS`. Ten invalid passwords within a 15-minute account window lock the account for 15 minutes. Invalid credentials, unknown users, and inactive accounts return the same public 401 response. Unknown/inactive cases run a dummy Argon2id verification to reduce timing-based account discovery. Rate-limit errors are distinct (429); malformed input is a 400.
 
-The rate limiter currently uses process memory. Production with multiple API instances must provide a shared rate-limit store or equivalent trusted edge control; this repository has no Redis/edge infrastructure configured yet. Lockout is applied per account and can still be abused for denial of service; pair the current thresholds with monitoring and a recovery procedure before production.
+The API server injects a PostgreSQL-backed limiter for login. API instances that
+share that database coordinate limits through atomic counters and forced RLS;
+database errors fail closed, and production refuses login if the shared limiter
+is not configured. In development and tests, when no database limiter is
+injected, the API uses Fastify's process-local limiter; that fallback does not
+coordinate across instances. The database limiter is not volumetric edge
+protection. Lockout is applied per account and can still be abused for denial
+of service; pair the current thresholds with monitoring and a recovery
+procedure before production.
 
 ## Events and sensitive data
 
@@ -63,7 +71,7 @@ Pino request logs redact password and hash fields, authorization, and cookies. A
 | Cookie theft / fixation        | HttpOnly, Secure in production, SameSite, opaque new secret per login, server-side revocation     | HTTPS/TLS and client-device protections depend on deployment                              |
 | CSRF                           | SameSite=Lax, JSON-only mutations, Fetch Metadata and Origin allowlist                            | Correct production origins and ingress configuration required                             |
 | Account enumeration            | Generic credential response and dummy Argon2id verification                                       | Rate-limit response and timing are externally observable                                  |
-| Brute force                    | Configurable IP limiter and account lockout                                                       | In-memory limiter is not distributed; lockout can be abused                               |
+| Brute force                    | PostgreSQL-backed shared IP limiter in production and account lockout                             | No volumetric edge protection; lockout can be abused                                      |
 | Tenant/branch-ID tampering     | Active membership/org/branch/assignment check before context update; forced RLS                   | Branch-row filters for future business tables and full RBAC/data scopes remain later work |
 | Malicious platform operator    | Separate platform role assignments; no automatic bypass                                           | Audited, time-limited support access is not implemented                                   |
 | Credential leakage in logs/API | Safe response allowlist and logger redaction                                                      | New routes must preserve these conventions                                                |

@@ -27,7 +27,7 @@ export interface ConfigurationCapabilities {
   integrationMetadata: true;
   customDomains: true;
   externalProviderExecution: false;
-  workflowExecution: false;
+  workflowExecution: true;
 }
 
 export function resolveConfigurationCapabilities(
@@ -44,7 +44,7 @@ export function resolveConfigurationCapabilities(
     integrationMetadata: true,
     customDomains: true,
     externalProviderExecution: false,
-    workflowExecution: false,
+    workflowExecution: true,
   };
 }
 

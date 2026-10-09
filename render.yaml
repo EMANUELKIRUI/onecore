@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: onecore-api
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /ready
+    autoDeploy: false
+    envVars:
+      - key: NODE_VERSION
+        value: 24.21.0
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: LOG_LEVEL
+        value: info
+  - type: worker
+    name: onecore-workflow-worker
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build:worker
+    startCommand: npm run start -w @onecore/worker
+    autoDeploy: false
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: LOG_LEVEL
+        value: info
+      - key: WORKER_POLL_INTERVAL_MS
+        value: "5000"
+      - key: WORKER_CONCURRENCY
+        value: "4"
+      - key: WORKER_SHUTDOWN_GRACE_MS
+        value: "30000"

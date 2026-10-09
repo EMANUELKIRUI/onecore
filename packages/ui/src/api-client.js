@@ -50,7 +50,15 @@ export function createApiClient(basePath = "", fetchImplementation = fetch) {
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           ...(signal === undefined ? {} : { signal }),
         });
-      } catch {
+      } catch (error) {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "name" in error &&
+          error.name === "AbortError"
+        ) {
+          throw error;
+        }
         throw new ApiError(
           0,
           "NETWORK_ERROR",

@@ -1,9 +1,12 @@
 import { Algorithm, hash as hashPassword } from "@node-rs/argon2";
+import { sanitizeErrorForLog } from "@onecore/config";
 import {
   LifecycleMutationError,
   type AuthorizationContext,
   type AuthorizationService,
   type LifecycleMutationService,
+  type RateLimitDecision,
+  type RateLimiter,
 } from "@onecore/database";
 import { z } from "zod";
 import type { RuntimeConfig } from "@onecore/config";
@@ -71,7 +74,10 @@ const organizationApplicationSchema = z
     website: z.url().max(2_048).optional(),
     ownerName: z.string().trim().min(1).max(200),
     ownerEmail: z.email().trim().toLowerCase().max(320),
-    countryCode: z.string().trim().regex(/^[A-Z]{2}$/),
+    countryCode: z
+      .string()
+      .trim()
+      .regex(/^[A-Z]{2}$/),
     region: z.string().trim().min(1).max(100),
     city: z.string().trim().min(1).max(100),
     address: z.string().trim().min(1).max(300),
@@ -93,6 +99,8 @@ const applicationProfileSchema = z.object({
 });
 
 const userCreatePermission = "core.organization.user.create";
+const APPLICATION_RATE_LIMIT_MAX = 5;
+const APPLICATION_RATE_LIMIT_WINDOW_MS = 60_000;
 
 function requestContext(request: {
   auth: {
@@ -174,22 +182,97 @@ export function registerLifecycleRoutes(
   authorization: AuthorizationService,
   lifecycle: LifecycleMutationService,
   config: RuntimeConfig,
+  rateLimiter?: RateLimiter,
 ): void {
   let applicationRateLimit: ReturnType<typeof app.rateLimit> | undefined;
-  app.get("/public/organization-applications/modules", async (_request, reply) => {
-    const catalog = await lifecycle.listPublicModules();
-    return reply.send({ modules: catalog });
-  });
+  app.get(
+    "/public/organization-applications/modules",
+    async (_request, reply) => {
+      const catalog = await lifecycle.listPublicModules();
+      return reply.send({ modules: catalog });
+    },
+  );
 
   app.post(
     "/public/organization-applications",
     {
       preHandler: async (request, reply) => {
-        const limiter = (applicationRateLimit ??= app.rateLimit({
-          max: 5,
-          timeWindow: "1 minute",
-        }));
-        await limiter.call(app, request, reply);
+        if (rateLimiter) {
+          let decision: RateLimitDecision;
+          try {
+            decision = await rateLimiter.consume({
+              scope: "organization.application.submit",
+              subject: request.ip,
+              requestId: request.id,
+              correlationId:
+                request.observabilityContext?.correlationId ?? request.id,
+              limit: APPLICATION_RATE_LIMIT_MAX,
+              windowMs: APPLICATION_RATE_LIMIT_WINDOW_MS,
+            });
+          } catch (error) {
+            request.log.error(
+              {
+                ...request.observabilityContext,
+                eventType: "rate_limit_unavailable",
+                scope: "organization.application.submit",
+                err: sanitizeErrorForLog(error),
+              },
+              "Organization application rate limiter is unavailable",
+            );
+            return reply.status(503).send({
+              error: {
+                code: "SERVICE_UNAVAILABLE",
+                message: "The service is temporarily unavailable.",
+              },
+            });
+          }
+          if (!decision.allowed) {
+            request.log.warn(
+              {
+                ...request.observabilityContext,
+                eventType: "rate_limit_triggered",
+                scope: "organization.application.submit",
+                resetAt: decision.resetAt.toISOString(),
+              },
+              "Organization application rate limit exceeded",
+            );
+            reply.header(
+              "retry-after",
+              Math.max(
+                1,
+                Math.ceil((decision.resetAt.getTime() - Date.now()) / 1_000),
+              ),
+            );
+            return reply.status(429).send({
+              error: {
+                code: "TOO_MANY_REQUESTS",
+                message: "Too many requests. Try again later.",
+              },
+            });
+          }
+        } else if (config.NODE_ENV === "production") {
+          request.log.error(
+            {
+              ...request.observabilityContext,
+              eventType: "rate_limit_unavailable",
+              scope: "organization.application.submit",
+            },
+            "Shared organization application rate limiter is not configured",
+          );
+          return reply.status(503).send({
+            error: {
+              code: "SERVICE_UNAVAILABLE",
+              message: "The service is temporarily unavailable.",
+            },
+          });
+        } else {
+          const limiter = (applicationRateLimit ??= app.rateLimit({
+            max: APPLICATION_RATE_LIMIT_MAX,
+            timeWindow: APPLICATION_RATE_LIMIT_WINDOW_MS,
+          }));
+          await limiter.call(app, request, reply);
+          if (reply.sent) return reply;
+        }
       },
     },
     async (request, reply) => {
@@ -238,7 +321,12 @@ export function registerLifecycleRoutes(
     { preHandler: requireAuthenticated() },
     async (request, reply) => {
       if (!request.auth) {
-        return sendError(reply, 401, "UNAUTHORIZED", "Authentication is required.");
+        return sendError(
+          reply,
+          401,
+          "UNAUTHORIZED",
+          "Authentication is required.",
+        );
       }
       try {
         const applications = await lifecycle.listOrganizationApplications(
@@ -286,16 +374,20 @@ export function registerLifecycleRoutes(
         );
       }
       if (!request.auth) {
-        return sendError(reply, 401, "UNAUTHORIZED", "Authentication is required.");
+        return sendError(
+          reply,
+          401,
+          "UNAUTHORIZED",
+          "Authentication is required.",
+        );
       }
       try {
-        const organization =
-          await lifecycle.transitionOrganizationApplication(
-            path.data.organizationId,
-            body.data.status,
-            request.auth,
-            lifecycleMetadata(request),
-          );
+        const organization = await lifecycle.transitionOrganizationApplication(
+          path.data.organizationId,
+          body.data.status,
+          request.auth,
+          lifecycleMetadata(request),
+        );
         return reply.send({
           application: {
             reference: organization.id,

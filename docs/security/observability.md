@@ -54,7 +54,8 @@ diagnostic exception under Pino redaction.
 
 `GET /health` remains the backward-compatible liveness response.
 `GET /health/live` checks only process responsiveness.
-`GET /health/ready` performs the configured PostgreSQL connectivity check and
+`GET /ready` performs the configured PostgreSQL connectivity check with a
+two-second timeout; `/health/ready` remains a compatibility alias. Readiness
 returns only `ready` or `not_ready`; database errors are logged internally.
 Health responses are non-cacheable and do not reveal dependency details. A
 readiness check must be configured; an unconfigured check returns `not_ready`.

@@ -18,6 +18,7 @@ import {
 import { z } from "zod";
 import type { ApiFastifyInstance } from "./fastify-instance.js";
 import {
+  businessProfilePatchSchema,
   countryCodeSchema,
   currencyCodeSchema,
   localeSchema,
@@ -58,6 +59,7 @@ const emailBrandingSchema = z
   .strict();
 const organizationSettingsPatchSchema = z
   .object({
+    businessProfile: businessProfilePatchSchema.optional(),
     countryCode: countryCodeSchema.optional(),
     currencyCode: currencyCodeSchema.optional(),
     timezone: timeZoneSchema.optional(),
@@ -197,6 +199,20 @@ function safeEmailBranding(value: unknown) {
   return parsed.success ? parsed.data : {};
 }
 
+function businessProfileView(
+  business: typeof businessSettings.$inferSelect | null,
+) {
+  return {
+    contactEmail: business?.contactEmail ?? null,
+    contactPhone: business?.contactPhone ?? null,
+    website: business?.website ?? null,
+    countryCode: business?.addressCountryCode ?? null,
+    region: business?.addressRegion ?? null,
+    city: business?.addressCity ?? null,
+    address: business?.address ?? null,
+  };
+}
+
 export function registerConfigurationRoutes(
   app: ApiFastifyInstance,
   authorization: AuthorizationService = denyAllAuthorizationService,
@@ -254,6 +270,7 @@ export function registerConfigurationRoutes(
             statusCode: 200,
             body: {
               organization,
+              businessProfile: businessProfileView(business[0] ?? null),
               capabilities: resolveConfigurationCapabilities(
                 organization.deploymentType,
               ),
@@ -312,6 +329,13 @@ export function registerConfigurationRoutes(
               registrationNumber: body.data.registrationNumber,
               taxNumber: body.data.taxNumber,
               paymentMethods: body.data.paymentMethods,
+              contactEmail: body.data.businessProfile?.contactEmail,
+              contactPhone: body.data.businessProfile?.contactPhone,
+              website: body.data.businessProfile?.website,
+              addressCountryCode: body.data.businessProfile?.countryCode,
+              addressRegion: body.data.businessProfile?.region,
+              addressCity: body.data.businessProfile?.city,
+              address: body.data.businessProfile?.address,
             }).filter(([, value]) => value !== undefined),
           ) as Partial<typeof businessSettings.$inferInsert>;
           const brandingPatch = Object.fromEntries(
@@ -429,6 +453,14 @@ export function registerConfigurationRoutes(
                   legalName: body.data.legalName ?? null,
                   registrationNumber: body.data.registrationNumber ?? null,
                   taxNumber: body.data.taxNumber ?? null,
+                  contactEmail: body.data.businessProfile?.contactEmail ?? null,
+                  contactPhone: body.data.businessProfile?.contactPhone ?? null,
+                  website: body.data.businessProfile?.website ?? null,
+                  addressCountryCode:
+                    body.data.businessProfile?.countryCode ?? null,
+                  addressRegion: body.data.businessProfile?.region ?? null,
+                  addressCity: body.data.businessProfile?.city ?? null,
+                  address: body.data.businessProfile?.address ?? null,
                   paymentMethods: body.data.paymentMethods ?? [],
                 })
                 .returning();

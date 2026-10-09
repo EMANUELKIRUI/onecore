@@ -8,6 +8,7 @@ import {
 } from "@onecore/database";
 import type { ApiErrorResponse, HealthResponse } from "@onecore/contracts";
 import type { SecretStore } from "@onecore/core-domain";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   classifyError,
   getRequestContext,
@@ -129,7 +130,7 @@ export function buildApp(
       "content-security-policy",
       "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
     );
-    if (request.url.startsWith("/health")) {
+    if (request.url.startsWith("/health") || request.url === "/ready") {
       reply.header("cache-control", "no-store");
     }
     return payload;
@@ -152,6 +153,44 @@ export function buildApp(
     done();
   });
 
+  const readiness = async (request: FastifyRequest, reply: FastifyReply) => {
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      if (!options.readinessCheck) {
+        throw new Error("Readiness dependency check is not configured");
+      }
+      await Promise.race([
+        options.readinessCheck(),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("Readiness dependency check timed out")),
+            2_000,
+          );
+        }),
+      ]);
+      return reply.send({ status: "ready" });
+    } catch (error) {
+      request.log.error(
+        {
+          ...request.observabilityContext,
+          errorCategory: classifyError(error),
+          errorCode: classifyError(error),
+          err: sanitizeErrorForLog(error),
+        },
+        "Readiness dependency check failed",
+      );
+      return reply.status(503).send({ status: "not_ready" });
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  };
+
+  const live = async (): Promise<HealthResponse> => ({ status: "ok" });
+  app.get<{ Reply: HealthResponse }>("/health", live);
+  app.get<{ Reply: HealthResponse }>("/health/live", live);
+  app.get("/ready", readiness);
+  app.get("/health/ready", readiness);
+
   const correlatedAuthorization = withRequestCorrelation(authorizationService);
   registerAuthentication(app, config, identityRepository, options.rateLimiter);
   registerAuthorizationRoutes(app, correlatedAuthorization);
@@ -173,32 +212,9 @@ export function buildApp(
       correlatedAuthorization,
       options.lifecycleMutations,
       config,
+      options.rateLimiter,
     );
   }
-
-  const live = async (): Promise<HealthResponse> => ({ status: "ok" });
-  app.get<{ Reply: HealthResponse }>("/health", live);
-  app.get<{ Reply: HealthResponse }>("/health/live", live);
-  app.get("/health/ready", async (request, reply) => {
-    try {
-      if (!options.readinessCheck) {
-        throw new Error("Readiness dependency check is not configured");
-      }
-      await options.readinessCheck();
-      return reply.send({ status: "ready" });
-    } catch (error) {
-      request.log.error(
-        {
-          ...request.observabilityContext,
-          errorCategory: classifyError(error),
-          errorCode: classifyError(error),
-          err: sanitizeErrorForLog(error),
-        },
-        "Readiness dependency check failed",
-      );
-      return reply.status(503).send({ status: "not_ready" });
-    }
-  });
 
   app.setNotFoundHandler((_request, reply) => {
     const body: ApiErrorResponse = {

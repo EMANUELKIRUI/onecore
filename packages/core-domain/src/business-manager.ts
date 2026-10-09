@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { currencyCodeSchema } from "./regionalization.js";
+import { countryCodeSchema, currencyCodeSchema } from "./regionalization.js";
 
 const customerEmailSchema = z
   .string()
@@ -24,6 +24,22 @@ export type CatalogItemType = z.infer<typeof catalogItemTypeSchema>;
 export const catalogItemStatuses = ["ACTIVE", "INACTIVE"] as const;
 export const catalogItemStatusSchema = z.enum(catalogItemStatuses);
 export type CatalogItemStatus = z.infer<typeof catalogItemStatusSchema>;
+
+export const businessProfilePatchSchema = z
+  .object({
+    contactEmail: customerEmailSchema,
+    contactPhone: z.string().trim().min(1).max(50).nullable().optional(),
+    website: z.url().max(2_048).nullable().optional(),
+    countryCode: countryCodeSchema.nullable().optional(),
+    region: z.string().trim().min(1).max(100).nullable().optional(),
+    city: z.string().trim().min(1).max(100).nullable().optional(),
+    address: z.string().trim().min(1).max(300).nullable().optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one supported business profile field is required.",
+  });
+export type BusinessProfilePatch = z.infer<typeof businessProfilePatchSchema>;
 
 export const customerCreateInputSchema = z
   .object({
@@ -85,6 +101,7 @@ const catalogPriceSchema = z
   .regex(/^(?:0|[1-9]\d{0,11})(?:\.\d{1,6})?$/, {
     message: "Price must be a non-negative decimal with up to six places.",
   });
+export const catalogPriceInputSchema = catalogPriceSchema;
 
 export const catalogItemCreateInputSchema = z
   .object({

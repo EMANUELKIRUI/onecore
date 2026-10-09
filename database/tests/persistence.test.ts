@@ -50,6 +50,8 @@ let database: PgliteDatabase;
 let initialApplicationPrivileges = new Set<string>();
 let initialApplicationColumnPrivileges = new Set<string>();
 let initialApplicationSchemaCreate = false;
+let initialOrganizationTableInsert = true;
+let initialOrganizationInsertColumns = new Set<string>();
 
 async function asTenant<T>(
   organizationId: string,
@@ -256,6 +258,29 @@ describe("PostgreSQL persistence foundation", () => {
           `${table_name}:${privilege_type}:${column_name}`,
       ),
     );
+    const organizationTableInsert = await client.query<{
+      can_insert: boolean;
+    }>(`
+      SELECT has_table_privilege(
+        'onecore_app', 'public.organizations', 'INSERT'
+      ) AS can_insert
+    `);
+    initialOrganizationTableInsert =
+      organizationTableInsert.rows[0]?.can_insert ?? true;
+    const organizationColumnInserts = await client.query<{
+      column_name: string;
+    }>(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'organizations'
+        AND has_column_privilege(
+          'onecore_app', 'public.organizations', column_name, 'INSERT'
+        )
+    `);
+    initialOrganizationInsertColumns = new Set(
+      organizationColumnInserts.rows.map(({ column_name }) => column_name),
+    );
     const schemaPrivileges = await client.query<{ can_create: boolean }>(
       `SELECT has_schema_privilege('onecore_app', 'public', 'CREATE') AS can_create`,
     );
@@ -272,6 +297,21 @@ describe("PostgreSQL persistence foundation", () => {
   });
 
   it("migrates only the documented least-privilege runtime table grants", () => {
+    expect(initialOrganizationTableInsert).toBe(false);
+    expect([...initialOrganizationInsertColumns].sort()).toEqual(
+      [
+        "created_at",
+        "deployment_type",
+        "id",
+        "industry",
+        "name",
+        "profile",
+        "slug",
+        "status",
+        "updated_at",
+      ].sort(),
+    );
+
     const required = [
       "users:SELECT",
       "sessions:SELECT",
@@ -434,21 +474,158 @@ describe("PostgreSQL persistence foundation", () => {
       permissive: string;
       cmd: string;
       roles: string[];
+      qual: string | null;
       with_check: string | null;
     }>(`
-      SELECT policyname, permissive, cmd, roles, with_check
+      SELECT policyname, permissive, cmd, roles, qual, with_check
       FROM pg_policies
       WHERE schemaname = 'public'
-        AND tablename = 'roles'
-        AND policyname = 'roles_system_templates_platform_provisioning'
+        AND tablename = 'organizations'
+        AND policyname = 'organizations_platform_superadmin_or_application_insert'
     `);
     expect(policies.rows).toHaveLength(1);
-    expect(policies.rows[0]).toMatchObject({
+    const organizationInsertPolicy = policies.rows[0];
+    expect(organizationInsertPolicy).toMatchObject({
       permissive: "RESTRICTIVE",
       cmd: "INSERT",
       roles: ["onecore_app"],
     });
-    expect(policies.rows[0]?.with_check).toContain("SUPERADMIN");
+    expect(organizationInsertPolicy?.qual).toBeNull();
+    expect(organizationInsertPolicy?.with_check).not.toBeNull();
+
+    const normalizedWithCheck = (organizationInsertPolicy?.with_check ?? "")
+      .toLowerCase()
+      .replaceAll('"', "")
+      .replace(/\s+/g, " ");
+    const policyAlternatives = normalizedWithCheck.split(/\bor\b/);
+    expect(policyAlternatives).toHaveLength(2);
+    const superadminAlternative = policyAlternatives.find(
+      (alternative) =>
+        alternative.includes("exists") &&
+        alternative.includes("platform_user_roles.role = 'superadmin'"),
+    );
+    expect(superadminAlternative).toBeDefined();
+    expect(superadminAlternative).toMatch(
+      /platform_user_roles\.user_id\s*=.*current_setting\('app\.current_user_id'/,
+    );
+
+    const applicationAlternative = policyAlternatives.find((alternative) =>
+      alternative.includes(
+        "current_setting('app.organization_application_submission'",
+      ),
+    );
+    expect(applicationAlternative).toBeDefined();
+    expect(applicationAlternative).toMatch(
+      /status\s*=\s*'pending'.*\band\b.*current_setting\('app\.organization_application_submission'.*=\s*'true'.*\band\b.*profile\s*->\s*'application'.*is\s+not\s+null/,
+    );
+
+    const rowSecurity = await client.query<{
+      enabled: boolean;
+      forced: boolean;
+    }>(`
+      SELECT relrowsecurity AS enabled, relforcerowsecurity AS forced
+      FROM pg_class
+      WHERE oid = 'public.organizations'::regclass
+    `);
+    expect(rowSecurity.rows).toEqual([{ enabled: true, forced: true }]);
+  });
+
+  it("limits worker discovery to active organization IDs and status", async () => {
+    const active = await createOrganization("Worker Active");
+    const suspended = await createOrganization("Worker Suspended");
+    await database
+      .update(schema.organizations)
+      .set({ status: "SUSPENDED" })
+      .where(eq(schema.organizations.id, suspended.id));
+
+    const policy = await client.query<{
+      cmd: string;
+      roles: string[];
+      qual: string | null;
+    }>(`
+      SELECT cmd, roles, qual
+      FROM pg_policies
+      WHERE schemaname = 'public'
+        AND tablename = 'organizations'
+        AND policyname = 'organizations_worker_discovery'
+    `);
+    expect(policy.rows).toHaveLength(1);
+    expect(policy.rows[0]).toMatchObject({
+      cmd: "SELECT",
+      roles: ["onecore_worker"],
+    });
+    expect(
+      policy.rows[0]?.qual
+        ?.toLowerCase()
+        .replaceAll('"', "")
+        .replace(/\s+/g, ""),
+    ).toContain("status");
+    expect(policy.rows[0]?.qual?.toLowerCase()).toContain("active");
+
+    const workerOrganizations = await client.transaction(
+      async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_worker");
+        return transaction.query<{
+          id: string;
+          status: string;
+        }>("SELECT id, status FROM organizations");
+      },
+    );
+    expect(workerOrganizations.rows).toEqual([
+      { id: active.id, status: "ACTIVE" },
+    ]);
+    await expect(
+      client.transaction(async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_worker");
+        return transaction.query("SELECT name FROM organizations");
+      }),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(
+      client.transaction(async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_worker");
+        await transaction.query(
+          "SELECT set_config('app.current_organization_id', $1, true)",
+          [active.id],
+        );
+        return transaction.query(
+          "UPDATE organizations SET status = 'SUSPENDED' WHERE id = $1 RETURNING id",
+          [active.id],
+        );
+      }),
+    ).rejects.toThrow(/row-level security/i);
+    const [unchangedActive] = await database
+      .select({ status: schema.organizations.status })
+      .from(schema.organizations)
+      .where(eq(schema.organizations.id, active.id));
+    expect(unchangedActive?.status).toBe("ACTIVE");
+
+    const applicationOrganizations = await client.transaction(
+      async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_app");
+        return transaction.query("SELECT id FROM organizations");
+      },
+    );
+    expect(applicationOrganizations.rows).toEqual([]);
+  });
+
+  it("rejects arbitrary organization creation by the runtime role", async () => {
+    const organizationId = crypto.randomUUID();
+
+    await expect(
+      client.transaction(async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_app");
+        await transaction.query(
+          "SELECT set_config('app.current_organization_id', $1, true)",
+          [organizationId],
+        );
+        await transaction.query(
+          `INSERT INTO organizations (
+            id, name, slug, industry, status, deployment_type
+          ) VALUES ($1, 'Arbitrary Organization', $2, 'TEST', 'ACTIVE', 'SAAS')`,
+          [organizationId, `arbitrary-${organizationId}`],
+        );
+      }),
+    ).rejects.toThrow(/row-level security policy/i);
   });
 
   it("migrates a clean database and keeps organizations and branches tenant-isolated", async () => {

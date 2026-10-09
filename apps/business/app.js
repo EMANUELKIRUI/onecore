@@ -808,6 +808,123 @@ function renderRegionalSettingsForm(container, result, organizationId) {
   container.append(form);
 }
 
+function renderBusinessProfileForm(container, result, organizationId) {
+  const form = document.createElement("form");
+  form.className = "oc-card oc-stack";
+  form.setAttribute("aria-label", "Update business contact and address");
+  appendText(form, "h2", "Contact and address", "oc-section-title");
+  appendText(
+    form,
+    "p",
+    "These business profile fields are saved through the organization settings API.",
+    "oc-help",
+  );
+  const profile = result.businessProfile ?? {};
+  const fields = [
+    {
+      name: "contactEmail",
+      label: "Business contact email",
+      type: "email",
+      maxLength: 320,
+      value: profile.contactEmail,
+    },
+    {
+      name: "contactPhone",
+      label: "Business contact phone",
+      type: "tel",
+      maxLength: 50,
+      value: profile.contactPhone,
+    },
+    {
+      name: "website",
+      label: "Website",
+      type: "url",
+      maxLength: 2048,
+      value: profile.website,
+    },
+    {
+      name: "countryCode",
+      label: "Business address country code",
+      maxLength: 2,
+      pattern: "[A-Z]{2}",
+      value: profile.countryCode,
+    },
+    {
+      name: "region",
+      label: "County / region",
+      maxLength: 100,
+      value: profile.region,
+    },
+    {
+      name: "city",
+      label: "Town / city",
+      maxLength: 100,
+      value: profile.city,
+    },
+    {
+      name: "address",
+      label: "Street / postal address",
+      maxLength: 300,
+      value: profile.address,
+    },
+  ];
+  const grid = document.createElement("div");
+  grid.className = "oc-form-grid";
+  for (const field of fields) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "oc-field";
+    const inputId = `business-profile-${field.name}`;
+    const label = document.createElement("label");
+    label.htmlFor = inputId;
+    label.textContent = field.label;
+    const input = document.createElement("input");
+    input.id = inputId;
+    input.name = field.name;
+    input.type = field.type ?? "text";
+    input.className = "oc-input";
+    input.maxLength = field.maxLength;
+    input.value = field.value ?? "";
+    if (field.pattern) input.pattern = field.pattern;
+    if (field.name === "contactEmail") input.autocomplete = "email";
+    if (field.name === "contactPhone") input.autocomplete = "tel";
+    wrapper.append(label, input);
+    grid.append(wrapper);
+  }
+  const error = document.createElement("p");
+  error.className = "oc-alert oc-alert--error";
+  error.setAttribute("role", "alert");
+  error.hidden = true;
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.className = "oc-button";
+  save.textContent = "Save business profile";
+  form.append(grid, error, save);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    hide(error);
+    if (!form.reportValidity()) return;
+    const businessProfile = Object.fromEntries(new FormData(form));
+    for (const [key, value] of Object.entries(businessProfile)) {
+      businessProfile[key] = value.trim() || null;
+    }
+    setBusy(save, true);
+    try {
+      await authenticatedRequest(
+        `/organizations/${encodeURIComponent(organizationId)}/configuration`,
+        { method: "PATCH", body: { businessProfile } },
+      );
+      announce("Business contact and address saved.", "success");
+      await loadResourceView("organization");
+    } catch (requestError) {
+      error.textContent = errorMessage(requestError);
+      show(error);
+    } finally {
+      setBusy(save, false);
+    }
+  });
+  container.append(form);
+}
+
 function renderResource(view, result, container) {
   const organizationId = currentSession?.organization?.organizationId;
   if (view === "notifications") {
@@ -850,9 +967,10 @@ function renderResource(view, result, container) {
       appendText(
         container,
         "p",
-        "The available API does not expose organization lifecycle status, a separate display name, or a stable address/contact profile contract. Those fields are not inferred or fabricated here.",
+        "Organization lifecycle status and a separate display-name editor are not exposed by the current API.",
         "oc-help",
       );
+      renderBusinessProfileForm(container, result, organizationId);
       return true;
     }
     appendText(container, "h2", "Regional preferences", "oc-section-title");
@@ -1287,7 +1405,17 @@ function businessBranchLabel(branchId) {
 
 function businessField(
   form,
-  { name, label, type = "text", value, required, maxLength, options },
+  {
+    name,
+    label,
+    type = "text",
+    value,
+    required,
+    maxLength,
+    options,
+    pattern,
+    title,
+  },
 ) {
   const field = document.createElement("div");
   field.className = "oc-field";
@@ -1312,10 +1440,15 @@ function businessField(
   } else {
     input.type = type;
   }
+  if (pattern) input.pattern = pattern;
+  if (title) input.title = title;
   if (type === "email") input.autocomplete = "email";
   if (type === "tel") input.autocomplete = "tel";
   if (name === "price") input.inputMode = "decimal";
-  if (name === "currency") input.maxLength = 3;
+  if (name === "currency") {
+    input.maxLength = 3;
+    input.addEventListener("input", () => input.setCustomValidity(""));
+  }
   input.value = value ?? "";
   field.append(labelElement, input);
   form.append(field);
@@ -1473,7 +1606,7 @@ function renderBusinessFilters(view, container, state, onSubmit) {
       label: "Branch",
       options: [
         ["", "All authorized records"],
-        ["CURRENT", "Current branch only"],
+        ["CURRENT", "Current branch and organization-wide"],
       ],
       value: state.branchFilter,
     });
@@ -1614,6 +1747,8 @@ function renderBusinessForm(view, mode, item, container, onCancel) {
       value: item?.price,
       required: true,
       maxLength: 19,
+      pattern: "(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,6})?",
+      title: "Enter a non-negative price with up to six decimal places.",
     });
     businessField(form, {
       name: "currency",
@@ -1621,6 +1756,8 @@ function renderBusinessForm(view, mode, item, container, onCancel) {
       value: item?.currency,
       required: true,
       maxLength: 3,
+      pattern: "[A-Z]{3}",
+      title: "Enter a supported uppercase ISO 4217 currency code.",
     });
     businessField(form, {
       name: "status",

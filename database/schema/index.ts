@@ -1108,20 +1108,52 @@ export const organizationSettings = pgTable("organization_settings", {
   updatedAt: updatedAt(),
 });
 
-export const businessSettings = pgTable("business_settings", {
-  organizationId: uuid("organization_id")
-    .primaryKey()
-    .references(() => organizations.id, { onDelete: "cascade" }),
-  legalName: varchar("legal_name", { length: 200 }),
-  registrationNumber: varchar("registration_number", { length: 100 }),
-  taxNumber: varchar("tax_number", { length: 100 }),
-  paymentMethods: jsonb("payment_methods")
-    .$type<string[]>()
-    .notNull()
-    .default([]),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-});
+export const businessSettings = pgTable(
+  "business_settings",
+  {
+    organizationId: uuid("organization_id")
+      .primaryKey()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    legalName: varchar("legal_name", { length: 200 }),
+    registrationNumber: varchar("registration_number", { length: 100 }),
+    taxNumber: varchar("tax_number", { length: 100 }),
+    contactEmail: varchar("contact_email", { length: 320 }),
+    contactPhone: varchar("contact_phone", { length: 50 }),
+    website: varchar("website", { length: 2048 }),
+    addressCountryCode: varchar("address_country_code", { length: 2 }),
+    addressRegion: varchar("address_region", { length: 100 }),
+    addressCity: varchar("address_city", { length: 100 }),
+    address: varchar("address", { length: 300 }),
+    paymentMethods: jsonb("payment_methods")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    check(
+      "business_settings_address_country_code_format",
+      sql`${table.addressCountryCode} is null or ${table.addressCountryCode} ~ '^[A-Z]{2}$'`,
+    ),
+    check(
+      "business_settings_contact_phone_nonempty",
+      sql`${table.contactPhone} is null or length(btrim(${table.contactPhone})) > 0`,
+    ),
+    check(
+      "business_settings_address_region_nonempty",
+      sql`${table.addressRegion} is null or length(btrim(${table.addressRegion})) > 0`,
+    ),
+    check(
+      "business_settings_address_city_nonempty",
+      sql`${table.addressCity} is null or length(btrim(${table.addressCity})) > 0`,
+    ),
+    check(
+      "business_settings_address_nonempty",
+      sql`${table.address} is null or length(btrim(${table.address})) > 0`,
+    ),
+  ],
+);
 
 export const organizationBranding = pgTable("organization_branding", {
   organizationId: uuid("organization_id")

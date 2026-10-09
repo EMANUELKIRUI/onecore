@@ -1,7 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { Algorithm, hash as hashPassword } from "@node-rs/argon2";
 import { PGlite } from "@electric-sql/pglite";
-import { canTransitionOrganizationStatus } from "@onecore/core-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import type { PgliteDatabase } from "drizzle-orm/pglite";

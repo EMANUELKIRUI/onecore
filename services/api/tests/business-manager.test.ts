@@ -63,6 +63,8 @@ const permissionKeys = [
   "core.business_manager.catalog.read",
   "core.business_manager.catalog.update",
   "core.business_manager.catalog.delete",
+  "core.organization.settings.read",
+  "core.organization.settings.update",
 ] as const;
 
 function allowBusinessManager(): AuthorizationService {
@@ -139,6 +141,7 @@ describe("Business Manager API", () => {
     await client.exec(`
       CREATE ROLE onecore_app NOLOGIN NOBYPASSRLS;
       CREATE ROLE onecore_migrator NOLOGIN NOSUPERUSER NOBYPASSRLS;
+      CREATE ROLE onecore_worker NOLOGIN NOSUPERUSER NOBYPASSRLS;
     `);
     await applyMigrations();
   }, 30_000);
@@ -208,6 +211,142 @@ describe("Business Manager API", () => {
       allowBusinessManager(),
     );
 
+    const profileUrl = `/organizations/${organizationId}/configuration`;
+    const anonymousProfile = await app.inject({
+      method: "GET",
+      url: profileUrl,
+    });
+    expect(anonymousProfile.statusCode).toBe(401);
+
+    const initialProfile = await app.inject({
+      method: "GET",
+      url: profileUrl,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(initialProfile.statusCode).toBe(200);
+    expect(initialProfile.json().businessProfile).toEqual({
+      contactEmail: null,
+      contactPhone: null,
+      website: null,
+      countryCode: null,
+      region: null,
+      city: null,
+      address: null,
+    });
+
+    const invalidProfile = await app.inject({
+      method: "PATCH",
+      url: profileUrl,
+      cookies: { onecore_session: sessionSecret },
+      payload: {
+        businessProfile: {
+          contactEmail: "not-an-email",
+          address: "  ",
+        },
+      },
+    });
+    expect(invalidProfile.statusCode).toBe(400);
+
+    const foreignProfile = await app.inject({
+      method: "PATCH",
+      url: `/organizations/${crypto.randomUUID()}/configuration`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { businessProfile: { contactEmail: "owner@example.test" } },
+    });
+    expect(foreignProfile.statusCode).toBe(404);
+
+    const savedProfile = await app.inject({
+      method: "PATCH",
+      url: profileUrl,
+      cookies: { onecore_session: sessionSecret },
+      payload: {
+        businessProfile: {
+          contactEmail: " SALES@ACME.EXAMPLE ",
+          contactPhone: "+254700000000",
+          website: "https://acme.example",
+          countryCode: "KE",
+          region: "Nairobi",
+          city: "Nairobi",
+          address: "Central Nairobi",
+        },
+      },
+    });
+    expect(savedProfile.statusCode).toBe(200);
+    expect(savedProfile.json().business.contactEmail).toBe(
+      "sales@acme.example",
+    );
+    const persistedProfile = await database
+      .select({
+        contactEmail: schema.businessSettings.contactEmail,
+        contactPhone: schema.businessSettings.contactPhone,
+        website: schema.businessSettings.website,
+        addressCountryCode: schema.businessSettings.addressCountryCode,
+        addressRegion: schema.businessSettings.addressRegion,
+        addressCity: schema.businessSettings.addressCity,
+        address: schema.businessSettings.address,
+      })
+      .from(schema.businessSettings)
+      .where(
+        sql`${schema.businessSettings.organizationId} = ${organizationId}`,
+      );
+    expect(persistedProfile[0]).toEqual({
+      contactEmail: "sales@acme.example",
+      contactPhone: "+254700000000",
+      website: "https://acme.example",
+      addressCountryCode: "KE",
+      addressRegion: "Nairobi",
+      addressCity: "Nairobi",
+      address: "Central Nairobi",
+    });
+    const profileAudit = await database
+      .select({
+        action: schema.auditLogs.action,
+        resource: schema.auditLogs.resource,
+        resourceId: schema.auditLogs.resourceId,
+      })
+      .from(schema.auditLogs)
+      .where(
+        sql`${schema.auditLogs.organizationId} = ${organizationId} and ${schema.auditLogs.resource} = 'business_settings'`,
+      );
+    expect(profileAudit).toContainEqual({
+      action: "CONFIGURATION_CREATED",
+      resource: "business_settings",
+      resourceId: organizationId,
+    });
+    const profileEvents = await database
+      .select({
+        eventType: schema.outboxEvents.eventType,
+        payload: schema.outboxEvents.payload,
+      })
+      .from(schema.outboxEvents)
+      .where(
+        sql`${schema.outboxEvents.organizationId} = ${organizationId} and ${schema.outboxEvents.eventType} = 'CONFIGURATION_CHANGED'`,
+      );
+    expect(profileEvents).toContainEqual(
+      expect.objectContaining({
+        eventType: "CONFIGURATION_CHANGED",
+        payload: expect.objectContaining({
+          resource: "business_settings",
+          changedFields: expect.arrayContaining(["contactEmail", "address"]),
+        }),
+      }),
+    );
+    const rereadProfile = await app.inject({
+      method: "GET",
+      url: profileUrl,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(rereadProfile.json().businessProfile).toEqual({
+      contactEmail: "sales@acme.example",
+      contactPhone: "+254700000000",
+      website: "https://acme.example",
+      countryCode: "KE",
+      region: "Nairobi",
+      city: "Nairobi",
+      address: "Central Nairobi",
+    });
+    expect(rereadProfile.body).not.toContain("ownerEmail");
+
     const foreignBranchFilter = await app.inject({
       method: "GET",
       url: `/organizations/${organizationId}/business/customers?branchId=${crypto.randomUUID()}`,
@@ -242,6 +381,30 @@ describe("Business Manager API", () => {
       payload: { name: "Invalid customer", customerType: "LEAD" },
     });
     expect(invalid.statusCode).toBe(400);
+    for (const catalogPayload of [
+      {
+        name: "Empty price",
+        type: "PRODUCT",
+        unit: "each",
+        price: "",
+        currency: "KES",
+      },
+      {
+        name: "Unknown currency",
+        type: "PRODUCT",
+        unit: "each",
+        price: "10",
+        currency: "ZZZ",
+      },
+    ]) {
+      const invalidCatalog = await app.inject({
+        method: "POST",
+        url: `/organizations/${organizationId}/business/catalog`,
+        cookies: { onecore_session: sessionSecret },
+        payload: catalogPayload,
+      });
+      expect(invalidCatalog.statusCode).toBe(400);
+    }
 
     const customerResponse = await app.inject({
       method: "POST",

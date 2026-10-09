@@ -29,6 +29,8 @@ import {
   permissionCatalog,
   customerCreateInputSchema,
   customerUpdateInputSchema,
+  catalogPriceInputSchema,
+  businessProfilePatchSchema,
   catalogItemCreateInputSchema,
   catalogItemUpdateInputSchema,
   catalogListQuerySchema,
@@ -66,7 +68,19 @@ describe("platform domain values", () => {
         currency: "KES",
       }),
     ).toMatchObject({ name: "Consulting", price: "0.100001" });
-    for (const price of ["-1", "1e3", "1.1234567", "01.00"]) {
+    expect(catalogPriceInputSchema.parse("0")).toBe("0");
+    expect(catalogPriceInputSchema.parse("999999999999.999999")).toBe(
+      "999999999999.999999",
+    );
+    for (const price of [
+      "",
+      "-1",
+      "1e3",
+      "1.1234567",
+      "01.00",
+      "1000000000000",
+    ]) {
+      expect(() => catalogPriceInputSchema.parse(price)).toThrow();
       expect(() =>
         catalogItemCreateInputSchema.parse({
           name: "Item",
@@ -77,11 +91,55 @@ describe("platform domain values", () => {
         }),
       ).toThrow();
     }
+    expect(
+      catalogItemCreateInputSchema.parse({
+        name: "Item",
+        type: "PRODUCT",
+        unit: "each",
+        price: "12.50",
+        currency: "KES",
+      }).price,
+    ).toBe("12.50");
     expect(() =>
       catalogItemUpdateInputSchema.parse({ currency: "BAD" }),
     ).toThrow();
     expect(catalogListQuerySchema.parse({ limit: "25" }).limit).toBe(25);
     expect(() => catalogListQuerySchema.parse({ offset: "-1" })).toThrow();
+  });
+
+  it("validates typed business contact and address profile updates", () => {
+    expect(
+      businessProfilePatchSchema.parse({
+        contactEmail: " SALES@ACME.EXAMPLE ",
+        contactPhone: "+254700000000",
+        website: "https://acme.example",
+        countryCode: "KE",
+        region: " Nairobi ",
+        city: " Nairobi ",
+        address: " Central Nairobi ",
+      }),
+    ).toEqual({
+      contactEmail: "sales@acme.example",
+      contactPhone: "+254700000000",
+      website: "https://acme.example",
+      countryCode: "KE",
+      region: "Nairobi",
+      city: "Nairobi",
+      address: "Central Nairobi",
+    });
+    expect(() => businessProfilePatchSchema.parse({})).toThrow();
+    for (const patch of [
+      { contactEmail: "not-an-email" },
+      { contactPhone: " " },
+      { website: "not-a-url" },
+      { countryCode: "KEN" },
+      { region: " " },
+      { city: " " },
+      { address: " " },
+      { ownerEmail: "private@example.test" },
+    ]) {
+      expect(() => businessProfilePatchSchema.parse(patch)).toThrow();
+    }
   });
 
   it("keeps Business Manager mutation events outside the workflow trigger allowlist", () => {
@@ -264,10 +322,19 @@ describe("platform domain values", () => {
       "ENTERPRISE",
     ] as const) {
       const capabilities = resolveConfigurationCapabilities(deploymentType);
-      expect(capabilities.deploymentType).toBe(deploymentType);
-      expect(capabilities.customFields).toBe(true);
-      expect(capabilities.workflowExecution).toBe(false);
-      expect(capabilities.externalProviderExecution).toBe(false);
+      expect(capabilities).toEqual({
+        deploymentType,
+        organizationSettings: true,
+        featureFlags: true,
+        branchOverrides: true,
+        customFields: true,
+        workflowMetadata: true,
+        notificationPreferences: true,
+        integrationMetadata: true,
+        customDomains: true,
+        externalProviderExecution: false,
+        workflowExecution: true,
+      });
     }
   });
 

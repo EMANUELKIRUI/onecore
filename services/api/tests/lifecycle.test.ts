@@ -189,11 +189,19 @@ describe("lifecycle API routes", () => {
 
   it("serves the real public module catalog and accepts an application without creating an account", async () => {
     const lifecycle = testLifecycleService();
+    const consumeRateLimit = vi.fn(async () => ({
+      allowed: true,
+      remaining: 4,
+      resetAt: new Date(Date.now() + 60_000),
+    }));
     const app = buildApp(
       loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
       new MemoryIdentityRepository(),
       undefined,
-      { lifecycleMutations: lifecycle },
+      {
+        lifecycleMutations: lifecycle,
+        rateLimiter: { consume: consumeRateLimit },
+      },
     );
     const modules = await app.inject({
       method: "GET",
@@ -225,6 +233,94 @@ describe("lifecycle API routes", () => {
       }),
       expect.objectContaining({ requestId: expect.any(String) }),
     );
+    expect(consumeRateLimit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "organization.application.submit",
+        subject: "127.0.0.1",
+        limit: 5,
+        windowMs: 60_000,
+      }),
+    );
+    await app.close();
+  });
+
+  it("rejects public applications when the shared rate limit is exceeded", async () => {
+    const lifecycle = testLifecycleService();
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+      undefined,
+      {
+        lifecycleMutations: lifecycle,
+        rateLimiter: {
+          consume: vi.fn(async () => ({
+            allowed: false,
+            remaining: 0,
+            resetAt: new Date(Date.now() + 30_000),
+          })),
+        },
+      },
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: "/public/organization-applications",
+      headers: { "content-type": "application/json" },
+      payload: applicationPayload,
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json().error.code).toBe("TOO_MANY_REQUESTS");
+    expect(response.headers["retry-after"]).toBeDefined();
+    expect(lifecycle.submitOrganizationApplication).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("fails closed in production when the shared application rate limiter is absent", async () => {
+    const lifecycle = testLifecycleService();
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "production", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+      undefined,
+      { lifecycleMutations: lifecycle },
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: "/public/organization-applications",
+      headers: { "content-type": "application/json" },
+      payload: applicationPayload,
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe("SERVICE_UNAVAILABLE");
+    expect(lifecycle.submitOrganizationApplication).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("does not submit public applications when the shared rate limiter fails", async () => {
+    const lifecycle = testLifecycleService();
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+      undefined,
+      {
+        lifecycleMutations: lifecycle,
+        rateLimiter: {
+          consume: vi.fn(async () => {
+            throw new Error("database unavailable");
+          }),
+        },
+      },
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: "/public/organization-applications",
+      headers: { "content-type": "application/json" },
+      payload: applicationPayload,
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe("SERVICE_UNAVAILABLE");
+    expect(lifecycle.submitOrganizationApplication).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -246,6 +342,9 @@ describe("lifecycle API routes", () => {
       headers: { "content-type": "application/json" },
       payload: { ...applicationPayload, ownerEmail: "not-an-email" },
     });
+    expect(invalid.statusCode).toBe(400);
+    expect(lifecycle.submitOrganizationApplication).not.toHaveBeenCalled();
+
     const duplicate = await app.inject({
       method: "POST",
       url: "/public/organization-applications",
@@ -253,12 +352,11 @@ describe("lifecycle API routes", () => {
       payload: applicationPayload,
     });
 
-    expect(invalid.statusCode).toBe(400);
-    expect(lifecycle.submitOrganizationApplication).not.toHaveBeenCalled();
     expect(duplicate.statusCode).toBe(409);
     expect(duplicate.json().error.message).toBe(
       "An application using these details already exists.",
     );
+    expect(lifecycle.submitOrganizationApplication).toHaveBeenCalledOnce();
     await app.close();
   });
 

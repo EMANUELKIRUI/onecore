@@ -18,9 +18,7 @@ describe("loadConfig", () => {
   });
 
   it("parses a valid port and deployment environment", () => {
-    expect(
-      loadConfig({ NODE_ENV: "production", PORT: "8443" }),
-    ).toMatchObject({
+    expect(loadConfig({ NODE_ENV: "production", PORT: "8443" })).toMatchObject({
       NODE_ENV: "production",
       HOST: "0.0.0.0",
       PORT: 8443,
@@ -42,9 +40,9 @@ describe("loadConfig", () => {
   });
 
   it("preserves an explicitly configured host", () => {
-    expect(
-      loadConfig({ HOST: "127.0.0.1", PORT: "3000" }).HOST,
-    ).toBe("127.0.0.1");
+    expect(loadConfig({ HOST: "127.0.0.1", PORT: "3000" }).HOST).toBe(
+      "127.0.0.1",
+    );
   });
 
   it.each(["Production", "production ", "preview"])(

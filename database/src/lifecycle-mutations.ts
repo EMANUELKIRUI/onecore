@@ -57,7 +57,10 @@ const organizationApplicationSchema = z
     website: z.url().max(2_048).optional(),
     ownerName: z.string().trim().min(1).max(200),
     ownerEmail: z.email().trim().toLowerCase().max(320),
-    countryCode: z.string().trim().regex(/^[A-Z]{2}$/),
+    countryCode: z
+      .string()
+      .trim()
+      .regex(/^[A-Z]{2}$/),
     region: z.string().trim().min(1).max(100),
     city: z.string().trim().min(1).max(100),
     address: z.string().trim().min(1).max(300),
@@ -623,7 +626,10 @@ export function createLifecycleMutationService(
         })
         .from(modules)
         .where(
-          and(eq(modules.lifecycle, "AVAILABLE"), eq(modules.isAvailable, true)),
+          and(
+            eq(modules.lifecycle, "AVAILABLE"),
+            eq(modules.isAvailable, true),
+          ),
         )
         .orderBy(asc(modules.name));
       return available;
@@ -651,7 +657,8 @@ export function createLifecycleMutationService(
           availableModules.map(({ key }) => key),
         );
         if (
-          new Set(data.requestedModules).size !== data.requestedModules.length ||
+          new Set(data.requestedModules).size !==
+            data.requestedModules.length ||
           data.requestedModules.some((key) => !availableModuleKeys.has(key))
         ) {
           throw new TypeError("APPLICATION_MODULE_UNAVAILABLE");

@@ -185,6 +185,24 @@ describe("Business Manager capability boundary", () => {
   });
 
   it("handles business-resource loading, empty, forbidden, retry, pagination and context changes", () => {
+    expect(application).toContain(
+      '["CURRENT", "Current branch and organization-wide"]',
+    );
+    expect(application).toContain(
+      'pattern: "(?:0|[1-9][0-9]{0,11})(?:\\\\.[0-9]{1,6})?"',
+    );
+    expect(application).toContain('pattern: "[A-Z]{3}"');
+    const resourceSubmitStart = application.indexOf(
+      'form.addEventListener("submit", async (event) => {',
+      application.indexOf("async function loadBusinessManagerView"),
+    );
+    const resourceValuesStart = application.indexOf(
+      "const values = Object.fromEntries(new FormData(form));",
+      resourceSubmitStart,
+    );
+    expect(
+      application.slice(resourceSubmitStart, resourceValuesStart),
+    ).not.toContain("supportedValuesOf");
     expect(application).toContain("Loading records…");
     expect(application).toContain("Loading record…");
     expect(application).toContain(
@@ -226,7 +244,20 @@ describe("Business Manager capability boundary", () => {
     expect(application).toContain(
       "The API validates and authorizes every update.",
     );
-    expect(application).toContain("organization lifecycle status");
+    expect(application).toContain("function renderBusinessProfileForm");
+    expect(application).toContain("body: { businessProfile }");
+    for (const field of [
+      "contactEmail",
+      "contactPhone",
+      "website",
+      "countryCode",
+      "region",
+      "city",
+      "address",
+    ]) {
+      expect(application).toContain(`name: "${field}"`);
+    }
+    expect(application).toContain("Organization lifecycle status");
   });
 
   it("reuses server-verified branch context and registry entitlements", () => {

@@ -115,9 +115,44 @@ export interface JobClaim {
 
 export interface JobWorkerOptions {
   batchSize?: number;
+  jobTypes?: readonly string[];
   leaseMilliseconds?: number;
   retryBaseMilliseconds?: number;
   retryMaximumMilliseconds?: number;
+  onJobClaimed?: (job: {
+    id: string;
+    organizationId: string;
+    branchId: string | null;
+    jobType: string;
+    attempt: number;
+  }) => void;
+  onJobOutcome?: (
+    job: JobWorkerOutcome & {
+      organizationId: string;
+      branchId: string | null;
+      attempt: number;
+    },
+  ) => void;
+}
+
+type NormalizedJobWorkerOptions = Required<
+  Pick<
+    JobWorkerOptions,
+    | "batchSize"
+    | "leaseMilliseconds"
+    | "retryBaseMilliseconds"
+    | "retryMaximumMilliseconds"
+  >
+> & {
+  jobTypes: readonly string[] | undefined;
+  onJobClaimed: JobWorkerOptions["onJobClaimed"];
+  onJobOutcome: JobWorkerOptions["onJobOutcome"];
+};
+
+export interface JobWorkerOutcome {
+  jobId: string;
+  jobType: string;
+  outcome: "SUCCEEDED" | "RETRYING" | "FAILED" | "STALE";
 }
 
 export interface JobService {
@@ -142,9 +177,16 @@ export interface JobService {
     workerId: string,
     options?: JobWorkerOptions,
   ): Promise<
-    | { claimed: number; succeeded: number; retrying: number; failed: number }
+    | {
+        claimed: number;
+        succeeded: number;
+        retrying: number;
+        failed: number;
+      }
     | undefined
   >;
+  listWorkerOrganizations(): Promise<string[]>;
+  listWorkerBranches(organizationId: string): Promise<string[]>;
 }
 
 function stableJson(value: unknown): string {
@@ -258,6 +300,7 @@ async function claimBatch(
   workerId: string,
   now: Date,
   batchSize: number,
+  jobTypes: readonly string[] | undefined,
   leaseMilliseconds: number,
 ): Promise<{
   claims: JobClaim[];
@@ -270,6 +313,7 @@ async function claimBatch(
     .where(
       and(
         eq(jobs.organizationId, organizationId),
+        jobTypes ? inArray(jobs.jobType, jobTypes) : undefined,
         or(
           and(
             inArray(jobs.status, ["QUEUED", "RETRY_WAIT"]),
@@ -400,11 +444,13 @@ async function claimBatch(
   return { claims, leaseRecoveries, exhausted };
 }
 
+class StaleJobLeaseError extends Error {}
+
 async function handleClaim(
   transaction: OrganizationTransaction,
   claim: JobClaim,
   registry: JobHandlerRegistry,
-  options: Required<JobWorkerOptions>,
+  options: NormalizedJobWorkerOptions,
 ): Promise<"SUCCEEDED" | "RETRYING" | "FAILED" | "STALE"> {
   const [job] = await transaction
     .select()
@@ -474,6 +520,10 @@ async function handleClaim(
             : new JobExecutionError("HANDLER_EXECUTION_FAILED", true);
       }
     }
+  }
+
+  if (!job.leaseExpiresAt || job.leaseExpiresAt <= new Date()) {
+    throw new StaleJobLeaseError();
   }
 
   const now = new Date();
@@ -892,8 +942,17 @@ export function createJobService(
       requestedOptions = {},
     ) {
       const safeWorkerId = normalizedWorkerId(workerId);
-      const options: Required<JobWorkerOptions> = {
+      const options: NormalizedJobWorkerOptions = {
         batchSize: Math.min(Math.max(requestedOptions.batchSize ?? 10, 1), 100),
+        jobTypes: requestedOptions.jobTypes
+          ? [
+              ...new Set(
+                requestedOptions.jobTypes.map((jobType) =>
+                  jobNameSchema.parse(jobType),
+                ),
+              ),
+            ]
+          : undefined,
         leaseMilliseconds: Math.min(
           Math.max(requestedOptions.leaseMilliseconds ?? 60_000, 1_000),
           900_000,
@@ -909,6 +968,8 @@ export function createJobService(
           ),
           86_400_000,
         ),
+        onJobClaimed: requestedOptions.onJobClaimed,
+        onJobOutcome: requestedOptions.onJobOutcome,
       };
       const batch = await withOrganizationTransaction(
         database,
@@ -941,6 +1002,7 @@ export function createJobService(
                 safeWorkerId,
                 new Date(),
                 options.batchSize,
+                options.jobTypes,
                 options.leaseMilliseconds,
               ),
             (result) => ({
@@ -954,6 +1016,15 @@ export function createJobService(
       if (batch === undefined) return undefined;
 
       const { claims } = batch;
+      for (const claim of claims) {
+        options.onJobClaimed?.({
+          id: claim.id,
+          organizationId,
+          branchId: claim.branchId,
+          jobType: claim.jobType,
+          attempt: claim.attempts,
+        });
+      }
       const result = {
         claimed: claims.length,
         succeeded: 0,
@@ -961,46 +1032,93 @@ export function createJobService(
         failed: 0,
       };
       for (const claim of claims) {
-        const outcome = await observeServiceOperation(
-          "job.attempt",
-          {
-            jobId: claim.id,
-            jobType: claim.jobType,
-            organizationId,
-            branchId: claim.branchId,
-            attempt: claim.attempts,
-            workerId: safeWorkerId,
-            correlationId: claim.correlationId,
-          },
-          () =>
-            withOrganizationTransaction(
-              database,
-              organizationId,
-              async (transaction) => {
-                if (
-                  !(await organizationIsActive(transaction, organizationId))
-                ) {
-                  return "STALE" as const;
-                }
-                if (
-                  !(await establishWorkerBranch(
-                    transaction,
-                    organizationId,
-                    claim.branchId,
-                  ))
-                ) {
-                  return "STALE" as const;
-                }
-                return handleClaim(transaction, claim, registry, options);
+        let outcome: JobWorkerOutcome["outcome"];
+        try {
+          outcome =
+            (await observeServiceOperation(
+              "job.attempt",
+              {
+                jobId: claim.id,
+                jobType: claim.jobType,
+                organizationId,
+                branchId: claim.branchId,
+                attempt: claim.attempts,
+                workerId: safeWorkerId,
+                correlationId: claim.correlationId,
               },
-            ),
-          (result) => ({ attemptResult: result ?? "STALE" }),
-        );
+              () =>
+                withOrganizationTransaction(
+                  database,
+                  organizationId,
+                  async (transaction) => {
+                    if (
+                      !(await organizationIsActive(transaction, organizationId))
+                    ) {
+                      return "STALE" as const;
+                    }
+                    if (
+                      !(await establishWorkerBranch(
+                        transaction,
+                        organizationId,
+                        claim.branchId,
+                      ))
+                    ) {
+                      return "STALE" as const;
+                    }
+                    return handleClaim(transaction, claim, registry, options);
+                  },
+                ),
+              (attemptResult) => ({ attemptResult: attemptResult ?? "STALE" }),
+            )) ?? "STALE";
+        } catch (error) {
+          if (!(error instanceof StaleJobLeaseError)) throw error;
+          outcome = "STALE";
+        }
+        options.onJobOutcome?.({
+          jobId: claim.id,
+          jobType: claim.jobType,
+          outcome,
+          organizationId,
+          branchId: claim.branchId,
+          attempt: claim.attempts,
+        });
         if (outcome === "SUCCEEDED") result.succeeded += 1;
         else if (outcome === "RETRYING") result.retrying += 1;
         else if (outcome === "FAILED") result.failed += 1;
       }
       return result;
+    },
+    async listWorkerOrganizations() {
+      const rows = await database
+        .select({ id: organizations.id })
+        .from(organizations)
+        .where(eq(organizations.status, "ACTIVE"))
+        .orderBy(asc(organizations.id));
+      return rows.map(({ id }) => id);
+    },
+    async listWorkerBranches(organizationId) {
+      return (
+        (await withOrganizationTransaction(
+          database,
+          organizationId,
+          async (transaction) => {
+            if (!(await organizationIsActive(transaction, organizationId))) {
+              return [];
+            }
+            const rows = await transaction
+              .select({ id: branches.id })
+              .from(branches)
+              .where(
+                and(
+                  eq(branches.organizationId, organizationId),
+                  eq(branches.status, "ACTIVE"),
+                ),
+              )
+              .orderBy(asc(branches.id));
+            return rows.map(({ id }) => id);
+          },
+        )) ?? []
+      );
     },
   };
 }

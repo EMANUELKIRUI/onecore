@@ -1,4 +1,7 @@
-import { ApiError, createApiClient } from "../../../packages/ui/src/api-client.js";
+import {
+  ApiError,
+  createApiClient,
+} from "../../../packages/ui/src/api-client.js";
 
 const apiBase =
   document
@@ -36,7 +39,11 @@ function renderList() {
   list.replaceChildren();
   if (!applications.size) {
     list.append(
-      node("p", "No organization applications are awaiting review.", "oc-state oc-state--empty"),
+      node(
+        "p",
+        "No organization applications are awaiting review.",
+        "oc-state oc-state--empty",
+      ),
     );
     return;
   }
@@ -44,7 +51,13 @@ function renderList() {
   table.className = "oc-table";
   const head = document.createElement("thead");
   const headingRow = document.createElement("tr");
-  for (const title of ["Organization", "Owner", "Industry", "Status", "Action"]) {
+  for (const title of [
+    "Organization",
+    "Owner",
+    "Industry",
+    "Status",
+    "Action",
+  ]) {
     headingRow.append(node("th", title));
   }
   head.append(headingRow);
@@ -53,7 +66,10 @@ function renderList() {
     const row = document.createElement("tr");
     row.append(
       node("td", application.organization.name),
-      node("td", `${application.applicant.ownerName} (${application.applicant.ownerEmail})`),
+      node(
+        "td",
+        `${application.applicant.ownerName} (${application.applicant.ownerEmail})`,
+      ),
       node("td", application.organization.industry),
       node("td", application.status),
     );
@@ -102,13 +118,16 @@ function showDetail(reference) {
 
   const actions = node("div", undefined, "oc-cluster");
   if (application.status === "PENDING") {
-    actions.append(
-      actionButton("Begin review", "UNDER_REVIEW", reference),
-    );
+    actions.append(actionButton("Begin review", "UNDER_REVIEW", reference));
   } else if (application.status === "UNDER_REVIEW") {
     actions.append(
       actionButton("Approve", "APPROVED", reference),
-      actionButton("Reject", "REJECTED", reference, "oc-button oc-button--secondary"),
+      actionButton(
+        "Reject",
+        "REJECTED",
+        reference,
+        "oc-button oc-button--secondary",
+      ),
     );
   }
   if (actions.childElementCount) detail.append(actions);
@@ -123,7 +142,9 @@ function actionButton(label, status, reference, className = "oc-button") {
 
 async function loadApplications() {
   const sequence = ++requestSequence;
-  list.replaceChildren(node("p", "Loading organization requests…", "oc-state oc-state--loading"));
+  list.replaceChildren(
+    node("p", "Loading organization requests…", "oc-state oc-state--loading"),
+  );
   showMessage("");
   try {
     const response = await api.request("/platform/organization-applications");
@@ -146,7 +167,9 @@ async function loadApplications() {
       showDetail(selectedReference);
     } else {
       selectedReference = null;
-      detail.replaceChildren(node("p", "Choose an application to review.", "oc-muted"));
+      detail.replaceChildren(
+        node("p", "Choose an application to review.", "oc-muted"),
+      );
     }
   } catch (error) {
     if (sequence !== requestSequence) return;

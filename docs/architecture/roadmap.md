@@ -13,6 +13,14 @@ for the recorded platform foundations.
 
 IN PROGRESS
 
+The separate workflow worker executable, PostgreSQL-backed job processing,
+worker-role discovery migration, and local deployment foundation are
+implemented. Unit tests and isolated PostgreSQL integration tests are being
+used to verify runtime behavior. This is not a production-readiness status:
+production role provisioning, migration application, service deployment,
+monitoring, and operational recovery remain unverified and require an
+operator-led release.
+
 ### Objective
 
 **Business objective:** Let an organization turn explicitly supported platform

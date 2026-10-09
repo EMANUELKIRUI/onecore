@@ -66,6 +66,25 @@ describe("shared UI foundations", () => {
     });
   });
 
+  it("preserves request cancellation instead of reporting a network failure", async () => {
+    const abortError = new globalThis.DOMException(
+      "The operation was aborted.",
+      "AbortError",
+    );
+    const fetchImplementation = vi.fn().mockRejectedValue(abortError);
+    const api = createApiClient("", fetchImplementation);
+    const controller = new globalThis.AbortController();
+    controller.abort();
+
+    await expect(
+      api.request("/auth/session", { signal: controller.signal }),
+    ).rejects.toBe(abortError);
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      "/auth/session",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
   it("filters capability-dependent navigation fail-closed", () => {
     const items = [
       { label: "Home", href: "/" },

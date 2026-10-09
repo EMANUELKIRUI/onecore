@@ -23,15 +23,17 @@ It is not POS, Sales, Inventory, Finance, or CRM.
 
 - **Support:** `organizations`, `organization_settings`, and
   `business_settings` tables persist organization name, industry, deployment
-  type, legal name, registration/tax numbers, regional settings, and opaque
-  JSON configuration.
+  type, legal name, registration/tax numbers, regional settings, and typed
+  business contact/address fields. Owner/application details remain in the
+  organization application profile.
 - **API/authorization:** `GET /organizations/:organizationId/configuration`
   uses `core.organization.settings.read`; `PATCH` uses
-  `core.organization.settings.update`. The server binds organization context.
-- **UI:** Displays returned profile/business/regional fields and updates legal
-  name, registration/tax numbers, country, currency, locale, and time zone.
-  Lifecycle/name mutation, typed contact/address editing, and arbitrary JSON
-  rendering are not supported.
+  `core.organization.settings.update`. The business profile projection returns
+  contact email/phone, website, country, region, city, and address without
+  returning owner details. The server binds organization context.
+- **UI:** Displays profile/business/regional fields and updates legal
+  identity, contact/address, country, currency, locale, and time zone.
+  Lifecycle/name mutation and arbitrary JSON rendering are not supported.
 
 ### Branches — PARTIALLY IMPLEMENTED
 

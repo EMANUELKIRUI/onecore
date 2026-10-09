@@ -3,14 +3,15 @@
 ## Current applications and stack
 
 Phase 14 completes the dependency-free frontend foundation in
-`apps/marketing`, `apps/business`, and `packages/ui`. Marketing provides
-platform, products, industries, features, and pricing information alongside
-workspace sign-in. These pages describe shared capabilities and clearly state
-that business modules, public pricing, and self-service registration are not
-available; they do not fetch fabricated content. The public
-`apps/marketing/register/` entry explains this limitation and directs existing
-users to sign in. `POST /platform/organizations` is restricted to authenticated
-platform superadmins and is not a public registration/onboarding API.
+`apps/marketing`, `apps/business`, and `packages/ui`. Marketing provides platform, products, industries, features, and pricing
+information alongside workspace sign-in. These pages describe shared
+capabilities and clearly state that business modules, public pricing, and
+self-service account provisioning are not available; they do not fetch
+fabricated content. The public `apps/marketing/register/` entry submits an
+organization application through the public application API. Submission
+creates a pending request, not an owner identity, login, or workspace access.
+`POST /platform/organizations` remains a separate operation restricted to
+authenticated platform superadmins.
 
 The business application provides login/session bootstrap, a data-backed
 dashboard, verified organization/branch context selection, profile/session

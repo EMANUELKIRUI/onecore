@@ -94,16 +94,34 @@ Credentials and secret references must not appear in ordinary API responses, bro
 
 ## Webhook signing and delivery boundary
 
-There is no webhook subscription table/API, signing-secret provisioning, delivery queue, retry worker, or outbound HTTP sender. The API now provides a server-side HMAC-SHA256 signing and verification primitive for future trusted delivery code; it does not itself send webhooks or resolve secrets.
+Webhook subscription persistence and authorized subscription/secret-management
+routes are implemented. Event dispatch can enqueue a separate delivery record,
+and `createWebhookDeliveryWorker` claims tenant-scoped deliveries, signs
+payloads, records attempts, retries transient failures, and dead-letters
+terminal failures. This is tested worker code, not an automatically running
+process.
 
 The delivery adapter sends `X-OneCore-Delivery-ID: <delivery-id>`, `X-OneCore-Timestamp: <unix-seconds>`, and `X-OneCore-Signature: v1=<lowercase-hex-digest>`. The HMAC-SHA256 input is the UTF-8 bytes of `<timestamp>.<delivery-id>.` followed by the exact raw payload bytes. Signing keys must contain at least 32 random bytes, and the signer rejects payloads larger than 65,536 bytes. Verification uses the separately supplied timestamp and delivery ID, accepts timestamps within 300 seconds of the receiver's clock, and compares digests in constant time. Receivers must verify the raw request body, enforce this time window, and persist delivery IDs for idempotency. Delivery is intended to be at-least-once, not exactly-once; consumers should process each stable delivery ID at most once.
 
-Configuration-change events already use the transactional outbox. That outbox is not an external webhook queue: webhook delivery must be a separately authorized outbox handler that performs network I/O after the business transaction commits. Until then, no external delivery occurs.
+The internal outbox remains separate from the webhook delivery queue.
+`platformWebhookEventHandlers` creates webhook deliveries only for active
+subscriptions that selected the event; the worker performs delivery later.
+The exported factory requires a trusted caller to supply organization IDs.
+There is no runnable worker entry point, scheduler, or production worker
+deployment configuration in this repository.
 
-The existing HTTPS URL validation is metadata validation, not SSRF protection. Before enabling outbound delivery, implement and test a centralized egress boundary that validates DNS results and every redirect, blocks loopback/private/link-local/metadata destinations and internal names, resists DNS rebinding, enforces HTTPS, payload-size and timeout limits, and safely handles responses. Do not fetch configured endpoints directly from application routes or arbitrary handlers.
+The HTTPS URL validator is not complete SSRF protection. The default
+`failClosedWebhookTransport` performs no network I/O, and the default secret
+store is unavailable. Production delivery therefore remains disabled until a
+trusted worker is deployed with an approved secret-store adapter and reviewed
+SSRF-safe transport that validates DNS results and redirects, blocks
+loopback/private/link-local/metadata destinations and internal names, resists
+DNS rebinding, enforces HTTPS, payload-size and timeout limits, and safely
+handles responses. Do not fetch configured endpoints directly from
+application routes or arbitrary handlers.
 
 ## Authorization and provider boundary
 
 Organization identity comes from the authenticated session and active membership; route IDs do not select tenants. RLS remains enabled and forced, and the database runtime role must remain least-privileged. Existing integration mutations are audited without secret data. Do not add secret-specific permission keys or provider APIs until a concrete credential lifecycle is introduced into the existing RBAC model.
 
-Provider adapters belong behind trusted server-side services and the secret-store port. Payment, messaging, accounting, banking, identity, storage, and customer-specific provider workflows are intentionally not implemented here. A real secret-store adapter, webhook registration/delivery persistence, and SSRF-safe outbound networking are production dependencies for enabling those capabilities.
+Provider adapters belong behind trusted server-side services and the secret-store port. Payment, messaging, accounting, banking, identity, storage, and customer-specific provider workflows are intentionally not implemented here. A real secret-store adapter and SSRF-safe outbound networking are production dependencies for enabling those capabilities.

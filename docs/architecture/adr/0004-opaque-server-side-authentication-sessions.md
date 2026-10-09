@@ -3,6 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-10-05
 
+The original process-local login limiter decision below was superseded by
+[ADR 0010](0010-observability-and-rate-limiting.md), which specifies the
+PostgreSQL-backed production limiter and its fail-closed behavior.
+
 ## Context
 
 Phase 2 established global canonical users, organization memberships, tenant-scoped roles, transaction-local PostgreSQL RLS, and an append-only audit log. Phase 3 needs credential authentication and organization switching without duplicating those identity concepts or allowing client-controlled tenant context.

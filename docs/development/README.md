@@ -7,8 +7,8 @@ For fictional development identities, run the database seed as documented in the
 Authentication uses Argon2id, HTTP-only opaque cookie sessions, configurable
 origin and session settings, a default 5-per-minute per-IP login limit, and
 account lockout after 10 failures in 15 minutes. The API server uses the
-PostgreSQL-backed limiter for shared limits; production app construction fails
-closed if that limiter is not configured. See [ADR 0004](../architecture/adr/0004-opaque-server-side-authentication-sessions.md) and the [authentication threat model](../security/authentication.md).
+PostgreSQL-backed limiter for shared limits; production login fails closed if
+that limiter is not configured. See [ADR 0004](../architecture/adr/0004-opaque-server-side-authentication-sessions.md) for session design, [ADR 0010](../architecture/adr/0010-observability-and-rate-limiting.md) for shared rate limiting, and the [authentication threat model](../security/authentication.md).
 
 Tenant requests must derive organization and optional branch context from the live authenticated session. Organization selection requires an active membership and active organization; branch selection requires an active branch plus assigned access or explicit organization-wide branch scope. Use `withActiveOrganizationTransaction` or `withActiveBranchTransaction` from `@onecore/database`; the lower-level organization transaction helper is not exported as an authorization API. Branch scope does not implement RBAC or filter any future business table automatically. See [ADR 0005](../architecture/adr/0005-organization-and-branch-context.md).
 

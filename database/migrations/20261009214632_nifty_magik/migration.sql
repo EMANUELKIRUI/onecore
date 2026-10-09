@@ -1,0 +1,5 @@
+ALTER TABLE "business_settings" ADD CONSTRAINT "business_settings_address_country_code_format" CHECK ("address_country_code" is null or "address_country_code" ~ '^[A-Z]{2}$');--> statement-breakpoint
+ALTER TABLE "business_settings" ADD CONSTRAINT "business_settings_contact_phone_nonempty" CHECK ("contact_phone" is null or length(btrim("contact_phone")) > 0);--> statement-breakpoint
+ALTER TABLE "business_settings" ADD CONSTRAINT "business_settings_address_region_nonempty" CHECK ("address_region" is null or length(btrim("address_region")) > 0);--> statement-breakpoint
+ALTER TABLE "business_settings" ADD CONSTRAINT "business_settings_address_city_nonempty" CHECK ("address_city" is null or length(btrim("address_city")) > 0);--> statement-breakpoint
+ALTER TABLE "business_settings" ADD CONSTRAINT "business_settings_address_nonempty" CHECK ("address" is null or length(btrim("address")) > 0);

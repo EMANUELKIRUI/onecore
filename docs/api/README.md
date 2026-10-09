@@ -1,6 +1,6 @@
 # API foundation
 
-The service is `services/api`. It requires `DATABASE_URL` for a non-owner, `NOBYPASSRLS` application role. `GET /health` reports process liveness only; it is not a readiness check and does not verify database health or downstream dependencies. API error responses use shared contracts and do not expose internal exception details.
+The service is `services/api`. It requires `DATABASE_URL` for a non-owner, `NOBYPASSRLS` application role. `GET /health` reports process liveness only and does not query dependencies. `GET /ready` checks PostgreSQL connectivity with a bounded read-only query and returns `503` when unavailable; `/health/ready` remains a compatibility alias. API error responses use shared contracts and do not expose internal exception details.
 
 ## Authentication routes
 
@@ -15,7 +15,30 @@ The service is `services/api`. It requires `DATABASE_URL` for a non-owner, `NOBY
 
 Login failures return a generic 401 regardless of whether the account exists or is active. Login is rate-limited by IP. State-changing routes require JSON and validate browser origin. The cookie secret is never included in response JSON. See [authentication security](../security/authentication.md).
 
-Authentication is not the complete authorization engine. There are currently no business-domain CRUD routes. Any such routes must use `requireAuthenticated()` and `requireOrganizationMembership()`, then apply permission, module-entitlement, branch-row, and data-scope checks in the service/query before returning business data. Organization and branch IDs are requested context only; the server verifies current membership, organization/branch status, and branch access. Branch selection does not replace RBAC or data-scope checks. Platform roles do not grant operational access.
+The production API injects the shared PostgreSQL login limiter. If it is
+missing or the database cannot enforce the limit, login fails closed rather
+than falling back to process-local state. Tests and non-production app
+instances without an injected limiter use Fastify's process-local limiter.
+
+## Public organization applications
+
+| Method | Route                                            | Behavior                                                                                                                                     |
+| ------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/public/organization-applications/modules`      | Lists currently available modules that an applicant may request.                                                                             |
+| `POST` | `/public/organization-applications`              | Validates and stores a rate-limited organization application in `PENDING`; it does not create an owner identity, login, or workspace access. |
+| `GET`  | `/platform/organization-applications`            | Lists applications for an authenticated platform superadmin.                                                                                 |
+| `POST` | `/platform/organization-applications/:id/status` | Transitions an application through the platform lifecycle service for an authenticated platform superadmin.                                  |
+
+The public POST validates JSON and browser origin and permits at most five
+requests per IP per minute using the shared PostgreSQL limiter in production.
+Production requests fail closed with `503` if shared limiting is not
+configured or cannot run; denied requests return `429`. Tests and
+non-production app instances without an injected limiter use Fastify's
+process-local limiter. Submission does not itself approve, activate, or
+provision an organization. Review and later owner-account setup remain
+separate administrator operations.
+
+Authentication is not the complete authorization engine. Business Manager currently provides organization-scoped customer and catalog CRUD at `/organizations/:organizationId/business/customers` and `/organizations/:organizationId/business/catalog`. The organization configuration `GET`/`PATCH` routes also expose the authorized business contact and address profile. These routes verify the requested organization against authenticated context and enforce permissions, module entitlements, branch access, and data-scope rules before returning or changing data. Organization and branch IDs are requested context only; the server verifies current membership, organization/branch status, and branch access. Branch selection does not replace RBAC or data-scope checks. Branch-directory CRUD is not exposed. Platform roles do not grant operational access.
 
 Validate every external input at the API boundary. Route handlers should delegate business decisions to application services; domain code must not depend on Fastify.
 

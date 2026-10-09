@@ -6,6 +6,9 @@ export async function applyTestMigrations(
   client: PGlite,
   migrationsDirectory: string,
 ): Promise<void> {
+  await client.exec(
+    "CREATE ROLE onecore_worker NOLOGIN NOSUPERUSER NOBYPASSRLS",
+  );
   const migrationDirectories = await readdir(migrationsDirectory, {
     withFileTypes: true,
   });

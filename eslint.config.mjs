@@ -5,7 +5,13 @@ export default tseslint.config(
   { ignores: ["**/dist/**", "node_modules/**", "coverage/**"] },
   eslint.configs.recommended,
   {
-    files: ["apps/business/**/*.js", "packages/ui/**/*.js"],
+    files: [
+      "apps/business/**/*.js",
+      "apps/marketing/**/*.js",
+      "apps/superadmin/**/*.js",
+      "apps/support/**/*.js",
+      "packages/ui/**/*.js",
+    ],
     languageOptions: {
       globals: {
         document: "readonly",

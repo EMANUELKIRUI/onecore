@@ -1,4 +1,8 @@
-import { ApiError, createApiClient } from "../../../packages/ui/src/api-client.js";
+import {
+  ApiError,
+  createApiClient,
+} from "../../../packages/ui/src/api-client.js";
+import { parseApplicationResponse } from "./application-response.js";
 
 const apiBase =
   document
@@ -139,7 +143,9 @@ function render() {
     form.append(field("contactEmail", "Business email", "email", true, 320));
     form.append(field("contactPhone", "Business phone", "tel", true, 50));
     form.append(field("website", "Website (optional)", "url", false, 2048));
-    form.append(field("countryCode", "Country code (e.g. KE)", "text", true, 2));
+    form.append(
+      field("countryCode", "Country code (e.g. KE)", "text", true, 2),
+    );
     form.append(field("region", "County / region", "text", true, 100));
     form.append(field("city", "Town / city", "text", true, 100));
     form.append(field("address", "Business address", "text", true, 300));
@@ -148,7 +154,9 @@ function render() {
       "Owner contact",
       "We will use these details to contact you about the application. No login is created at this stage.",
     );
-    form.append(field("ownerName", "Owner / administrator name", "text", true, 200));
+    form.append(
+      field("ownerName", "Owner / administrator name", "text", true, 200),
+    );
     form.append(field("ownerEmail", "Owner email", "email", true, 320));
   } else if (state.step === 2) {
     addSectionTitle(
@@ -177,7 +185,10 @@ function render() {
       form.append(label);
     }
   } else {
-    addSectionTitle("Review your application", "Check these details before submitting.");
+    addSectionTitle(
+      "Review your application",
+      "Check these details before submitting.",
+    );
     renderReview();
   }
 
@@ -247,10 +258,16 @@ form.addEventListener("submit", async (event) => {
       method: "POST",
       body: { ...state.values, deploymentType: "SAAS" },
     });
-    const application = response.application;
+    const application = parseApplicationResponse(response);
     form.replaceChildren();
     form.append(element("span", "Application received", "oc-status"));
-    form.append(element("h2", "Your request is pending review", "oc-section-title"));
+    form.append(
+      element(
+        "h2",
+        `Your request is ${application.status.toLowerCase().replaceAll("_", " ")}`,
+        "oc-section-title",
+      ),
+    );
     form.append(
       element(
         "p",

@@ -64,35 +64,78 @@ function allowOnlyTestTenant(
 
 describe("API foundation", () => {
   it("serves a liveness response", async () => {
+    const readinessCheck = vi.fn(async () => {});
     const app = buildApp(
       loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
       new MemoryIdentityRepository(),
+      undefined,
+      { readinessCheck },
     );
     const response = await app.inject({ method: "GET", url: "/health" });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ status: "ok" });
+    expect(readinessCheck).not.toHaveBeenCalled();
     await app.close();
   });
 
-  it("keeps liveness independent from database readiness", async () => {
+  it("reports ready when the required dependency check succeeds", async () => {
+    const readinessCheck = vi.fn(async () => {});
     const app = buildApp(
       loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
       new MemoryIdentityRepository(),
       undefined,
-      {
-        readinessCheck: async () => {
-          throw new Error("database connection detail");
-        },
-      },
+      { readinessCheck },
+    );
+    const ready = await app.inject({ method: "GET", url: "/ready" });
+    const legacyReady = await app.inject({
+      method: "GET",
+      url: "/health/ready",
+    });
+
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toEqual({ status: "ready" });
+    expect(ready.headers["cache-control"]).toBe("no-store");
+    expect(legacyReady.statusCode).toBe(200);
+    expect(readinessCheck).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  it("keeps liveness independent and fails readiness without leaking errors", async () => {
+    const readinessCheck = vi.fn(async () => {
+      throw new Error(
+        "database connection failed: postgresql://private:secret@db.invalid/app",
+      );
+    });
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+      undefined,
+      { readinessCheck },
     );
     const live = await app.inject({ method: "GET", url: "/health/live" });
-    const ready = await app.inject({ method: "GET", url: "/health/ready" });
+    const ready = await app.inject({ method: "GET", url: "/ready" });
 
     expect(live.statusCode).toBe(200);
     expect(ready.statusCode).toBe(503);
     expect(ready.json()).toEqual({ status: "not_ready" });
-    expect(ready.body).not.toContain("database connection detail");
+    expect(ready.body).not.toContain("database connection");
+    expect(ready.body).not.toContain("secret");
+    expect(readinessCheck).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it("returns not ready when the dependency check exceeds its timeout", async () => {
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+      undefined,
+      { readinessCheck: () => new Promise<void>(() => {}) },
+    );
+    const ready = await app.inject({ method: "GET", url: "/ready" });
+
+    expect(ready.statusCode).toBe(503);
+    expect(ready.json()).toEqual({ status: "not_ready" });
     await app.close();
   });
 

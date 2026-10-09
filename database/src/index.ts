@@ -157,6 +157,7 @@ export {
   type JobHandlerContext,
   type JobHandlerRegistry,
   type JobService,
+  type JobWorkerOutcome,
   type JobWorkerOptions,
 } from "./jobs.js";
 export {
@@ -188,9 +189,13 @@ export async function checkDatabaseConnectivity(
   await database.execute(sql`select 1`);
 }
 
-export function createDatabase(connectionString: string): {
+export function createDatabase(
+  connectionString: string,
+  options: { maxConnections?: number } = {},
+): {
   db: Database;
   close: () => Promise<void>;
+  closeWithTimeout: (timeoutSeconds: number) => Promise<void>;
 } {
   const parsedUrl = new URL(connectionString);
   if (
@@ -202,9 +207,22 @@ export function createDatabase(connectionString: string): {
     );
   }
 
-  const client = postgres(connectionString);
+  if (
+    options.maxConnections !== undefined &&
+    (!Number.isInteger(options.maxConnections) ||
+      options.maxConnections < 1 ||
+      options.maxConnections > 100)
+  ) {
+    throw new RangeError("maxConnections must be an integer between 1 and 100");
+  }
+  const client = postgres(
+    connectionString,
+    options.maxConnections ? { max: options.maxConnections } : undefined,
+  );
   return {
     db: drizzle({ client }),
     close: () => client.end(),
+    closeWithTimeout: (timeoutSeconds) =>
+      client.end({ timeout: timeoutSeconds }),
   };
 }
