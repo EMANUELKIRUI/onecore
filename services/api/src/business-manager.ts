@@ -95,6 +95,27 @@ function branchMatches(
   );
 }
 
+function resourceCapabilities(
+  context: ResolvedAuthorizationContext,
+  resource: "customer" | "catalog",
+) {
+  const permissionPrefix = `core.business_manager.${resource}`;
+  const hasPermission = (action: "create" | "update" | "delete") =>
+    context.permissions.some(
+      (permission) =>
+        permission.key === `${permissionPrefix}.${action}` &&
+        (permission.scopeType === "ORGANIZATION" ||
+          permission.scopeType === "OWN" ||
+          permission.scopeType === "SELF" ||
+          (permission.scopeType === "BRANCH" && context.branchId !== null)),
+    );
+  return {
+    canCreate: hasPermission("create"),
+    canUpdate: hasPermission("update"),
+    canDelete: hasPermission("delete"),
+  };
+}
+
 function uniqueBusinessReferenceConflict(error: unknown, depth = 0): boolean {
   if (typeof error !== "object" || error === null || depth > 3) return false;
   const candidate = error as {
@@ -283,6 +304,7 @@ export function registerBusinessManagerRoutes(
             total: page.total,
             limit: query.data.limit,
             offset: query.data.offset,
+            capabilities: resourceCapabilities(context, "customer"),
           },
         };
       },
@@ -528,6 +550,7 @@ export function registerBusinessManagerRoutes(
             total: page.total,
             limit: query.data.limit,
             offset: query.data.offset,
+            capabilities: resourceCapabilities(context, "catalog"),
           },
         };
       },

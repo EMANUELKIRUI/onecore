@@ -252,6 +252,9 @@ describe("Business Manager API", () => {
       city: null,
       address: null,
     });
+    expect(initialProfile.json().permissions).toEqual({
+      canUpdateSettings: true,
+    });
 
     const invalidProfile = await app.inject({
       method: "PATCH",
@@ -365,6 +368,28 @@ describe("Business Manager API", () => {
       address: "Central Nairobi",
     });
     expect(rereadProfile.body).not.toContain("ownerEmail");
+    const readOnlyProfileApp = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      allowBusinessManager(["core.organization.settings.read"]),
+    );
+    const readOnlyProfile = await readOnlyProfileApp.inject({
+      method: "GET",
+      url: profileUrl,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(readOnlyProfile.statusCode).toBe(200);
+    expect(readOnlyProfile.json().permissions).toEqual({
+      canUpdateSettings: false,
+    });
+    const readOnlyProfileUpdate = await readOnlyProfileApp.inject({
+      method: "PATCH",
+      url: profileUrl,
+      cookies: { onecore_session: sessionSecret },
+      payload: { businessProfile: { contactEmail: "forbidden@example.test" } },
+    });
+    expect(readOnlyProfileUpdate.statusCode).toBe(403);
+    await readOnlyProfileApp.close();
 
     const foreignBranchFilter = await app.inject({
       method: "GET",
@@ -467,6 +492,11 @@ describe("Business Manager API", () => {
       total: 1,
       limit: 10,
       items: [{ id: customerId }],
+      capabilities: {
+        canCreate: true,
+        canUpdate: true,
+        canDelete: true,
+      },
     });
     const readCustomer = await app.inject({
       method: "GET",
@@ -516,6 +546,11 @@ describe("Business Manager API", () => {
     expect(catalogList.json()).toMatchObject({
       total: 1,
       items: [{ id: itemId, type: "SERVICE" }],
+      capabilities: {
+        canCreate: true,
+        canUpdate: true,
+        canDelete: true,
+      },
     });
     expect(
       (
@@ -569,6 +604,45 @@ describe("Business Manager API", () => {
       .where(sql`${schema.auditLogs.organizationId} = ${organizationId}`);
     expect(JSON.stringify(audits)).not.toContain("sales@acme.example");
     expect(audits.length).toBeGreaterThanOrEqual(6);
+
+    const readOnlyApp = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      allowBusinessManager([
+        "core.business_manager.customer.read",
+        "core.business_manager.catalog.read",
+      ]),
+    );
+    const readOnlyCustomers = await readOnlyApp.inject({
+      method: "GET",
+      url: `/organizations/${organizationId}/business/customers`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const readOnlyCatalog = await readOnlyApp.inject({
+      method: "GET",
+      url: `/organizations/${organizationId}/business/catalog`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(readOnlyCustomers.statusCode).toBe(200);
+    expect(readOnlyCustomers.json().capabilities).toEqual({
+      canCreate: false,
+      canUpdate: false,
+      canDelete: false,
+    });
+    expect(readOnlyCatalog.statusCode).toBe(200);
+    expect(readOnlyCatalog.json().capabilities).toEqual({
+      canCreate: false,
+      canUpdate: false,
+      canDelete: false,
+    });
+    const readOnlyCreateDenied = await readOnlyApp.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/business/customers`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { name: "Read-only cannot create", customerType: "BUSINESS" },
+    });
+    expect(readOnlyCreateDenied.statusCode).toBe(403);
+    await readOnlyApp.close();
     await app.close();
   });
 
@@ -1088,9 +1162,32 @@ describe("Business Manager API", () => {
       availableRoles: expect.arrayContaining([
         expect.objectContaining({ id: availableRole.id }),
       ]),
+      capabilities: { canAssign: true, canRemove: true },
     });
     expect(memberRoles.json()).not.toHaveProperty("email");
     expect(memberRoles.json()).not.toHaveProperty("userId");
+    const readOnlyRoleApp = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      allowBusinessManager(
+        permissionKeys.filter(
+          (key) =>
+            key !== "core.rbac.membership_role.assign" &&
+            key !== "core.rbac.membership_role.remove",
+        ),
+      ),
+    );
+    const readOnlyMemberRoles = await readOnlyRoleApp.inject({
+      method: "GET",
+      url: memberRolesUrl,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(readOnlyMemberRoles.statusCode).toBe(200);
+    expect(readOnlyMemberRoles.json().capabilities).toEqual({
+      canAssign: false,
+      canRemove: false,
+    });
+    await readOnlyRoleApp.close();
     expect(initialBranchList.statusCode).toBe(200);
     expect(initialBranchList.json()).toMatchObject({
       branches: [],
@@ -1533,6 +1630,10 @@ describe("Business Manager API", () => {
       cookies: { onecore_session: sessionSecret },
     });
     expect(readOnlyList.statusCode).toBe(200);
+    expect(readOnlyList.json().capabilities).toEqual({
+      canAssign: false,
+      canRemove: false,
+    });
     expect(readOnlyAssign.statusCode).toBe(403);
     expect(readOnlyRemove.statusCode).toBe(403);
     await readOnlyApp.close();
@@ -1554,6 +1655,16 @@ describe("Business Manager API", () => {
     const listed = await app.inject({
       method: "GET",
       url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const selfTargetAssignments = await app.inject({
+      method: "GET",
+      url: `/organizations/${organization.id}/members/${actorMembership.id}/branches`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const allModeAssignments = await app.inject({
+      method: "GET",
+      url: `/organizations/${organization.id}/members/${allTargetMembership.id}/branches`,
       cookies: { onecore_session: sessionSecret },
     });
     const inactiveBranchResponse = await app.inject({
@@ -1616,9 +1727,23 @@ describe("Business Manager API", () => {
     expect(repeated.statusCode).toBe(200);
     expect(repeated.json().addedBranchIds).toEqual([]);
     expect(listed.statusCode).toBe(200);
+    expect(selfTargetAssignments.statusCode).toBe(200);
+    expect(selfTargetAssignments.json().capabilities).toEqual({
+      canAssign: false,
+      canRemove: false,
+    });
+    expect(allModeAssignments.statusCode).toBe(200);
+    expect(allModeAssignments.json().capabilities).toEqual({
+      canAssign: false,
+      canRemove: false,
+    });
     expect(listed.json()).toMatchObject({
       membershipId: targetMembership.id,
       branchAccessMode: "ASSIGNED",
+      availableBranches: expect.arrayContaining([
+        expect.objectContaining({ id: centralBranch.id, status: "ACTIVE" }),
+        expect.objectContaining({ id: southBranch.id, status: "ACTIVE" }),
+      ]),
       explicitAssignments: expect.arrayContaining([
         expect.objectContaining({ id: centralBranch.id, status: "ACTIVE" }),
         expect.objectContaining({ id: southBranch.id, status: "ACTIVE" }),
@@ -1630,6 +1755,7 @@ describe("Business Manager API", () => {
           expect.objectContaining({ id: southBranch.id }),
         ]),
       },
+      capabilities: { canAssign: true, canRemove: true },
     });
     expect(inactiveBranchResponse.statusCode).toBe(404);
     expect(foreignBranchAssignment.statusCode).toBe(404);

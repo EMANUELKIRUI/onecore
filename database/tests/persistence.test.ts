@@ -1586,6 +1586,49 @@ describe("PostgreSQL persistence foundation", () => {
     ).toBe(false);
   });
 
+  it("records failed logins and locks an account using timestamp expressions", async () => {
+    const email = `failed-login-${crypto.randomUUID()}@example.test`;
+    await database.insert(schema.users).values({
+      email,
+      displayName: "Failed Login User",
+    });
+    const identity = createIdentityRepository(database as unknown as Database);
+    const now = new Date("2026-01-01T00:00:00.000Z");
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const result = await identity.recordFailedLogin(
+        email,
+        new Date(now.getTime() + attempt * 1_000),
+        15 * 60_000,
+        3,
+        15 * 60_000,
+        crypto.randomUUID(),
+        "127.0.0.1",
+        "persistence-test",
+        crypto.randomUUID(),
+      );
+      expect(result).toMatchObject({
+        locked: attempt === 3,
+      });
+    }
+
+    const [user] = await database
+      .select({
+        status: schema.users.status,
+        failedLoginAttempts: schema.users.failedLoginAttempts,
+        failedLoginWindowStartedAt: schema.users.failedLoginWindowStartedAt,
+        lockedUntil: schema.users.lockedUntil,
+      })
+      .from(schema.users)
+      .where(eq(schema.users.email, email));
+    expect(user).toMatchObject({
+      status: "LOCKED",
+      failedLoginAttempts: 3,
+      failedLoginWindowStartedAt: new Date(now.getTime() + 1_000),
+      lockedUntil: new Date(now.getTime() + 3_000 + 15 * 60_000),
+    });
+  });
+
   it("rejects configuration context for inactive memberships and suspended organizations", async () => {
     const activeOrganization = await createOrganization("Active Context Org");
     const suspendedOrganization = await createOrganization(

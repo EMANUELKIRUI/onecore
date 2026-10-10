@@ -7,6 +7,50 @@ retroactively assign status labels. See the [architecture overview](overview.md)
 [architecture decisions](adr/), and the [communications foundation](communications.md)
 for the recorded platform foundations.
 
+## Business Manager Frontend
+
+### Status
+
+IMPLEMENTED — ISOLATED LOCAL VERIFICATION PASSED; DEPLOYMENT VERIFICATION PENDING
+
+### Scope and evidence
+
+The existing authenticated Business app provides the verified-API Dashboard,
+Business profile and settings, customer and product/service CRUD, branch
+administration, the member directory, member role and branch assignments, and
+supported workflow activity. Resource data is read from the real API; no
+business records or operational metrics are mocked. Customer/catalog and
+branch/member mutation controls use server-returned capability flags as a UI
+hint only. Configuration reads likewise expose an advisory
+`permissions.canUpdateSettings` flag so read-only users do not see profile or
+settings edit forms. The API independently enforces tenant, entitlement,
+permission, branch, and data-scope authorization.
+
+The focused frontend suite and Business Manager API integration suite pass.
+`npm run test:e2e` passes the Chromium journey against a disposable PostgreSQL
+18.6 database and the real API with synthetic identities. It verifies
+organization profile and regional settings updates, customer and catalog
+create/update/deactivate persistence after reload, branch creation persistence,
+member role and branch assignment/removal persistence, read-only action
+visibility for resources, profile, and settings, and API rejection of
+unauthorized and cross-tenant operations. A settings-read-only API regression
+test verifies the advisory flag is false and that PATCH remains denied. This
+is local test evidence, not a deployment test.
+
+### Outstanding work and limits
+
+- Deployed migration history and permission backfill remain unverified. Follow
+  the read-only reconciliation procedure in
+  [`database/migrations/README.md`](../../database/migrations/README.md);
+  do not infer production state from local migration replay.
+- There is no tenant-authorized audit-log read API, member invitation UI, or
+  membership lifecycle editor. The app does not invent these operations.
+- Organization display-name/lifecycle editing and active-session revocation
+  are not exposed by the existing supported contracts.
+- Production availability, deployed assets/API compatibility, and deployed
+  authorization grants have not been verified. Do not treat the Business
+  Manager UI or branch-administration phase as production-ready.
+
 ## Membership and Branch Administration
 
 ### Status
@@ -36,7 +80,13 @@ remains a trusted, separate operation and is not exposed by these routes.
 - `npm run test -w @onecore/api -- tests/business-manager.test.ts` passes
   (5 tests); `npm run typecheck -w @onecore/api` and
   `npm run typecheck:test -w @onecore/api` pass. The Business app frontend
-  suite passes (15 tests).
+  suite passes (15 tests). The latest full `npm test` passes with 267 tests
+  passed and 3 skipped; full typecheck, lint, and production build also pass.
+- `npm run format:check` remains failing only for `apps/business/app.js`.
+  Running the same Prettier check against `HEAD:apps/business/app.js` also
+  fails; the formatter differences are pre-existing, not introduced by this
+  work. Other changed files pass a targeted Prettier check. The unrelated
+  baseline formatting was not rewritten.
 - PostgreSQL 18.6 accepted the full migration chain using
   `onecore_migrator` with `NOSUPERUSER NOBYPASSRLS`. The new assignment
   migration also succeeded as that role with existing Owner/Admin rows and
@@ -50,6 +100,15 @@ remains a trusted, separate operation and is not exposed by these routes.
   idempotency was tested against two tenants in PGlite and its tenant-scoped
   execution was tested in disposable PostgreSQL 18.6 after the assignment
   migration.
+- The disposable E2E database completed the ordered migrations as
+  `onecore_migrator` with `NOSUPERUSER NOBYPASSRLS`; its ledger contains the
+  three branch-related migrations and
+  `20261010140000_session_revoked_at_insert_grant`. Catalog checks confirmed
+  forced RLS and migration-role ownership for `roles`, `role_permissions`,
+  `branches`, `membership_branches`, and `sessions`, non-superuser/non-bypass
+  flags for app, worker, and migrator roles, and the narrow session insert
+  privileges. This is local disposable-database evidence, not deployment
+  evidence.
 - The deployment migration ledger remains unknown. The ordered migration
   runner cannot reach migration `20261010040000` if migration `20261010020000`
   is still unapplied and fails on existing roles; that predecessor must be
@@ -57,10 +116,49 @@ remains a trusted, separate operation and is not exposed by these routes.
   edit the historical migration or manually advance a ledger without that
   evidence.
 - Branch administration and membership assignment remain
-  `IMPLEMENTED — VERIFICATION PENDING` until the deployment migration history
-  is reconciled and a browser-level UI check is performed. Membership branch
-  assignment also has no Business app UI. No live production database was
-  accessed.
+  `IMPLEMENTED — VERIFICATION PENDING` because deployed migration history
+  remains unreconciled. The Playwright/Chromium journey passes via
+  `npm run test:e2e` against a disposable PostgreSQL 18.6 database, synthetic
+  identities, the real API, centralized authorization, and the static
+  Business app. It verifies invalid and valid login, organization selection,
+  profile/settings and customer/catalog create-update-deactivate persistence,
+  branch and member role/branch assignment/removal persistence after reload,
+  read-only mutation-action visibility and API denial, self-target denial,
+  cross-organization concealment, invalid/foreign-tenant branch denial, and
+  loading/empty/success UI states. It also verifies forced RLS, table
+  ownership, non-superuser/non-`BYPASSRLS` runtime and migrator roles, and
+  restricted session-column grants. No live production database or
+  deployment migration ledger was accessed.
+- The E2E journey creates synthetic users, roles, and permission grants after
+  replaying migrations so the API can be exercised. Those fixture grants do
+  not verify the migrations' Owner/Admin permission backfill; deployment
+  backfill status remains pending the authorized evidence below.
+- E2E uncovered the database-backed login rate limiter and failed-login
+  lockout paths passing JavaScript `Date` objects through raw SQL template
+  expressions; both now serialize timestamps explicitly, with persistence
+  regression coverage. It also exposed that Drizzle's session INSERT includes
+  generated `id` and default `revoked_at` columns, requiring a forward-only,
+  column-scoped grant. The migration and E2E role-privilege assertion preserve
+  table-level least privilege and forced RLS.
+- Full verification currently reports `npm test` with 267 passed and 3
+  skipped; `npm run typecheck`, `npm run lint`, `npm run build`,
+  `npm run test:e2e`, `node --check apps/business/app.js`, and
+  `node --check scripts/business-manager-e2e.mjs` pass. `git diff --check`
+  passes. `npm run format:check` still fails only on
+  `apps/business/app.js`, and the committed `HEAD` version fails the same
+  check. No production migration ledger was inspected; the migration owner
+  must still provide the read-only evidence described in
+  `database/migrations/README.md` before deployment migration recovery can be
+  considered verified.
+- The migration owner must provide the target environment's four relevant
+  Drizzle ledger rows and schema, per-tenant Owner/Admin presence/absence
+  evidence for all six branch permissions, and RLS/table-owner/runtime-role
+  privilege evidence, including session insert privileges, before choosing
+  the documented recovery route in `database/migrations/README.md`. Until
+  then, deployed migration state and recovery remain unverified.
+- **Production readiness:** Not established. Passing code checks and
+  disposable-database/browser verification do not substitute for authorized
+  deployment migration reconciliation and its security evidence.
 
 ## Sales/POS
 

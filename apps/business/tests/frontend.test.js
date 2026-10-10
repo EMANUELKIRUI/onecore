@@ -49,7 +49,9 @@ describe("authenticated business shell", () => {
       expect(application).toContain(path);
     }
     expect(application).not.toMatch(/localStorage|sessionStorage/);
-    expect(application).not.toMatch(/\/(pos|inventory|finance|payroll|crm)\b/i);
+    expect(application).not.toMatch(
+      /["'`]\/(?:pos|inventory|finance|payroll|crm)(?:\/|["'`?])/i,
+    );
   });
 
   it("keeps navigation subordinate to API authorization and sanitizes errors", () => {
@@ -82,8 +84,27 @@ describe("authenticated business shell", () => {
     expect(application).toContain("function loadMembersView");
     expect(application).toContain("members-nav");
     expect(application).toContain("function loadMemberRolePanel");
+    expect(application).toContain("function loadMemberBranchPanel");
     expect(application).toContain(
       "/members/${encodeURIComponent(member.id)}/roles",
+    );
+    expect(application).toContain(
+      "/members/${encodeURIComponent(member.id)}/branches",
+    );
+    expect(application).toContain("result.capabilities?.canAssign === true");
+    expect(application).toContain("result.capabilities?.canRemove === true");
+    expect(application).toContain("result.availableBranches");
+    expect(application).toContain('result.branchAccessMode === "ALL"');
+    expect(application).toContain(
+      'method: "POST", body: { branchIds: [select.value] }',
+    );
+    expect(application).toContain('memberText("member.branchUpdated")');
+    expect(application).toContain('memberText("member.branchesAccessDenied")');
+    expect(application).toContain('memberText("member.allModeReadOnly")');
+    expect(application).toContain("result.capabilities?.canRemove === true");
+    expect(application).toContain("result.capabilities?.canAssign === true");
+    expect(application).toContain(
+      "currentSession !== session || !panel.isConnected",
     );
     expect(application).toContain('method: "POST"');
     expect(application).toContain('method: "DELETE"');
@@ -93,7 +114,7 @@ describe("authenticated business shell", () => {
     expect(application).not.toContain("version.body");
     expect(application).not.toContain("secretReference");
     expect(application).not.toMatch(
-      /\/(pos|inventory|finance|payroll|crm|ai)\b/i,
+      /["'`]\/(?:pos|inventory|finance|payroll|crm|ai)(?:\/|["'`?])/i,
     );
   });
 
@@ -244,6 +265,10 @@ describe("Business Manager capability boundary", () => {
     expect(application).toContain("reloadBusinessManagerViewIfSelected();");
     expect(page).toContain('id="customers-nav"');
     expect(page).toContain('id="products-nav"');
+    expect(application).toContain("response.capabilities ?? {}");
+    expect(application).toContain("capabilities.canCreate === true");
+    expect(application).toContain("capabilities.canUpdate === true");
+    expect(application).toContain("capabilities.canDelete === true");
   });
 
   it("uses the existing configuration contract for supported profile mutations", () => {
@@ -283,6 +308,9 @@ describe("Business Manager capability boundary", () => {
       expect(application).toContain(`name: "${field}"`);
     }
     expect(application).toContain("Organization lifecycle status");
+    expect(application).toContain(
+      "result.permissions?.canUpdateSettings === true",
+    );
   });
 
   it("reuses server-verified branch context and registry entitlements", () => {
@@ -302,5 +330,35 @@ describe("Business Manager capability boundary", () => {
     expect(application).toContain("workflow activity");
     expect(application).toContain("requestError.status === 403");
     expect(application).toContain("error.status === 404");
+  });
+
+  it("exposes only an authenticated, catalog-backed POS draft workspace", () => {
+    expect(page).toContain('id="pos-nav"');
+    expect(page).toContain('href="#pos" data-view="pos"');
+    expect(application).toContain("function loadPosWorkspace");
+    expect(application).toContain(
+      "`/organizations/${encodeURIComponent(organizationId)}/business/catalog`",
+    );
+    expect(application).toContain('status: "ACTIVE"');
+    expect(application).toContain(
+      'searchInput.placeholder = "Name or SKU/reference"',
+    );
+    expect(application).toContain(
+      "authenticatedRequest(\n      `${posCatalogEndpoint(organizationId)}?${params}`",
+    );
+    expect(application).toContain("requestError.status === 403");
+    expect(application).toContain("currentSession !== session");
+    expect(application).toContain("resetPosWorkspaceState()");
+    expect(application).toContain("No sale or payment will be submitted.");
+    expect(application).toContain(
+      "Stock availability is not provided by this API.",
+    );
+    expect(application).not.toMatch(
+      /\/(sales|payments|transactions|receipts|inventory)\b/i,
+    );
+    expect(application).not.toMatch(/localStorage|sessionStorage/);
+    expect(styles).toContain(".oc-pos-layout");
+    expect(styles).toContain("@media (max-width: 720px)");
+    expect(styles).toContain(".oc-pos-cart");
   });
 });

@@ -29,10 +29,16 @@ migration. Owner application details are not returned by the business profile
 response. Organization name and lifecycle status remain read-only. Branch
 choices continue to come from the authenticated session and switching uses
 the existing session-bound branch API.
+The configuration read response advertises whether the current session has the
+settings update permission; read-only users retain profile visibility without
+seeing edit forms. The API continues to authorize every update independently.
 
 Customers and Products & Services use the tenant-authorized Business Manager
 domain and APIs. The UI reads server-paginated records and sends create,
 update, and deactivate operations to the organization-scoped endpoints.
+The list responses include advisory per-resource capabilities so read-only
+members do not see mutation controls; the API independently authorizes every
+request and checks data scope.
 Branch selection comes from the authenticated session; changing organization
 or branch clears and reloads the view. Workflow activity is available from the
 existing Phase 18 execution-history API; a tenant audit-log read API is not
@@ -51,8 +57,25 @@ data scopes, and database row-level security. See
 for resource fields, routes, lifecycle, and security boundaries.
 
 Business Manager owns product/service master data only. Inventory owns
-quantities, locations, and stock movements. The app does not implement POS,
-Inventory, Finance, Sales, or CRM transactions.
+quantities, locations, and stock movements. The app does not implement POS
+checkout, Inventory, Finance, Sales, or CRM transactions.
+
+## Point of sale — IMPLEMENTED — INCOMPLETE
+
+The authenticated Point of sale view is a catalog-backed workspace, not a
+sales transaction system. It reads active products and services from
+`GET /organizations/:organizationId/business/catalog` using the existing
+organization authorization, module entitlement, branch context, data-scope,
+and tenant RLS checks. Search is limited to the catalog API's supported item
+name and reference/SKU fields; barcode search and stock availability are not
+available.
+
+Users can prepare an in-memory draft cart with positive whole-number
+quantities and exact catalog-decimal line and subtotal estimates. The draft is
+not stored, does not reserve stock, does not apply tax or discounts, and is
+cleared when the organization or branch context changes. Checkout is
+intentionally unavailable: there are no supported sales, payment, transaction
+history, or receipt APIs. The UI does not create local or simulated sales.
 
 ## Existing workspace capabilities
 
@@ -86,7 +109,10 @@ Branches view: it lists paginated organization branches and offers create,
 update, and `ACTIVE`/`INACTIVE` actions only when the API returns the matching
 capabilities. The API independently enforces `core.organization.branch.read`,
 `.create`, and `.update`, organization context, audit behavior, and forced
-RLS. Membership-to-branch assignment is not exposed in this UI. Likewise,
+RLS. Each member row has a branch-access disclosure backed by the membership
+branch API. It displays explicit/effective access and offers assignment or
+removal only when its capability response permits it; `ALL`-mode access is
+read-only. The API remains authoritative for every mutation. Likewise,
 there is no tenant-authorized
 audit-log read API or active-session/device revocation API. These unavailable
 capabilities are identified in the UI rather than represented with fake data
@@ -99,9 +125,10 @@ data-scope enforcement. Message templates display status/version metadata but
 not template bodies. Communication delivery views omit message content,
 recipient details, credentials, and internal payloads.
 
-No POS, inventory, finance/accounting, HR/payroll, CRM, industry module, AI
-screen, or visual workflow designer is included. Workflow UI is limited to the
-Phase 18 execution history and safe action status supported by its API.
+No POS checkout, inventory, finance/accounting, HR/payroll, CRM, industry
+module, AI screen, or visual workflow designer is included. Workflow UI is
+limited to the Phase 18 execution history and safe action status supported by
+its API.
 
 The app uses native HTML, CSS, and ES modules; no framework, bundler, or
 compiled application artifact is required. Serve this directory and

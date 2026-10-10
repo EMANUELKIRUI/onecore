@@ -304,9 +304,11 @@ export function createIdentityRepository(
       correlationId,
     ) {
       const windowStart = new Date(now.getTime() - windowMs);
+      const windowStartIso = windowStart.toISOString();
+      const nowIso = now.toISOString();
       const shouldReset = sql`
         ${users.failedLoginWindowStartedAt} IS NULL
-        OR ${users.failedLoginWindowStartedAt} <= ${windowStart}
+        OR ${users.failedLoginWindowStartedAt} <= ${windowStartIso}::timestamptz
       `;
       const incremented = sql<number>`
         CASE WHEN ${shouldReset} THEN 1 ELSE ${users.failedLoginAttempts} + 1 END
@@ -320,7 +322,7 @@ export function createIdentityRepository(
             .set({
               failedLoginAttempts: incremented,
               failedLoginWindowStartedAt: sql`
-              CASE WHEN ${shouldReset} THEN ${now} ELSE ${users.failedLoginWindowStartedAt} END
+              CASE WHEN ${shouldReset} THEN ${nowIso}::timestamptz ELSE ${users.failedLoginWindowStartedAt} END
             `,
               status: sql`
               CASE WHEN ${incremented} >= ${threshold}
@@ -330,7 +332,7 @@ export function createIdentityRepository(
             `,
               lockedUntil: sql`
               CASE WHEN ${incremented} >= ${threshold}
-                THEN ${now} + (${lockMs} * interval '1 millisecond')
+                THEN ${nowIso}::timestamptz + (${lockMs} * interval '1 millisecond')
                 ELSE ${users.lockedUntil}
               END
             `,

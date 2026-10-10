@@ -80,6 +80,8 @@ export function createDatabaseRateLimiter(database: Database): RateLimiter {
   ): Promise<RateLimitDecision> {
     const keyHash = rateLimitKey(input, organizationId, branchId);
     const expiresAt = new Date(now.getTime() + input.windowMs);
+    const nowIso = now.toISOString();
+    const expiresAtIso = expiresAt.toISOString();
     const [bucket] = await transaction
       .insert(rateLimitBuckets)
       .values({
@@ -96,13 +98,13 @@ export function createDatabaseRateLimiter(database: Database): RateLimiter {
           organizationId,
           branchId,
           hitCount: sql`
-            CASE WHEN ${rateLimitBuckets.expiresAt} <= ${now}
+            CASE WHEN ${rateLimitBuckets.expiresAt} <= ${nowIso}::timestamptz
               THEN 1 ELSE ${rateLimitBuckets.hitCount} + 1
             END
           `,
           expiresAt: sql`
-            CASE WHEN ${rateLimitBuckets.expiresAt} <= ${now}
-              THEN ${expiresAt} ELSE ${rateLimitBuckets.expiresAt}
+            CASE WHEN ${rateLimitBuckets.expiresAt} <= ${nowIso}::timestamptz
+              THEN ${expiresAtIso}::timestamptz ELSE ${rateLimitBuckets.expiresAt}
             END
           `,
           updatedAt: now,
@@ -143,7 +145,7 @@ export function createDatabaseRateLimiter(database: Database): RateLimiter {
           SELECT "key_hash" FROM "rate_limit_buckets"
           WHERE "organization_id" IS NOT DISTINCT FROM ${organizationId}::uuid
             AND "branch_id" IS NOT DISTINCT FROM ${branchId}::uuid
-            AND "expires_at" <= ${now}
+            AND "expires_at" <= ${nowIso}::timestamptz
           ORDER BY "expires_at"
           LIMIT 1000
         )

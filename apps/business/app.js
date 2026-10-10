@@ -11,6 +11,14 @@ import {
   resolveLocale,
   translate,
 } from "../../packages/ui/src/localization.js";
+import {
+  addDraftCartItem,
+  catalogPriceToScaledAmount,
+  draftCartSubtotal,
+  formatScaledAmount,
+  removeDraftCartItem,
+  setDraftCartQuantity,
+} from "./pos.js";
 
 const apiBase =
   document
@@ -116,6 +124,24 @@ const memberMessages = {
     "member.added": "Added",
     "member.roles": "Roles",
     "member.manageRoles": "Manage roles",
+    "member.branchAccess": "Branch access",
+    "member.manageBranches": "Manage branch access",
+    "member.branchMode": "Access mode",
+    "member.allBranches": "All active branches",
+    "member.assignedBranches": "Assigned branches",
+    "member.noAssignedBranches": "No branches are explicitly assigned.",
+    "member.availableBranches": "Available active branches",
+    "member.noAvailableBranches":
+      "No additional active branches are available.",
+    "member.assignBranch": "Assign branch",
+    "member.removeBranch": "Remove assignment",
+    "member.confirmBranchRemoval": "Remove this branch assignment?",
+    "member.branchUpdated": "Branch assignments updated.",
+    "member.branchesLoading": "Loading branch assignments…",
+    "member.branchesAccessDenied":
+      "You are not authorized to view this member's branch assignments.",
+    "member.allModeReadOnly":
+      "This member has access to all active branches; explicit assignments cannot be changed.",
     "member.rolesLoading": "Loading roles…",
     "member.assignedRoles": "Assigned roles",
     "member.noAssignedRoles": "No roles are assigned.",
@@ -147,6 +173,23 @@ const memberMessages = {
     "member.added": "Aliongezwa",
     "member.roles": "Majukumu",
     "member.manageRoles": "Dhibiti majukumu",
+    "member.branchAccess": "Ufikiaji wa matawi",
+    "member.manageBranches": "Dhibiti ufikiaji wa matawi",
+    "member.branchMode": "Aina ya ufikiaji",
+    "member.allBranches": "Matawi yote yanayotumika",
+    "member.assignedBranches": "Matawi yaliyopangiwa",
+    "member.noAssignedBranches": "Hakuna matawi yaliyopangiwa moja kwa moja.",
+    "member.availableBranches": "Matawi yanayotumika",
+    "member.noAvailableBranches": "Hakuna matawi mengine yanayopatikana.",
+    "member.assignBranch": "Pangia tawi",
+    "member.removeBranch": "Ondoa upangaji",
+    "member.confirmBranchRemoval": "Ondoa upangaji huu wa tawi?",
+    "member.branchUpdated": "Upangaji wa matawi umesasishwa.",
+    "member.branchesLoading": "Inapakia upangaji wa matawi…",
+    "member.branchesAccessDenied":
+      "Huna ruhusa ya kuona upangaji wa matawi ya mwanachama huyu.",
+    "member.allModeReadOnly":
+      "Mwanachama huyu anaweza kufikia matawi yote yanayotumika; upangaji wa moja kwa moja hauwezi kubadilishwa.",
     "member.rolesLoading": "Inapakia majukumu…",
     "member.assignedRoles": "Majukumu yaliyopangiwa",
     "member.noAssignedRoles": "Hakuna majukumu yaliyopangiwa.",
@@ -216,6 +259,11 @@ let resourceLoadSequence = 0;
 let resourceNavigationSequence = 0;
 let businessResourceSequence = 0;
 let businessResourceContext = "";
+let posLoadSequence = 0;
+let posContext = "";
+let posSearch = "";
+let posOffset = 0;
+const posCart = new Map();
 let memberLoadSequence = 0;
 let memberOffset = 0;
 let memberContext = "";
@@ -299,6 +347,12 @@ const boundaryViews = {
     description:
       "Maintain reusable product and service master data for authorized organization branches.",
     eyebrow: "Business Manager catalog",
+  },
+  pos: {
+    title: "Point of sale",
+    description:
+      "Browse active catalog items and prepare a temporary draft. Checkout, stock, tax, and payment are not available.",
+    eyebrow: "Sales workspace",
   },
   members: {
     title: "Users & members",
@@ -413,6 +467,7 @@ function sessionExpired() {
   currentSession = undefined;
   businessResourceSequence += 1;
   businessResourceContext = "";
+  resetPosWorkspaceState();
   businessResourceOffsets.customers = 0;
   businessResourceOffsets.products = 0;
   businessResourceFilters.customers = {};
@@ -1101,7 +1156,16 @@ function renderResource(view, result, container) {
         "Organization lifecycle status and a separate display-name editor are not exposed by the current API.",
         "oc-help",
       );
-      renderBusinessProfileForm(container, result, organizationId);
+      if (result.permissions?.canUpdateSettings === true) {
+        renderBusinessProfileForm(container, result, organizationId);
+      } else {
+        appendText(
+          container,
+          "p",
+          "You can view this business profile but do not have permission to update it.",
+          "oc-help",
+        );
+      }
       return true;
     }
     appendText(container, "h2", "Regional preferences", "oc-section-title");
@@ -1119,7 +1183,16 @@ function renderResource(view, result, container) {
         value ? "Available" : "Not available",
       ]),
     );
-    renderRegionalSettingsForm(container, result, organizationId);
+    if (result.permissions?.canUpdateSettings === true) {
+      renderRegionalSettingsForm(container, result, organizationId);
+    } else {
+      appendText(
+        container,
+        "p",
+        "You can view organization settings but do not have permission to update them.",
+        "oc-help",
+      );
+    }
     return true;
   }
   if (view === "modules") {
@@ -1433,6 +1506,10 @@ function loadBoundaryView(view) {
   content.replaceChildren();
   if (view === "customers" || view === "products") {
     void loadBusinessManagerView(view);
+    return;
+  }
+  if (view === "pos") {
+    void loadPosWorkspace(content);
     return;
   }
   if (view === "branches") {
@@ -1836,6 +1913,7 @@ async function loadMembersView(content) {
       memberText("member.status"),
       memberText("member.added"),
       memberText("member.roles"),
+      memberText("member.branchAccess"),
     ]) {
       const header = appendText(headerRow, "th", label);
       header.scope = "col";
@@ -1876,7 +1954,39 @@ async function loadMembersView(content) {
         void loadMemberRolePanel(panel, organizationId, member, session);
       });
       rolesCell.append(disclosure);
-      row.append(rolesCell);
+      const branchesCell = document.createElement("td");
+      const branchDisclosure = document.createElement("details");
+      branchDisclosure.className = "oc-dropdown";
+      const branchSummary = appendText(
+        branchDisclosure,
+        "summary",
+        memberText("member.manageBranches"),
+      );
+      branchSummary.setAttribute(
+        "aria-label",
+        `${memberText("member.manageBranches")}: ${member.displayName}`,
+      );
+      const branchPanel = document.createElement("div");
+      branchPanel.className = "oc-stack";
+      branchPanel.setAttribute("aria-live", "polite");
+      branchDisclosure.append(branchPanel);
+      branchDisclosure.addEventListener("toggle", () => {
+        if (
+          !branchDisclosure.open ||
+          branchDisclosure.dataset.loaded === "true"
+        ) {
+          return;
+        }
+        branchDisclosure.dataset.loaded = "true";
+        void loadMemberBranchPanel(
+          branchPanel,
+          organizationId,
+          member,
+          session,
+        );
+      });
+      branchesCell.append(branchDisclosure);
+      row.append(rolesCell, branchesCell);
       body.append(row);
     }
     table.append(head, body);
@@ -1969,36 +2079,38 @@ async function loadMemberRolePanel(
             ? role.name
             : `${role.name} (${memberText("member.inactiveRole")})`;
         appendText(item, "span", status);
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "oc-button oc-button--secondary";
-        remove.textContent = memberText("member.removeRole");
-        remove.addEventListener("click", async () => {
-          if (!window.confirm(memberText("member.confirmRoleRemoval"))) return;
-          remove.disabled = true;
-          try {
-            await authenticatedRequest(
-              `/auth/membership/roles/${encodeURIComponent(member.id)}/${encodeURIComponent(role.id)}`,
-              { method: "DELETE" },
-            );
-            await loadMemberRolePanel(
-              panel,
-              organizationId,
-              member,
-              session,
-              memberText("member.roleUpdated"),
-            );
-          } catch (requestError) {
-            remove.disabled = false;
-            appendText(
-              panel,
-              "p",
-              errorMessage(requestError),
-              "oc-alert oc-alert--error",
-            );
-          }
-        });
-        item.append(remove);
+        if (result.capabilities?.canRemove === true) {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "oc-button oc-button--secondary";
+          remove.textContent = memberText("member.removeRole");
+          remove.addEventListener("click", async () => {
+            if (!window.confirm(memberText("member.confirmRoleRemoval"))) return;
+            remove.disabled = true;
+            try {
+              await authenticatedRequest(
+                `/auth/membership/roles/${encodeURIComponent(member.id)}/${encodeURIComponent(role.id)}`,
+                { method: "DELETE" },
+              );
+              await loadMemberRolePanel(
+                panel,
+                organizationId,
+                member,
+                session,
+                memberText("member.roleUpdated"),
+              );
+            } catch (requestError) {
+              remove.disabled = false;
+              appendText(
+                panel,
+                "p",
+                errorMessage(requestError),
+                "oc-alert oc-alert--error",
+              );
+            }
+          });
+          item.append(remove);
+        }
         panel.append(item);
       }
     }
@@ -2008,7 +2120,7 @@ async function loadMemberRolePanel(
           (role) => !assignedRoles.some((assigned) => assigned.id === role.id),
         )
       : [];
-    if (member.status === "ACTIVE") {
+    if (member.status === "ACTIVE" && result.capabilities?.canAssign === true) {
       appendText(panel, "h3", memberText("member.availableRoles"));
       if (availableRoles.length === 0) {
         appendText(
@@ -2085,6 +2197,208 @@ async function loadMemberRolePanel(
   }
 }
 
+async function loadMemberBranchPanel(
+  panel,
+  organizationId,
+  member,
+  session,
+  statusMessage,
+) {
+  panel.replaceChildren();
+  const loading = appendText(
+    panel,
+    "p",
+    memberText("member.branchesLoading"),
+    "oc-state oc-state--loading",
+  );
+  loading.setAttribute("role", "status");
+  try {
+    const result = await authenticatedRequest(
+      `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(member.id)}/branches`,
+    );
+    if (currentSession !== session || !panel.isConnected) return;
+    panel.replaceChildren();
+    if (statusMessage) {
+      const status = appendText(panel, "p", statusMessage, "oc-muted");
+      status.setAttribute("role", "status");
+    }
+    appendText(
+      panel,
+      "p",
+      `${memberText("member.branchMode")}: ${result.branchAccessMode}`,
+      "oc-muted",
+    );
+    if (result.branchAccessMode === "ALL") {
+      const allBranches = Array.isArray(result.effectiveAccess?.branches)
+        ? result.effectiveAccess.branches
+        : [];
+      if (allBranches.length === 0) {
+        appendText(panel, "p", memberText("branch.empty"), "oc-muted");
+      } else {
+        appendText(panel, "h4", memberText("member.allBranches"));
+        renderSimpleTable(
+          panel,
+          [memberText("member.name"), memberText("member.status")],
+          allBranches.map((branch) => [branch.name, branch.status]),
+        );
+      }
+      appendText(panel, "p", memberText("member.allModeReadOnly"), "oc-help");
+      return;
+    }
+
+    const assignments = Array.isArray(result.explicitAssignments)
+      ? result.explicitAssignments
+      : [];
+    appendText(panel, "h4", memberText("member.assignedBranches"));
+    if (assignments.length === 0) {
+      appendText(
+        panel,
+        "p",
+        memberText("member.noAssignedBranches"),
+        "oc-muted",
+      );
+    } else {
+      for (const branch of assignments) {
+        const item = document.createElement("div");
+        item.className = "oc-pagination__controls";
+        const branchStatus =
+          branch.status === "ACTIVE"
+            ? branch.name
+            : `${branch.name} (${branchText("branch.status.inactive")})`;
+        appendText(item, "span", branchStatus);
+        if (
+          result.capabilities?.canRemove === true &&
+          member.status === "ACTIVE"
+        ) {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "oc-button oc-button--secondary";
+          remove.textContent = memberText("member.removeBranch");
+          remove.addEventListener("click", async () => {
+            if (!window.confirm(memberText("member.confirmBranchRemoval")))
+              return;
+            remove.disabled = true;
+            try {
+              await authenticatedRequest(
+                `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(member.id)}/branches/${encodeURIComponent(branch.id)}`,
+                { method: "DELETE" },
+              );
+              await loadMemberBranchPanel(
+                panel,
+                organizationId,
+                member,
+                session,
+                memberText("member.branchUpdated"),
+              );
+            } catch (requestError) {
+              remove.disabled = false;
+              appendText(
+                panel,
+                "p",
+                errorMessage(requestError),
+                "oc-alert oc-alert--error",
+              );
+            }
+          });
+          item.append(remove);
+        }
+        panel.append(item);
+      }
+    }
+
+    if (member.status !== "ACTIVE") return;
+    const activeBranches = Array.isArray(result.availableBranches)
+      ? result.availableBranches
+      : [];
+    const assignedIds = new Set(assignments.map((branch) => branch.id));
+    const candidates = activeBranches.filter(
+      (branch) => !assignedIds.has(branch.id),
+    );
+    if (result.capabilities?.canAssign !== true || candidates.length === 0) {
+      if (result.capabilities?.canAssign === true) {
+        appendText(
+          panel,
+          "p",
+          memberText("member.noAvailableBranches"),
+          "oc-muted",
+        );
+      }
+      return;
+    }
+    appendText(panel, "h4", memberText("member.availableBranches"));
+    const form = document.createElement("form");
+    form.className = "oc-stack";
+    const field = document.createElement("div");
+    field.className = "oc-field";
+    const label = document.createElement("label");
+    label.htmlFor = `member-${member.id}-branch-assignment`;
+    label.textContent = memberText("member.availableBranches");
+    const select = document.createElement("select");
+    select.id = label.htmlFor;
+    select.className = "oc-input";
+    select.required = true;
+    for (const branch of candidates) {
+      const option = document.createElement("option");
+      option.value = branch.id;
+      option.textContent = `${branch.name} (${branch.code})`;
+      select.append(option);
+    }
+    field.append(label, select);
+    const assign = document.createElement("button");
+    assign.type = "submit";
+    assign.className = "oc-button oc-button--secondary";
+    assign.textContent = memberText("member.assignBranch");
+    form.append(field, assign);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!select.value) return;
+      assign.disabled = true;
+      try {
+        await authenticatedRequest(
+          `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(member.id)}/branches`,
+          { method: "POST", body: { branchIds: [select.value] } },
+        );
+        await loadMemberBranchPanel(
+          panel,
+          organizationId,
+          member,
+          session,
+          memberText("member.branchUpdated"),
+        );
+      } catch (requestError) {
+        assign.disabled = false;
+        appendText(
+          panel,
+          "p",
+          errorMessage(requestError),
+          "oc-alert oc-alert--error",
+        );
+      }
+    });
+    panel.append(form);
+  } catch (requestError) {
+    if (currentSession !== session || !panel.isConnected) return;
+    panel.replaceChildren();
+    const error = appendText(
+      panel,
+      "p",
+      requestError instanceof ApiError && requestError.status === 403
+        ? memberText("member.branchesAccessDenied")
+        : errorMessage(requestError),
+      "oc-alert oc-alert--error",
+    );
+    error.setAttribute("role", "alert");
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "oc-button oc-button--secondary";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", () => {
+      void loadMemberBranchPanel(panel, organizationId, member, session);
+    });
+    panel.append(retry);
+  }
+}
+
 function businessResourceEndpoint(view) {
   const resource = view === "customers" ? "customers" : "catalog";
   const organizationId = currentSession?.organization?.organizationId;
@@ -2095,6 +2409,7 @@ function businessResourceEndpoint(view) {
 function clearBusinessManagerContext() {
   businessResourceSequence += 1;
   globalSearchSequence += 1;
+  resetPosWorkspaceState();
   if (globalSearchDialog.open) globalSearchDialog.close();
   businessResourceContext = "";
   businessResourceOffsets.customers = 0;
@@ -2103,7 +2418,7 @@ function clearBusinessManagerContext() {
   businessResourceFilters.products = {};
   const content = document.querySelector("#boundary-content");
   content.replaceChildren();
-  if (["customers", "products"].includes(location.hash.slice(1))) {
+  if (["customers", "products", "pos"].includes(location.hash.slice(1))) {
     appendText(
       content,
       "p",
@@ -2117,6 +2432,8 @@ function reloadBusinessManagerViewIfSelected() {
   const view = location.hash.slice(1);
   if (view === "customers" || view === "products") {
     void loadBusinessManagerView(view);
+  } else if (view === "pos") {
+    void loadPosWorkspace(document.querySelector("#boundary-content"));
   }
 }
 
@@ -2127,6 +2444,391 @@ function businessBranchLabel(branchId) {
       (branch) => branch.branchId === branchId,
     )?.name ?? "Authorized branch"
   );
+}
+
+function resetPosWorkspaceState() {
+  posLoadSequence += 1;
+  posContext = "";
+  posSearch = "";
+  posOffset = 0;
+  posCart.clear();
+}
+
+function posCatalogEndpoint(organizationId) {
+  return `/organizations/${encodeURIComponent(organizationId)}/business/catalog`;
+}
+
+function posCatalogItemIsValid(item) {
+  if (
+    !item ||
+    typeof item.id !== "string" ||
+    typeof item.name !== "string" ||
+    typeof item.unit !== "string" ||
+    typeof item.currency !== "string" ||
+    !/^[A-Z]{3}$/.test(item.currency) ||
+    (item.type !== "PRODUCT" && item.type !== "SERVICE") ||
+    item.status !== "ACTIVE" ||
+    (item.reference !== null && typeof item.reference !== "string") ||
+    typeof item.price !== "string"
+  ) {
+    return false;
+  }
+  catalogPriceToScaledAmount(item.price);
+  return true;
+}
+
+function renderPosCart(container) {
+  container.replaceChildren();
+  appendText(container, "h2", "Draft cart", "oc-section-title");
+  appendText(
+    container,
+    "p",
+    "Temporary in-memory draft only. It does not reserve stock or create a sale.",
+    "oc-help",
+  );
+  if (posCart.size === 0) {
+    appendText(container, "p", "No items in your draft cart yet.", "oc-muted");
+  } else {
+    const list = document.createElement("div");
+    list.className = "oc-stack";
+    for (const item of posCart.values()) {
+      const row = document.createElement("article");
+      row.className = "oc-pos-cart-item";
+      const heading = document.createElement("div");
+      heading.className = "oc-cluster";
+      appendText(heading, "strong", item.name);
+      appendText(
+        heading,
+        "span",
+        `${item.price} ${item.currency} / ${item.unit}`,
+        "oc-muted",
+      );
+      row.append(heading);
+
+      const controls = document.createElement("div");
+      controls.className = "oc-pos-cart-controls";
+      const field = document.createElement("div");
+      field.className = "oc-field";
+      const quantityId = `pos-quantity-${list.childElementCount}`;
+      const label = document.createElement("label");
+      label.htmlFor = quantityId;
+      label.textContent = "Quantity";
+      const quantity = document.createElement("input");
+      quantity.id = quantityId;
+      quantity.className = "oc-input";
+      quantity.type = "number";
+      quantity.min = "1";
+      quantity.max = String(Number.MAX_SAFE_INTEGER);
+      quantity.step = "1";
+      quantity.required = true;
+      quantity.value = String(item.quantity);
+      quantity.inputMode = "numeric";
+      quantity.addEventListener("change", () => {
+        if (setDraftCartQuantity(posCart, item.id, quantity.value)) {
+          renderPosCart(container);
+        } else {
+          quantity.value = String(item.quantity);
+          announce("Enter a whole-number quantity greater than zero.", "error");
+        }
+      });
+      field.append(label, quantity);
+      const lineAmount =
+        catalogPriceToScaledAmount(item.price) * BigInt(item.quantity);
+      appendText(
+        controls,
+        "span",
+        `Line estimate: ${formatScaledAmount(lineAmount)} ${item.currency}`,
+        "oc-muted",
+      );
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "oc-button oc-button--secondary";
+      remove.textContent = "Remove";
+      remove.setAttribute("aria-label", `Remove ${item.name} from draft`);
+      remove.addEventListener("click", () => {
+        removeDraftCartItem(posCart, item.id);
+        renderPosCart(container);
+      });
+      controls.prepend(field);
+      controls.append(remove);
+      row.append(controls);
+      list.append(row);
+    }
+    container.append(list);
+
+    const subtotal = draftCartSubtotal(posCart);
+    if (subtotal) {
+      appendText(
+        container,
+        "p",
+        `Catalog subtotal estimate: ${formatScaledAmount(subtotal.amount)} ${subtotal.currency}`,
+        "oc-pos-subtotal",
+      );
+    }
+  }
+  appendText(
+    container,
+    "p",
+    "Estimate only: no tax or discounts are calculated. The server must determine any future sale total.",
+    "oc-help",
+  );
+  appendText(
+    container,
+    "div",
+    "Checkout is unavailable because no sales or payment API is currently supported. No sale or payment will be submitted.",
+    "oc-alert",
+  ).setAttribute("role", "status");
+  if (posCart.size > 0) {
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "oc-button oc-button--quiet";
+    clear.textContent = "Clear draft";
+    clear.addEventListener("click", () => {
+      posCart.clear();
+      renderPosCart(container);
+    });
+    container.append(clear);
+  }
+}
+
+function renderPosWorkspace(container, response, session, search, offset) {
+  if (
+    !Array.isArray(response.items) ||
+    !Number.isSafeInteger(response.total) ||
+    response.total < 0 ||
+    !response.items.every(posCatalogItemIsValid)
+  ) {
+    throw new TypeError("The catalog response is not valid for POS display.");
+  }
+
+  const selectedBranch = session.availableBranches.find(
+    (branch) => branch.branchId === session.branch?.branchId,
+  );
+  const workspace = document.createElement("div");
+  workspace.className = "oc-pos-layout";
+  const catalog = document.createElement("section");
+  catalog.className = "oc-card oc-stack";
+  catalog.setAttribute("aria-label", "Active catalog items");
+  const context = appendText(
+    catalog,
+    "p",
+    `Selling context: ${session.organization.name} · ${selectedBranch?.name ?? "Organization-wide access"}`,
+    "oc-pos-context",
+  );
+  context.setAttribute("aria-label", "Selected organization and branch");
+
+  const searchForm = document.createElement("form");
+  searchForm.className = "oc-pos-search";
+  const searchField = document.createElement("div");
+  searchField.className = "oc-field";
+  const searchLabel = document.createElement("label");
+  searchLabel.htmlFor = "pos-catalog-search";
+  searchLabel.textContent = "Search catalog";
+  const searchInput = document.createElement("input");
+  searchInput.id = "pos-catalog-search";
+  searchInput.className = "oc-input";
+  searchInput.type = "search";
+  searchInput.name = "search";
+  searchInput.maxLength = 100;
+  searchInput.autocomplete = "off";
+  searchInput.placeholder = "Name or SKU/reference";
+  searchInput.value = search;
+  searchField.append(searchLabel, searchInput);
+  const searchButton = document.createElement("button");
+  searchButton.type = "submit";
+  searchButton.className = "oc-button";
+  searchButton.textContent = "Search";
+  searchForm.append(searchField, searchButton);
+  searchForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!searchForm.reportValidity()) return;
+    void loadPosWorkspace(container, {
+      search: searchInput.value.trim(),
+      offset: 0,
+    });
+  });
+  catalog.append(searchForm);
+
+  appendText(
+    catalog,
+    "p",
+    "Prices below are active catalog values. Stock availability is not provided by this API.",
+    "oc-help",
+  );
+  const products = document.createElement("div");
+  products.className = "oc-pos-products";
+  if (response.items.length === 0) {
+    appendText(
+      products,
+      "p",
+      search
+        ? "No active catalog items match this search."
+        : "No active catalog items are available.",
+      "oc-state oc-state--empty",
+    );
+  } else {
+    for (const item of response.items) {
+      const card = document.createElement("article");
+      card.className = "oc-pos-product";
+      const heading = document.createElement("div");
+      heading.className = "oc-cluster";
+      appendText(heading, "h3", item.name, "oc-section-title");
+      heading.append(createStatusBadge(item.type, "neutral"));
+      card.append(heading);
+      if (item.reference) {
+        appendText(card, "p", `SKU/reference: ${item.reference}`, "oc-muted");
+      }
+      appendText(
+        card,
+        "p",
+        `${item.price} ${item.currency} / ${item.unit}`,
+        "oc-pos-price",
+      );
+      const cartCurrency = posCart.values().next().value?.currency;
+      const currencyMismatch =
+        Boolean(cartCurrency) && cartCurrency !== item.currency;
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "oc-button oc-button--secondary";
+      add.textContent = "Add to draft";
+      add.disabled = currencyMismatch;
+      if (currencyMismatch) {
+        appendText(
+          card,
+          "p",
+          `Clear the ${cartCurrency} draft before adding ${item.currency} items.`,
+          "oc-help",
+        );
+      }
+      add.addEventListener("click", () => {
+        if (!addDraftCartItem(posCart, item)) {
+          announce(
+            "This draft uses another currency. Clear it before adding this item.",
+            "error",
+          );
+          return;
+        }
+        renderPosCart(cartPanel);
+        announce(`${item.name} added to the draft cart. No sale was created.`);
+      });
+      card.append(add);
+      products.append(card);
+    }
+  }
+  catalog.append(products);
+
+  if (response.total > 24) {
+    const pagination = document.createElement("nav");
+    pagination.className = "oc-pagination";
+    pagination.setAttribute("aria-label", "POS catalog pages");
+    const summary = appendText(
+      pagination,
+      "span",
+      `Showing ${offset + 1}–${offset + response.items.length} of ${response.total}`,
+      "oc-muted",
+    );
+    summary.setAttribute("aria-live", "polite");
+    const controls = document.createElement("div");
+    controls.className = "oc-pagination__controls";
+    const previous = document.createElement("button");
+    previous.type = "button";
+    previous.className = "oc-button oc-button--secondary";
+    previous.textContent = "Previous";
+    previous.disabled = offset === 0;
+    previous.addEventListener("click", () => {
+      void loadPosWorkspace(container, {
+        search,
+        offset: Math.max(0, offset - 24),
+      });
+    });
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "oc-button oc-button--secondary";
+    next.textContent = "Next";
+    next.disabled = offset + response.items.length >= response.total;
+    next.addEventListener("click", () => {
+      void loadPosWorkspace(container, { search, offset: offset + 24 });
+    });
+    controls.append(previous, next);
+    pagination.append(controls);
+    catalog.append(pagination);
+  }
+
+  const cartPanel = document.createElement("aside");
+  cartPanel.className = "oc-card oc-stack oc-pos-cart";
+  cartPanel.setAttribute("aria-label", "Draft cart");
+  workspace.append(catalog, cartPanel);
+  container.replaceChildren(workspace);
+  renderPosCart(cartPanel);
+}
+
+async function loadPosWorkspace(
+  container,
+  { search = posSearch, offset = posOffset } = {},
+) {
+  const session = currentSession;
+  const organizationId = session?.organization?.organizationId;
+  const context = `${organizationId ?? ""}:${session?.branch?.branchId ?? ""}`;
+  if (context !== posContext) {
+    posCart.clear();
+    posContext = context;
+    posSearch = "";
+    posOffset = 0;
+    search = "";
+    offset = 0;
+  }
+  posSearch = search;
+  posOffset = offset;
+  const sequence = ++posLoadSequence;
+  container.replaceChildren();
+  if (!organizationId) {
+    appendText(
+      container,
+      "p",
+      "Select an organization to browse its active catalog.",
+      "oc-state oc-state--empty",
+    );
+    return;
+  }
+  appendText(
+    container,
+    "p",
+    "Loading active catalog items…",
+    "oc-state oc-state--loading",
+  ).setAttribute("role", "status");
+  const params = new globalThis.URLSearchParams({
+    status: "ACTIVE",
+    limit: "24",
+    offset: String(offset),
+  });
+  if (search) params.set("search", search);
+  try {
+    const response = await authenticatedRequest(
+      `${posCatalogEndpoint(organizationId)}?${params}`,
+    );
+    if (sequence !== posLoadSequence || currentSession !== session) return;
+    renderPosWorkspace(container, response, session, search, offset);
+  } catch (requestError) {
+    if (sequence !== posLoadSequence || currentSession !== session) return;
+    container.replaceChildren();
+    const error = appendText(
+      container,
+      "p",
+      requestError instanceof ApiError && requestError.status === 403
+        ? "You are not authorized to browse the catalog for this organization and branch."
+        : errorMessage(requestError),
+      "oc-alert oc-alert--error",
+    );
+    error.setAttribute("role", "alert");
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "oc-button oc-button--secondary";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", () => {
+      void loadPosWorkspace(container, { search, offset });
+    });
+    container.append(retry);
+  }
 }
 
 function businessField(
@@ -2181,7 +2883,7 @@ function businessField(
   return input;
 }
 
-function renderBusinessTable(view, items, container, handlers) {
+function renderBusinessTable(view, items, container, handlers, capabilities) {
   const wrapper = document.createElement("div");
   wrapper.className = "oc-table-wrap";
   const table = document.createElement("table");
@@ -2264,15 +2966,18 @@ function renderBusinessTable(view, items, container, handlers) {
     viewButton.textContent = "View";
     viewButton.setAttribute("aria-label", `View ${item.name}`);
     viewButton.addEventListener("click", () => void handlers.view(item.id));
-    const editButton = document.createElement("button");
-    editButton.className = "oc-button oc-button--quiet";
-    editButton.type = "button";
-    editButton.textContent = "Edit";
-    editButton.setAttribute("aria-label", `Edit ${item.name}`);
-    editButton.addEventListener("click", () => void handlers.edit(item.id));
-    const deleteButton = document.createElement("button");
-    actions.append(viewButton, editButton);
-    if (item.status === "ACTIVE") {
+    actions.append(viewButton);
+    if (capabilities.canUpdate === true) {
+      const editButton = document.createElement("button");
+      editButton.className = "oc-button oc-button--quiet";
+      editButton.type = "button";
+      editButton.textContent = "Edit";
+      editButton.setAttribute("aria-label", `Edit ${item.name}`);
+      editButton.addEventListener("click", () => void handlers.edit(item.id));
+      actions.append(editButton);
+    }
+    if (capabilities.canDelete === true && item.status === "ACTIVE") {
+      const deleteButton = document.createElement("button");
       deleteButton.className = "oc-button oc-button--quiet";
       deleteButton.type = "button";
       deleteButton.textContent = "Deactivate";
@@ -2707,19 +3412,6 @@ async function loadBusinessManagerView(view, options = {}) {
     }
   }
 
-  const heading = document.createElement("div");
-  heading.className = "oc-main-header";
-  const createButton = document.createElement("button");
-  createButton.className = "oc-button";
-  createButton.type = "button";
-  createButton.textContent =
-    view === "customers" ? "Create customer" : "Create catalog item";
-  createButton.addEventListener(
-    "click",
-    () => void loadBusinessManagerView(view, { mode: "create" }),
-  );
-  heading.append(createButton);
-  content.append(heading);
   renderBusinessFilters(view, content, filterState, (filters) => {
     businessResourceOffsets[view] = 0;
     businessResourceFilters[view] = filters;
@@ -2747,6 +3439,22 @@ async function loadBusinessManagerView(view, options = {}) {
     if (sequence !== businessResourceSequence || currentSession !== session)
       return;
     loading.remove();
+    const capabilities = response.capabilities ?? {};
+    if (capabilities.canCreate === true) {
+      const heading = document.createElement("div");
+      heading.className = "oc-main-header";
+      const createButton = document.createElement("button");
+      createButton.className = "oc-button";
+      createButton.type = "button";
+      createButton.textContent =
+        view === "customers" ? "Create customer" : "Create catalog item";
+      createButton.addEventListener(
+        "click",
+        () => void loadBusinessManagerView(view, { mode: "create" }),
+      );
+      heading.append(createButton);
+      content.prepend(heading);
+    }
     if (!response.items?.length) {
       appendText(
         content,
@@ -2796,7 +3504,7 @@ async function loadBusinessManagerView(view, options = {}) {
             button.disabled = false;
           }
         },
-      });
+      }, capabilities);
     }
     const pagination = document.createElement("nav");
     pagination.className = "oc-pagination";
@@ -3092,6 +3800,11 @@ async function updateResourceNavigation(session) {
       "products-nav",
       organizationId &&
         `/organizations/${encodeURIComponent(organizationId)}/business/catalog?limit=1`,
+    ],
+    [
+      "pos-nav",
+      organizationId &&
+        `/organizations/${encodeURIComponent(organizationId)}/business/catalog?status=ACTIVE&limit=1`,
     ],
     [
       "notifications-nav",

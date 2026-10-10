@@ -354,9 +354,26 @@ export function registerMemberRoutes(
               membershipId: membership.id,
               branchAccessMode: membership.branchAccessMode,
               explicitAssignments,
+              availableBranches: activeBranches,
               effectiveAccess: {
                 mode: membership.branchAccessMode,
                 branches: effectiveBranches,
+              },
+              capabilities: {
+                canAssign:
+                  hasOrganizationPermission(
+                    context,
+                    membershipBranchAssignPermission,
+                  ) &&
+                  context.membershipId !== membership.id &&
+                  membership.branchAccessMode === "ASSIGNED",
+                canRemove:
+                  hasOrganizationPermission(
+                    context,
+                    membershipBranchRemovePermission,
+                  ) &&
+                  context.membershipId !== membership.id &&
+                  membership.branchAccessMode === "ASSIGNED",
               },
             },
           };
@@ -747,6 +764,18 @@ export function registerMemberRoutes(
               membershipId: membership.id,
               assignedRoles,
               availableRoles,
+              capabilities: {
+                canAssign:
+                  hasOrganizationPermission(
+                    context,
+                    "core.rbac.membership_role.assign",
+                  ) && context.membershipId !== membership.id,
+                canRemove:
+                  hasOrganizationPermission(
+                    context,
+                    "core.rbac.membership_role.remove",
+                  ) && context.membershipId !== membership.id,
+              },
             },
           };
         },

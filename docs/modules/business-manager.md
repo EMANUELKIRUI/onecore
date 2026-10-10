@@ -33,7 +33,10 @@ It is not POS, Sales, Inventory, Finance, or CRM.
   returning owner details. The server binds organization context.
 - **UI:** Displays profile/business/regional fields and updates legal
   identity, contact/address, country, currency, locale, and time zone.
-  Lifecycle/name mutation and arbitrary JSON rendering are not supported.
+  The configuration response advertises `permissions.canUpdateSettings` for
+  form visibility; PATCH authorization remains server-enforced. Read-only
+  users can view the profile without edit forms. Lifecycle/name mutation and
+  arbitrary JSON rendering are not supported.
 
 ### Branch administration — IMPLEMENTED — VERIFICATION PENDING
 
@@ -48,16 +51,37 @@ It is not POS, Sales, Inventory, Finance, or CRM.
   and explicit mutations against `ALL` memberships.
 - **UI:** The existing Business app provides paginated branch administration,
   create/update forms, active/inactive status changes, and permission-aware
-  navigation. Membership branch assignment has no UI.
+  navigation. Each member row exposes branch access details; authorized
+  operators can add/remove assignments for active `ASSIGNED` memberships.
+  `ALL` access is displayed read-only. UI capability flags are informative
+  only; mutation APIs enforce permissions and lifecycle constraints.
 - **Verification:** API tests cover route authorization, denial auditing,
   branch-code validation, assignment idempotency, tenant/lifecycle checks,
-  and RLS. The assignment and repair migrations succeed as non-bypass
-  `onecore_migrator` on PostgreSQL 18.6 with existing Owner/Admin fixtures.
-  Replay of the earlier branch-admin permission backfill with existing roles
-  fails the forced-RLS check, and the ordered migration runner cannot reach
-  the later repair while that predecessor remains unapplied. The deployment
-  migration history must be reconciled, and membership assignment has no UI;
-  the feature is not complete.
+  and RLS. `npm test` passes with 267 tests passed and 3 skipped;
+  `npm run typecheck`, `npm run lint`, and `npm run build` pass.
+  `npm run format:check` still reports only `apps/business/app.js`; checking
+  the committed version of that file also fails, so this is existing
+  formatting drift rather than a regression from the branch-assignment work.
+- **Browser verification:** `npm run test:e2e` passes against a disposable
+  PostgreSQL 18.6 database with synthetic identities and organizations. The
+  Playwright/Chromium journey uses the real API, centralized authorization,
+  and persistence path; it verifies invalid login (`401`), authorized sign-in
+  and organization selection, profile update persistence, branch creation
+  persistence, branch assignment and removal persistence, read-only mutation
+  denial, self-target denial, cross-organization concealment, invalid and
+  foreign-tenant branch denial, and loading/empty/success UI states. Disposable
+  database assertions confirm all four relevant repository migrations were
+  recorded, forced RLS, migrator ownership, non-superuser/non-`BYPASSRLS` app,
+  worker, and migrator roles, and restricted session-column insert
+  privileges. No production credentials or data are used.
+- **Migration status:** Disposable migration replay and permission backfill
+  evidence does not establish the state of a deployed database. The
+  deployment migration history remains unreconciled pending authorized,
+  read-only evidence from its migration owner. Do not edit historical
+  migrations, manually advance a ledger, or claim deployment recovery is
+  complete. The repository-wide formatting check still fails on the same
+  pre-existing `apps/business/app.js` drift present at `HEAD`. Phase 9
+  therefore remains `IMPLEMENTED — VERIFICATION PENDING`.
 
 ### Customers — IMPLEMENTED
 
@@ -91,7 +115,10 @@ It is not POS, Sales, Inventory, Finance, or CRM.
   workflow-trigger allowlist.
 - **UI:** API-backed search/filter, pagination, detail, create, edit, and
   confirmation-based deactivate flows. API authorization, validation, conflict
-  and transient failures remain visible; no browser-stored business records.
+  and transient failures remain visible; create/update/deactivate controls
+  follow the list API's advisory capability flags. Mutation routes still
+  enforce the permissions and effective data scopes independently; no
+  browser-stored business records.
 
 ### Products & services — IMPLEMENTED
 
@@ -115,7 +142,9 @@ It is not POS, Sales, Inventory, Finance, or CRM.
   `CATALOG_ITEM_UPDATED`, or `CATALOG_ITEM_DELETED` outbox events; these are
   not workflow triggers.
 - **UI:** API-backed search, type/status and authorized branch filters,
-  pagination, detail, create/edit, and confirmed deactivation.
+  pagination, detail, create/edit, and confirmed deactivation. Mutation
+  controls follow the API's advisory capabilities and remain subject to
+  server-side permission and data-scope checks.
 
 > Business Manager owns product/service master data. Inventory owns quantities
 > and stock movements.
@@ -166,6 +195,47 @@ These future modules and transaction flows are not implemented here.
   audit records. Opaque address/tax JSON has no stable nested UI contract.
 - **UI:** Supported scalar fields only; unknown JSON fields and secrets are
   not displayed.
+
+## Frontend verification and remaining scope
+
+The Business app combines the Dashboard/overview, Business profile,
+organization settings, Customers, Products & services, Branches, and Users &
+members screens with the existing authenticated session and selected
+organization/branch context. Its member directory supports the documented
+role and branch assignment operations; it does not create invitations or
+change membership lifecycle. The audit-log screen explicitly reports that no
+tenant-authorized audit read API exists. Dashboard counts and summaries come
+from session, entitlement, notification, and workflow APIs; they are not
+sales, inventory, or uptime metrics.
+
+### Existing screen inventory
+
+| Screen                                    | API-backed behavior                                                                                                                            | Remaining product/API boundary                                                                                      |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Overview                                  | Authenticated session, installed modules and organization entitlements, notification previews, and workflow-execution previews.                | No sales, stock, finance, or health metrics are inferred or fabricated.                                             |
+| Business profile                          | Reads `/organizations/:organizationId/configuration`; updates supported contact, address, legal identity, and regional fields through `PATCH`. | Read-only users see fields without edit forms. Organization rename/lifecycle editing is unsupported.                |
+| Organization settings                     | Reads and updates supported country, currency, time zone, locale, and scalar business settings through the configuration API.                  | UI visibility is advisory; PATCH enforces permission. Opaque JSON, secrets, and unsupported fields are not exposed. |
+| Customers                                 | Organization-scoped customer list, search, create, update, and deactivate through `/business/customers`.                                       | Capability flags only control affordances; every operation is independently authorized by the API.                  |
+| Products & services                       | Organization-scoped catalog list, search, create, update, and deactivate through `/business/catalog`.                                          | This is a master-data catalog, not stock, pricing execution, or sales.                                              |
+| Branches                                  | Lists, creates, and updates branches using the branch API, with pagination and active/inactive status.                                         | No hard-delete operation is exposed; branch selection remains session-bound.                                        |
+| Users & members                           | Lists members and reads/assigns/removes roles and explicit branch assignments through the member and membership APIs.                          | No invitation creation, membership lifecycle editing, or `ALL`-mode assignment mutation UI.                         |
+| Notifications                             | Lists authorized notifications, marks them read, and reads/updates notification preferences.                                                   | Delivery policy and provider operations remain server-owned.                                                        |
+| Workflow activity                         | Reads authorized workflow execution history and status.                                                                                        | No workflow creation, editing, or retry action is exposed here.                                                     |
+| Communication templates and deliveries    | Read-only organization-scoped template and delivery listings.                                                                                  | No template editing or message-sending workflow is exposed.                                                         |
+| Modules, roles, permissions, and features | Reads the existing module registry, organization entitlements, role/permission catalogs, and feature configuration APIs.                       | These screens do not grant entitlements, edit roles, or mutate feature configuration.                               |
+| Account profile and security              | Reads the current authenticated session and supports the existing password-change and logout flows.                                            | No active-session revocation UI or self-service identity editing.                                                   |
+| Audit log                                 | Shows the explicit unsupported-state boundary.                                                                                                 | No tenant-authorized audit-log read API exists, so no audit data is synthesized.                                    |
+
+Frontend/API integration tests use a disposable PostgreSQL database and
+synthetic identities. The Chromium journey verifies profile and regional
+settings updates, customer and catalog create/update/deactivate persistence
+after reload, branch creation and member role/branch assignment/removal
+persistence, plus read-only action visibility for resources, profile, and
+settings and server-side denial. The focused API test also verifies that a
+settings-read-only session receives `canUpdateSettings: false` and is denied
+PATCH. This does not verify any deployment database's migration ledger,
+permission backfill, or production availability; see the roadmap for those
+outstanding checks.
 
 ## Future module integration
 

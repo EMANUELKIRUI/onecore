@@ -38,9 +38,32 @@ process-local limiter. Submission does not itself approve, activate, or
 provision an organization. Review and later owner-account setup remain
 separate administrator operations.
 
-Authentication is not the complete authorization engine. Business Manager currently provides organization-scoped customer and catalog CRUD at `/organizations/:organizationId/business/customers` and `/organizations/:organizationId/business/catalog`. The organization configuration `GET`/`PATCH` routes also expose the authorized business contact and address profile. These routes verify the requested organization against authenticated context and enforce permissions, module entitlements, branch access, and data-scope rules before returning or changing data. Organization and branch IDs are requested context only; the server verifies current membership, organization/branch status, and branch access. Branch selection does not replace RBAC or data-scope checks. Branch-directory CRUD is not exposed. Platform roles do not grant operational access.
+Authentication is not the complete authorization engine. Business Manager currently provides organization-scoped customer and catalog CRUD at `/organizations/:organizationId/business/customers` and `/organizations/:organizationId/business/catalog`. The organization configuration `GET`/`PATCH` routes also expose the authorized business contact and address profile. These routes verify the requested organization against authenticated context and enforce permissions, module entitlements, branch access, and data-scope rules before returning or changing data. Organization and branch IDs are requested context only; the server verifies current membership, organization/branch status, and branch access. Branch selection does not replace RBAC or data-scope checks. Branch-directory CRUD and membership branch assignment routes are documented below. Platform roles do not grant operational access.
+The configuration `GET` response includes `permissions.canUpdateSettings` as
+an advisory UI flag; the `PATCH` route independently enforces
+`core.organization.settings.update`.
 
 Validate every external input at the API boundary. Route handlers should delegate business decisions to application services; domain code must not depend on Fastify.
+
+## Business Manager resources
+
+| Method   | Route                                                           | Behavior                                                                                                                                                                                                     |
+| -------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET`    | `/organizations/:organizationId/business/customers`             | Returns a tenant- and data-scope-filtered page of customers, with `capabilities.canCreate`, `canUpdate`, and `canDelete` reflecting the current authorization context. These flags guide UI visibility only. |
+| `POST`   | `/organizations/:organizationId/business/customers`             | Creates a customer with `core.business_manager.customer.create`; validates fields, organization, branch, and data scope.                                                                                     |
+| `GET`    | `/organizations/:organizationId/business/customers/:resourceId` | Returns one customer only when visible in the current organization and data scope.                                                                                                                           |
+| `PATCH`  | `/organizations/:organizationId/business/customers/:resourceId` | Updates one in-scope customer with `core.business_manager.customer.update`.                                                                                                                                  |
+| `DELETE` | `/organizations/:organizationId/business/customers/:resourceId` | Deactivates an in-scope customer with `core.business_manager.customer.delete`; rows are retained.                                                                                                            |
+| `GET`    | `/organizations/:organizationId/business/catalog`               | Returns a tenant- and data-scope-filtered page of products/services, with the equivalent create/update/delete capability flags.                                                                              |
+| `POST`   | `/organizations/:organizationId/business/catalog`               | Creates a catalog item with `core.business_manager.catalog.create`; validates fields, organization, branch, and data scope.                                                                                  |
+| `GET`    | `/organizations/:organizationId/business/catalog/:resourceId`   | Returns one catalog item only when visible in the current organization and data scope.                                                                                                                       |
+| `PATCH`  | `/organizations/:organizationId/business/catalog/:resourceId`   | Updates one in-scope catalog item with `core.business_manager.catalog.update`.                                                                                                                               |
+| `DELETE` | `/organizations/:organizationId/business/catalog/:resourceId`   | Deactivates an in-scope catalog item with `core.business_manager.catalog.delete`; rows are retained.                                                                                                         |
+
+All routes also require the `core.business_manager` module entitlement and
+active organization access. The list capability flags are advisory only:
+every mutation independently checks the relevant permission, branch context,
+data scope, and tenant authorization.
 
 ## Workflow execution history
 
@@ -69,10 +92,10 @@ Each successful mutation, its audit record, and its lifecycle outbox event commi
 
 ## Organization member directory
 
-| Method | Route                                                        | Behavior                                                                                                                                              |
-| ------ | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/organizations/:organizationId/members?limit=&offset=`      | Lists bounded pages of organization membership identity and status for callers with the organization-scoped `core.organization.user.read` permission. |
-| `GET`  | `/organizations/:organizationId/members/:membershipId/roles` | Returns assigned and active organization roles for that membership; requires organization-scoped `core.rbac.role.read`.                               |
+| Method | Route                                                        | Behavior                                                                                                                                                     |
+| ------ | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET`  | `/organizations/:organizationId/members?limit=&offset=`      | Lists bounded pages of organization membership identity and status for callers with the organization-scoped `core.organization.user.read` permission.        |
+| `GET`  | `/organizations/:organizationId/members/:membershipId/roles` | Returns assigned and active organization roles plus advisory `capabilities.canAssign`/`canRemove` flags; requires organization-scoped `core.rbac.role.read`. |
 
 The route verifies the organization against the authenticated membership,
 records permission checks through centralized authorization, and only reads
@@ -82,7 +105,9 @@ returns credentials, user security state, branch assignments, or role grants.
 The `users` RLS directory-read policy is enabled only for the verified tenant
 and only after the route sets its transaction-local directory context.
 The roles route returns role IDs, names, and status only; it does not query or
-return user identity records. Role assignment and removal use the existing
+return user identity records. Its `capabilities.canAssign` and
+`capabilities.canRemove` flags are advisory and account for organization-scope
+grants and self-target restrictions. Role assignment and removal use the existing
 `POST /auth/membership/roles` and
 `DELETE /auth/membership/roles/:membershipId/:roleId` routes, requiring
 `core.rbac.membership_role.assign` and
@@ -129,11 +154,11 @@ to restrict rows to `app.current_organization_id`.
 
 ## Membership branch assignments
 
-| Method   | Route                                                                     | Request                                  | Response                                                                                                                                                                                                                                                      |
-| -------- | ------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`    | `/organizations/:organizationId/members/:membershipId/branches`           | No body.                                 | `200 { membershipId, branchAccessMode, explicitAssignments, effectiveAccess: { mode, branches } }`; explicit assignments include inactive branches, while effective access includes active branches only. `ALL` resolves to every active organization branch. |
-| `POST`   | `/organizations/:organizationId/members/:membershipId/branches`           | `{ branchIds: [uuid, ...] }`, 1–100 IDs. | `200 { membershipId, assignedBranchIds, addedBranchIds }`; repeated IDs and repeated requests are idempotent.                                                                                                                                                 |
-| `DELETE` | `/organizations/:organizationId/members/:membershipId/branches/:branchId` | No body.                                 | `200 { membershipId, branchId, removed: true }`; a missing assignment returns a generic `404`.                                                                                                                                                                |
+| Method   | Route                                                                     | Request                                  | Response                                                                                                                                                                                                                                                                                                                                                               |
+| -------- | ------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/organizations/:organizationId/members/:membershipId/branches`           | No body.                                 | `200 { membershipId, branchAccessMode, explicitAssignments, availableBranches, effectiveAccess: { mode, branches }, capabilities: { canAssign, canRemove } }`; explicit assignments include inactive branches; available/effective branches include active branches only. Capability values guide UI visibility; mutation routes independently authorize each request. |
+| `POST`   | `/organizations/:organizationId/members/:membershipId/branches`           | `{ branchIds: [uuid, ...] }`, 1–100 IDs. | `200 { membershipId, assignedBranchIds, addedBranchIds }`; repeated IDs and repeated requests are idempotent.                                                                                                                                                                                                                                                          |
+| `DELETE` | `/organizations/:organizationId/members/:membershipId/branches/:branchId` | No body.                                 | `200 { membershipId, branchId, removed: true }`; a missing assignment returns a generic `404`.                                                                                                                                                                                                                                                                         |
 
 The routes require the separate organization-scoped permissions
 `core.organization.membership_branch.read`,
@@ -144,5 +169,8 @@ and lock the target membership for the transaction. Explicit assignment
 mutations return `409` while `branchAccessMode` is `ALL`; mode transitions are
 not exposed. Permission decisions, self-target denials, and successful
 changes are recorded in the tenant audit log in the same transaction.
-Responses contain branch metadata only and never return membership identity
-details.
+The read response includes active organization branches for assignment choices
+and booleans reflecting organization-scoped assign/remove grants. Responses
+contain branch metadata only and never return membership identity details.
+Capability values are false for self-targeted memberships and `ALL` mode; they
+are usability hints only and do not replace authorization in mutation routes.

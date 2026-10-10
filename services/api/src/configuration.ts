@@ -274,6 +274,11 @@ export function registerConfigurationRoutes(
               capabilities: resolveConfigurationCapabilities(
                 organization.deploymentType,
               ),
+              permissions: {
+                canUpdateSettings: context.permissions.some(
+                  (permission) => permission.key === settingsUpdate,
+                ),
+              },
               settings: settings[0] ?? null,
               business: business[0] ?? null,
               branding: branding[0]
