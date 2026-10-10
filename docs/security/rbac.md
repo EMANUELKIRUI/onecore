@@ -46,6 +46,16 @@ organization-scoped grant to expand its access: it is narrowed to branch
 scope. Branch-scoped grants require a verified active branch. Client-supplied
 branch IDs are not proof of assignment.
 
+The initial Sales API requires `core.sales` entitlement and either
+`core.sales.sale.create` or `core.sales.sale.read`. The create route additionally
+requires the authenticated session's verified active branch; read queries are
+restricted to that current branch before applying `ORGANIZATION`, `BRANCH`, or
+`OWN`/`SELF` data scope. Unsupported `ASSIGNED`, `DEPARTMENT`, and `CUSTOM`
+resource interpretations fail closed. The sales migration registers module
+and permission metadata but deliberately adds no plan eligibility, organization
+entitlements, or role grants; access remains denied until trusted product
+activation and explicit RBAC provisioning are approved. Sale and line RLS
+remain forced independently of route predicates.
 ## Context, enforcement, and errors
 
 `createAuthorizationService` is the centralized boundary. It revalidates the

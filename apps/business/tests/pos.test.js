@@ -34,8 +34,10 @@ describe("POS draft cart helpers", () => {
 
   it("accepts only positive safe-integer quantities", () => {
     expect(parseDraftQuantity("1")).toBe(1);
-    expect(parseDraftQuantity("9007199254740991")).toBe(
-      Number.MAX_SAFE_INTEGER,
+    expect(parseDraftQuantity("9007199254747991254740991
+      Number.MAX)SAFEoINTEGER,
+    
+      Number.MAX_SAFE_INTEGER,9799254740992
     );
     for (const value of ["", "0", "-1", "1.5", "01", "9007199254740992"]) {
       expect(parseDraftQuantity(value)).toBeNull();
@@ -75,8 +77,4 @@ describe("POS draft cart helpers", () => {
     expect(removeDraftCartItem(cart, "item-2")).toBe(true);
     expect(removeDraftCartItem(cart, "missing")).toBe(false);
   });
-
-  it("returns no subtotal for an empty cart", () => {
-    expect(draftCartSubtotal(new Map())).toBeNull();
-  });
-});
+t

@@ -35,6 +35,9 @@ import {
   organizationModuleStatuses,
   organizationStatuses,
   outboxStatuses,
+  inventoryMovementTypes,
+  inventoryReservationStatuses,
+  saleStatuses,
   type EventDeliveryStatus,
   type EventFailureKind,
   type EventProcessingStatus,
@@ -131,6 +134,15 @@ export const customDevelopmentStatus = pgEnum(
 );
 export const auditResult = pgEnum("audit_result", auditResults);
 export const outboxStatus = pgEnum("outbox_status", outboxStatuses);
+export const saleStatus = pgEnum("sale_lifecycle_status", saleStatuses);
+export const inventoryMovementType = pgEnum(
+  "inventory_movement_type",
+  inventoryMovementTypes,
+);
+export const inventoryReservationStatus = pgEnum(
+  "inventory_reservation_status",
+  inventoryReservationStatuses,
+);
 export const jobStatus = pgEnum("job_status", jobStatuses);
 export const notificationChannel = pgEnum(
   "notification_channel",
@@ -339,6 +351,297 @@ export const catalogItems = pgTable(
     check(
       "catalog_items_description_length",
       sql`${table.description} IS NULL OR char_length(${table.description}) <= 2000`,
+    ),
+  ],
+);
+
+export const sales = pgTable(
+  "sales",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    status: saleStatus("status").notNull().default("OPEN"),
+    currency: varchar("currency", { length: 3 }).notNull(),
+    subtotal: numeric("subtotal", { precision: 26, scale: 6 }).notNull(),
+    total: numeric("total", { precision: 26, scale: 6 }).notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 200 }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelledByUserId: uuid("cancelled_by_user_id").references(() => users.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    unique("sales_organization_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    uniqueIndex("sales_org_idempotency_unique").on(
+      table.organizationId,
+      table.idempotencyKey,
+    ),
+    foreignKey({
+      name: "sales_organization_fk",
+      columns: [table.organizationId],
+      foreignColumns: [organizations.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "sales_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+    index("sales_org_branch_created_idx").on(
+      table.organizationId,
+      table.branchId,
+      table.createdAt,
+      table.id,
+    ),
+    check("sales_currency_format", sql`${table.currency} ~ '^[A-Z]{3}$'`),
+    check("sales_subtotal_nonnegative", sql`${table.subtotal} >= 0`),
+    check("sales_total_matches_subtotal", sql`${table.total} = ${table.subtotal}`),
+    check(
+      "sales_cancellation_state_consistent",
+      sql`(${table.status} = 'OPEN' AND ${table.cancelledAt} IS NULL AND ${table.cancelledByUserId} IS NULL) OR (${table.status} = 'CANCELLED' AND ${table.cancelledAt} IS NOT NULL AND ${table.cancelledByUserId} IS NOT NULL)`,
+    ),
+    check(
+      "sales_idempotency_key_format",
+      sql`${table.idempotencyKey} ~ '^[!-~]{1,200}$'`,
+    ),
+    check(
+      "sales_request_hash_format",
+      sql`${table.requestHash} ~ '^[a-f0-9]{64}$'`,
+    ),
+  ],
+);
+
+export const saleLines = pgTable(
+  "sale_lines",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    saleId: uuid("sale_id").notNull(),
+    catalogItemId: uuid("catalog_item_id").notNull(),
+    lineNumber: integer("line_number").notNull(),
+    itemName: varchar("item_name", { length: 200 }).notNull(),
+    description: text("description"),
+    reference: varchar("reference", { length: 100 }),
+    unit: varchar("unit", { length: 50 }).notNull(),
+    unitPrice: numeric("unit_price", { precision: 18, scale: 6 }).notNull(),
+    quantity: integer("quantity").notNull(),
+    lineTotal: numeric("line_total", { precision: 26, scale: 6 }).notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    unique("sale_lines_organization_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    unique("sale_lines_org_sale_line_number_unique").on(
+      table.organizationId,
+      table.saleId,
+      table.lineNumber,
+    ),
+    unique("sale_lines_org_sale_catalog_item_unique").on(
+      table.organizationId,
+      table.saleId,
+      table.catalogItemId,
+    ),
+    foreignKey({
+      name: "sale_lines_sale_fk",
+      columns: [table.organizationId, table.saleId],
+      foreignColumns: [sales.organizationId, sales.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "sale_lines_catalog_item_fk",
+      columns: [table.organizationId, table.catalogItemId],
+      foreignColumns: [catalogItems.organizationId, catalogItems.id],
+    }).onDelete("restrict"),
+    check(
+      "sale_lines_line_number_range",
+      sql`${table.lineNumber} BETWEEN 1 AND 100`,
+    ),
+    check("sale_lines_price_nonnegative", sql`${table.unitPrice} >= 0`),
+    check(
+      "sale_lines_quantity_positive",
+      sql`${table.quantity} BETWEEN 1 AND 1000000`,
+    ),
+    check("sale_lines_total_nonnegative", sql`${table.lineTotal} >= 0`),
+    check(
+      "sale_lines_total_matches_quantity",
+      sql`${table.lineTotal} = ${table.unitPrice} * ${table.quantity}`,
+    ),
+  ],
+);
+
+export const inventoryStockBalances = pgTable(
+  "inventory_stock_balances",
+  {
+    organizationId: uuid("organization_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    catalogItemId: uuid("catalog_item_id").notNull(),
+    onHand: integer("on_hand").notNull().default(0),
+    reserved: integer("reserved").notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    primaryKey({
+      name: "inventory_stock_balances_pk",
+      columns: [table.organizationId, table.branchId, table.catalogItemId],
+    }),
+    foreignKey({
+      name: "inventory_stock_balances_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "inventory_stock_balances_catalog_item_fk",
+      columns: [table.organizationId, table.catalogItemId],
+      foreignColumns: [catalogItems.organizationId, catalogItems.id],
+    }).onDelete("restrict"),
+    check("inventory_stock_on_hand_nonnegative", sql`${table.onHand} >= 0`),
+    check("inventory_stock_reserved_nonnegative", sql`${table.reserved} >= 0`),
+    check(
+      "inventory_stock_reserved_within_on_hand",
+      sql`${table.reserved} <= ${table.onHand}`,
+    ),
+    index("inventory_stock_branch_item_idx").on(
+      table.organizationId,
+      table.branchId,
+      table.catalogItemId,
+    ),
+  ],
+);
+
+export const inventoryReservations = pgTable(
+  "inventory_reservations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    saleId: uuid("sale_id").notNull(),
+    catalogItemId: uuid("catalog_item_id").notNull(),
+    quantity: integer("quantity").notNull(),
+    status: inventoryReservationStatus("status").notNull().default("ACTIVE"),
+    createdAt: createdAt(),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    releasedByUserId: uuid("released_by_user_id").references(() => users.id, {
+      onDelete: "restrict",
+    }),
+  },
+  (table) => [
+    unique("inventory_reservations_organization_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    unique("inventory_reservations_sale_item_unique").on(
+      table.organizationId,
+      table.saleId,
+      table.catalogItemId,
+    ),
+    foreignKey({
+      name: "inventory_reservations_sale_fk",
+      columns: [table.organizationId, table.saleId],
+      foreignColumns: [sales.organizationId, sales.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "inventory_reservations_sale_line_fk",
+      columns: [table.organizationId, table.saleId, table.catalogItemId],
+      foreignColumns: [saleLines.organizationId, saleLines.saleId, saleLines.catalogItemId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "inventory_reservations_stock_balance_fk",
+      columns: [table.organizationId, table.branchId, table.catalogItemId],
+      foreignColumns: [
+        inventoryStockBalances.organizationId,
+        inventoryStockBalances.branchId,
+        inventoryStockBalances.catalogItemId,
+      ],
+    }).onDelete("restrict"),
+    check(
+      "inventory_reservations_quantity_positive",
+      sql`${table.quantity} BETWEEN 1 AND 1000000`,
+    ),
+    check(
+      "inventory_reservations_release_state_consistent",
+      sql`(${table.status} = 'ACTIVE' AND ${table.releasedAt} IS NULL AND ${table.releasedByUserId} IS NULL) OR (${table.status} = 'RELEASED' AND ${table.releasedAt} IS NOT NULL AND ${table.releasedByUserId} IS NOT NULL)`,
+    ),
+    index("inventory_reservations_branch_status_idx").on(
+      table.organizationId,
+      table.branchId,
+      table.status,
+    ),
+  ],
+);
+
+export const inventoryMovements = pgTable(
+  "inventory_movements",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    catalogItemId: uuid("catalog_item_id").notNull(),
+    saleId: uuid("sale_id"),
+    reservationId: uuid("reservation_id"),
+    movementType: inventoryMovementType("movement_type").notNull(),
+    deltaOnHand: integer("delta_on_hand").notNull(),
+    deltaReserved: integer("delta_reserved").notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 200 }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    actorUserId: uuid("actor_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    unique("inventory_movements_organization_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    uniqueIndex("inventory_movements_idempotency_unique").on(
+      table.organizationId,
+      table.idempotencyKey,
+    ),
+    foreignKey({
+      name: "inventory_movements_stock_balance_fk",
+      columns: [table.organizationId, table.branchId, table.catalogItemId],
+      foreignColumns: [
+        inventoryStockBalances.organizationId,
+        inventoryStockBalances.branchId,
+        inventoryStockBalances.catalogItemId,
+      ],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "inventory_movements_sale_fk",
+      columns: [table.organizationId, table.saleId],
+      foreignColumns: [sales.organizationId, sales.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "inventory_movements_reservation_fk",
+      columns: [table.organizationId, table.reservationId],
+      foreignColumns: [inventoryReservations.organizationId, inventoryReservations.id],
+    }).onDelete("restrict"),
+    check(
+      "inventory_movements_effect_matches_type",
+      sql`(${table.movementType} = 'RECEIPT' AND ${table.deltaOnHand} > 0 AND ${table.deltaReserved} = 0 AND ${table.saleId} IS NULL AND ${table.reservationId} IS NULL) OR (${table.movementType} = 'ADJUSTMENT' AND ${table.deltaOnHand} <> 0 AND ${table.deltaReserved} = 0 AND ${table.saleId} IS NULL AND ${table.reservationId} IS NULL) OR (${table.movementType} = 'RESERVATION' AND ${table.deltaOnHand} = 0 AND ${table.deltaReserved} > 0 AND ${table.saleId} IS NOT NULL AND ${table.reservationId} IS NOT NULL) OR (${table.movementType} = 'RESERVATION_RELEASE' AND ${table.deltaOnHand} = 0 AND ${table.deltaReserved} < 0 AND ${table.saleId} IS NOT NULL AND ${table.reservationId} IS NOT NULL)`,
+    ),
+    check(
+      "inventory_movements_idempotency_key_format",
+      sql`${table.idempotencyKey} ~ '^[!-~]{1,200}$'`,
+    ),
+    check(
+      "inventory_movements_request_hash_format",
+      sql`${table.requestHash} ~ '^[a-f0-9]{64}$'`,
+    ),
+    index("inventory_movements_branch_created_idx").on(
+      table.organizationId,
+      table.branchId,
+      table.createdAt,
     ),
   ],
 );

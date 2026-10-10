@@ -164,21 +164,31 @@ remains a trusted, separate operation and is not exposed by these routes.
 
 ### Status
 
-BLOCKED
+IMPLEMENTED - DISPOSABLE DOMAIN, PERSISTENCE, API, AND ORDERED-MIGRATION TESTS PASSED; TARGET MIGRATION APPLICATION AND DEPLOYMENT VERIFICATION PENDING
 
-The repository currently has Business Manager customer and catalog master
-data, but no sales tables, transaction API, payment/refund domain, POS
-frontend, or Sales/POS integration tests. The current Phase 18 roadmap
-explicitly excludes these business modules. Sales-related permission names in
-the broad catalog are not an implementation or entitlement decision. Before
-designing migrations or exposing navigation, product must approve scope,
-module/plan entitlement policy, supported local payment-record semantics, and
-the sales lifecycle. Until then, no organization or plan is automatically
-granted Sales access, and no Sales/POS capability is operational.
+The current foundation records immutable, unpaid `OPEN` sales from active
+catalog items. It includes exact server-side totals, branch-scoped create/list/
+detail APIs, line snapshots, organization-scoped idempotency, forced RLS,
+central permission/entitlement checks, audit, and an atomic `SALE_CREATED`
+outbox event. The `core.sales` module has no automatic plan eligibility,
+organization entitlement, or role backfill; trusted product activation and
+explicit RBAC grants are still required before use.
 
-The prompt-referenced migration `20261009155918_damp_anthem` is not present
-in this repository or current `main`; no corresponding Sales/POS tables,
-endpoint handlers, or Sales module registration were found.
+There is no authoritative inventory balance or movement model, so the API does
+not reserve/decrement stock or prevent overselling. There is no payment
+provider, tax or discount policy, accounting integration, finalized sale state,
+receipt numbering, or receipt API. `OPEN` means unpaid. The POS frontend is not
+wired to the endpoint, and no successful sale should be shown by the UI until
+an authoritative API response is implemented there. For retry after an
+uncertain timeout, clients must reuse the original idempotency key.
+
+The new migration `20261010184156_sales_checkout_foundation` was replayed in
+disposable PGlite tests only. No external migration ledger was inspected and
+the migration was not applied to a deployment. The documented
+`20261010020000_branch_administration_contract` forced-RLS backfill failure
+remains a prerequisite if absent from a target ledger; do not skip it, edit it,
+or infer success. Production readiness is not established. See the [Sales
+module boundary](../modules/sales.md) and [ADR 0015](adr/0015-sales-transaction-foundation.md).
 
 ## Phase 18 — Workflow Execution and Automation Foundation
 

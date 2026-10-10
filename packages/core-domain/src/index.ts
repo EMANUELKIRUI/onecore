@@ -6,6 +6,8 @@ export * from "./regionalization.js";
 export * from "./communications.js";
 export * from "./workflows.js";
 export * from "./business-manager.js";
+export * from "./sales.js";
+export * from "./inventory.js";
 
 export const deploymentTypes = [
   "SAAS",
@@ -529,6 +531,23 @@ export const permissionCatalog = [
     resource,
     action,
     description: `${action} Business Manager ${resource} records.`,
+  })),
+  ...(["create", "read", "cancel"] as const).map((action) => ({
+    module: "core.sales",
+    resource: "sale",
+    action,
+    description:
+      action === "create"
+        ? "Create unpaid sales from active catalog items."
+        : action === "read"
+          ? "Read sales within the authorized organization and branch."
+          : "Cancel an unpaid sale and release its stock reservation.",
+  })),
+  ...(["read", "adjust", "reserve", "release"] as const).map((action) => ({
+    module: "core.inventory",
+    resource: "stock",
+    action,
+    description: `Authorize branch stock ${action} operations.`,
   })),
   ...(
     [

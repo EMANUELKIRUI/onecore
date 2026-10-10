@@ -26,6 +26,8 @@ import { registerIntegrationSecurityRoutes } from "./integration-resources.js";
 import { registerEventRoutes } from "./events.js";
 import { registerWorkflowRoutes } from "./workflows.js";
 import { registerBusinessManagerRoutes } from "./business-manager.js";
+import { registerSalesRoutes } from "./sales.js";
+import { registerInventoryRoutes } from "./inventory.js";
 import { registerMemberRoutes } from "./members.js";
 import { registerBranchRoutes } from "./branches.js";
 import { registerModuleRoutes } from "./modules.js";
@@ -207,6 +209,8 @@ export function buildApp(
   registerEventRoutes(app, correlatedAuthorization);
   registerWorkflowRoutes(app, correlatedAuthorization);
   registerBusinessManagerRoutes(app, correlatedAuthorization);
+  registerSalesRoutes(app, correlatedAuthorization, config);
+  registerInventoryRoutes(app, correlatedAuthorization, config);
   registerMemberRoutes(app, correlatedAuthorization);
   registerBranchRoutes(app, correlatedAuthorization);
   registerModuleRoutes(app, correlatedAuthorization);

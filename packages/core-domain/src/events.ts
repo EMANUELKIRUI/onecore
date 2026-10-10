@@ -225,6 +225,45 @@ const eventDefinitions = {
     compatibilityPolicy: "ADDITIVE_ONLY",
     payloadSchema: z.object({ catalogItemId: z.uuid() }).strict(),
   },
+  SALE_CREATED: {
+    version: 1,
+    owningModule: "core.sales",
+    description: "An unpaid sale transaction was created.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        saleId: z.uuid(),
+        lineCount: z.number().int().positive().max(100),
+      })
+      .strict(),
+  },
+  SALE_CANCELLED: {
+    version: 1,
+    owningModule: "core.sales",
+    description: "An unpaid sale was cancelled and its reservation released.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({ saleId: z.uuid(), releasedLineCount: z.number().int().nonnegative().max(100) })
+      .strict(),
+  },
+  INVENTORY_STOCK_CHANGED: {
+    version: 1,
+    owningModule: "core.inventory",
+    description: "Branch stock was received, adjusted, reserved, or released.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        movementId: z.uuid(),
+        catalogItemId: z.uuid(),
+        movementType: z.enum([
+          "RECEIPT",
+          "ADJUSTMENT",
+          "RESERVATION",
+          "RESERVATION_RELEASE",
+        ]),
+      })
+      .strict(),
+  },
   JOB_ENQUEUED: {
     version: 1,
     owningModule: "core.jobs",

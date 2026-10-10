@@ -1,0 +1,3 @@
+ALTER TABLE "inventory_movements" ADD COLUMN "request_hash" varchar(64) NOT NULL;--> statement-breakpoint
+ALTER TABLE "inventory_movements" ADD CONSTRAINT "inventory_movements_request_hash_format" CHECK ("request_hash" ~ '^[a-f0-9]{64}$');--> statement-breakpoint
+GRANT INSERT ("id", "organization_id", "branch_id", "catalog_item_id", "sale_id", "reservation_id", "movement_type", "delta_on_hand", "delta_reserved", "idempotency_key", "request_hash", "actor_user_id", "created_at") ON "inventory_movements" TO onecore_app;

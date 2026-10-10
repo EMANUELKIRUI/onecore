@@ -73,9 +73,11 @@ available.
 Users can prepare an in-memory draft cart with positive whole-number
 quantities and exact catalog-decimal line and subtotal estimates. The draft is
 not stored, does not reserve stock, does not apply tax or discounts, and is
-cleared when the organization or branch context changes. Checkout is
-intentionally unavailable: there are no supported sales, payment, transaction
-history, or receipt APIs. The UI does not create local or simulated sales.
+cleared when the organization or branch context changes. The backend now has
+authorized create/list/detail APIs for immutable unpaid sales, but this view is
+not wired to them and checkout remains unavailable in the UI. There is no
+payment API or finalized receipt; the backend transaction history is limited
+to the supported sales reads. The UI does not create local or simulated sales.
 
 ## Existing workspace capabilities
 

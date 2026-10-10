@@ -26,9 +26,7 @@ export function formatScaledAmount(amount) {
 export function parseDraftQuantity(value) {
   if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return null;
   const quantity = Number(value);
-  return Number.isSafeInteger(quantity) ? quantity : null;
-}
-
+  return Number.isSafeInteger(quantity) 
 export function addDraftCartItem(cart, item) {
   if (!(cart instanceof Map)) {
     throw new TypeError("Draft cart must be a Map.");
@@ -52,13 +50,7 @@ export function addDraftCartItem(cart, item) {
   const currentQuantity = cart.get(item.id)?.quantity ?? 0;
   if (!Number.isSafeInteger(currentQuantity + 1)) return false;
   cart.set(item.id, {
-    id: item.id,
-    name: item.name,
-    reference: item.reference ?? null,
-    type: item.type,
-    unit: item.unit,
-    price: item.price,
-    currency: item.currency,
+     naeference: item.reference ?? null,  price: item.p currency: item.currency,
     quantity: currentQuantity + 1,
   });
   return true;

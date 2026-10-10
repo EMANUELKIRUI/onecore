@@ -120,6 +120,25 @@ export {
   updateCustomer,
 } from "./business-manager.js";
 export {
+  createSale,
+  cancelSale,
+  getSale,
+  listSales,
+  type CreateSaleOutcome,
+  type CancelSaleOutcome,
+  type SaleWithLines,
+} from "./sales.js";
+export {
+  adjustBranchStock,
+  createSaleReservations,
+  listBranchStock,
+  releaseSaleReservations,
+  InsufficientStockError,
+  type InventoryAdjustmentOutcome,
+  type SaleStockLine,
+  type StockBalance,
+} from "./inventory.js";
+export {
   createModuleRegistry,
   moduleVersionSatisfies,
   type ModuleRegistry,

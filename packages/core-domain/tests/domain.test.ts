@@ -34,10 +34,136 @@ import {
   catalogItemCreateInputSchema,
   catalogItemUpdateInputSchema,
   catalogListQuerySchema,
+  assertSaleAmountRepresentable,
+  calculateSaleTotals,
+  MAX_SALE_AMOUNT_SCALED,
+  saleCreateRequestSchema,
+  saleLifecycleTransitions,
+  saleListQuerySchema,
+  salePriceToScaledAmount,
+  sumSaleAmounts,
+  inventoryAdjustmentInputSchema,
+  inventoryStockQuerySchema,
   workflowTriggerEventTypes,
 } from "../src/index.js";
 
 describe("platform domain values", () => {
+  it("validates immutable open-sale requests and calculates exact totals", () => {
+    const request = saleCreateRequestSchema.parse({
+      lines: [
+        { catalogItemId: "00000000-0000-4000-8000-000000000001", quantity: 3 },
+        { catalogItemId: "00000000-0000-4000-8000-000000000002", quantity: 2 },
+      ],
+    });
+    expect(request.lines).toHaveLength(2);
+    expect(() => saleCreateRequestSchema.parse({ lines: [] })).toThrow();
+    expect(() =>
+      saleCreateRequestSchema.parse({
+        lines: [{ catalogItemId: "00000000-0000-4000-8000-000000000001", quantity: 0 }],
+      }),
+    ).toThrow();
+    expect(() =>
+      saleCreateRequestSchema.parse({
+        lines: [
+          { catalogItemId: "00000000-0000-4000-8000-000000000001", quantity: 1 },
+          { catalogItemId: "00000000-0000-4000-8000-000000000001", quantity: 2 },
+        ],
+      }),
+    ).toThrow();
+    expect(saleListQuerySchema.parse({ limit: "20", offset: "0" })).toEqual({
+      limit: 20,
+      offset: 0,
+    });
+    expect(() => saleListQuerySchema.parse({ limit: "0" })).toThrow();
+    expect(saleLifecycleTransitions.OPEN).toEqual(["CANCELLED"]);
+    expect(saleLifecycleTransitions.CANCELLED).toEqual([]);
+    expect(
+      calculateSaleTotals([
+        { unitPrice: "0.100001", quantity: 3 },
+        { unitPrice: "2.000009", quantity: 2 },
+      ]),
+    ).toEqual({
+      lines: [{ lineTotal: "0.300003" }, { lineTotal: "4.000018" }],
+      subtotal: "4.300021",
+      total: "4.300021",
+    });
+    expect(() => calculateSaleTotals([{ unitPrice: "1e2", quantity: 1 }])).toThrow();
+    expect(() => calculateSaleTotals([{ unitPrice: "1", quantity: 0 }])).toThrow(
+      "Sale quantities must be positive whole numbers.",
+    );
+    expect(() => calculateSaleTotals([{ unitPrice: "1", quantity: 1.5 }])).toThrow(
+      "Sale quantities must be positive whole numbers.",
+    );
+  });
+
+  it("validates explicit stock movements and bounded branch stock queries", () => {
+    const itemId = "00000000-0000-4000-8000-000000000001";
+    expect(
+      inventoryAdjustmentInputSchema.parse({
+        catalogItemId: itemId,
+        movementType: "RECEIPT",
+        delta: 5,
+      }),
+    ).toMatchObject({ movementType: "RECEIPT", delta: 5 });
+    expect(
+      inventoryAdjustmentInputSchema.parse({
+        catalogItemId: itemId,
+        movementType: "ADJUSTMENT",
+        delta: -2,
+      }).delta,
+    ).toBe(-2);
+    expect(() =>
+      inventoryAdjustmentInputSchema.parse({
+        catalogItemId: itemId,
+        movementType: "RECEIPT",
+        delta: -1,
+      }),
+    ).toThrow();
+    expect(() =>
+      inventoryAdjustmentInputSchema.parse({
+        catalogItemId: itemId,
+        movementType: "ADJUSTMENT",
+        delta: 0,
+      }),
+    ).toThrow();
+    expect(inventoryStockQuerySchema.parse({ catalogItemId: itemId })).toEqual({
+      catalogItemIds: [itemId],
+    });
+    expect(
+      inventoryStockQuerySchema.parse({ catalogItemId: [itemId, itemId] }),
+    ).toEqual({ catalogItemIds: [itemId] });
+    expect(() => inventoryStockQuerySchema.parse({ catalogItemId: [] })).toThrow();
+  });
+
+  it("bounds sale line and subtotal amounts to PostgreSQL numeric(26,6)", () => {
+    const maximumPrice = "999999999999.999999";
+    const maximumLineAmount =
+      salePriceToScaledAmount(maximumPrice) * 1_000_000n;
+    expect(maximumLineAmount).toBeLessThan(MAX_SALE_AMOUNT_SCALED);
+    expect(() => assertSaleAmountRepresentable(MAX_SALE_AMOUNT_SCALED)).not.toThrow();
+    expect(() => assertSaleAmountRepresentable(MAX_SALE_AMOUNT_SCALED + 1n)).toThrow(
+      "Sale amount must fit PostgreSQL numeric(26,6) precision.",
+    );
+
+    const nearMaximum = calculateSaleTotals(
+      Array.from({ length: 100 }, () => ({
+        unitPrice: maximumPrice,
+        quantity: 1_000_000,
+      })),
+    );
+    expect(nearMaximum.subtotal).toBe("99999999999999999900");
+    expect(nearMaximum.total).toBe(nearMaximum.subtotal);
+
+    const supportedLineAmounts = Array.from(
+      { length: 100 },
+      () => maximumLineAmount,
+    );
+    expect(() => sumSaleAmounts(supportedLineAmounts)).not.toThrow();
+    expect(() =>
+      sumSaleAmounts([...supportedLineAmounts, maximumLineAmount]),
+    ).toThrow("Sale amount must fit PostgreSQL numeric(26,6) precision.");
+  });
+
   it("validates customer and catalog input without monetary float coercion", () => {
     expect(
       customerCreateInputSchema.parse({
@@ -207,6 +333,9 @@ describe("platform domain values", () => {
         "CUSTOMER_CREATED",
         "CUSTOMER_UPDATED",
         "CUSTOMER_DELETED",
+        "SALE_CREATED",
+        "SALE_CANCELLED",
+        "INVENTORY_STOCK_CHANGED",
         "FEATURE_FLAG_CHANGED",
         "JOB_ENQUEUED",
         "JOB_COMPLETED",

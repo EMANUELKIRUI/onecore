@@ -351,7 +351,7 @@ const boundaryViews = {
   pos: {
     title: "Point of sale",
     description:
-      "Browse active catalog items and prepare a temporary draft. Checkout, stock, tax, and payment are not available.",
+      "Browse active catalog items and prepare a temporary draft. This view is not connected to the unpaid-sale API; stock, tax, and payment are not available.",
     eyebrow: "Sales workspace",
   },
   members: {
@@ -2575,7 +2575,7 @@ function renderPosCart(container) {
   appendText(
     container,
     "div",
-    "Checkout is unavailable because no sales or payment API is currently supported. No sale or payment will be submitted.",
+    "A separate authorized backend API can create unpaid OPEN sales, but this draft view is not connected to it. No sale or payment will be submitted. No stock is reserved.",
     "oc-alert",
   ).setAttribute("role", "status");
   if (posCart.size > 0) {

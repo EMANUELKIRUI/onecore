@@ -65,6 +65,33 @@ active organization access. The list capability flags are advisory only:
 every mutation independently checks the relevant permission, branch context,
 data scope, and tenant authorization.
 
+## Sales transaction foundation
+
+| Method | Route | Behavior |
+| ------ | ----- | -------- |
+| `POST` | `/organizations/:organizationId/sales` | Creates an unpaid `OPEN` sale from active catalog IDs and positive whole quantities. Requires `Idempotency-Key` and `core.sales.sale.create`. Prices, currency, branch, organization, cashier, and totals are resolved server-side. |
+| `GET` | `/organizations/:organizationId/sales?limit=&offset=` | Lists sale summaries for the verified current branch and effective `core.sales.sale.read` data scope. |
+| `GET` | `/organizations/:organizationId/sales/:saleId` | Returns the sale and immutable transaction-time line snapshots within the current authorized branch and data scope. |
+
+Create bodies are strict: `{ "lines": [{ "catalogItemId": "<uuid>",
+"quantity": 1 }] }`. There must be 1-100 unique catalog IDs; quantities are
+whole numbers from 1 to 1,000,000. No client price, total, discount, tax,
+stock, branch, organization, or cashier fields are accepted. `Idempotency-Key`
+is printable ASCII, 1-200 characters. A retry with the same organization,
+creator, branch, key, and semantic line set returns the original `201` sale. Reusing a
+key for another payload or branch returns `409 CONFLICT`; clients must reuse
+the original key after uncertain timeouts. Other error classes are `400`
+validation/catalog/currency, `401` unauthenticated, `403` unauthorized or
+missing branch, and `404` for concealed foreign-tenant resources.
+
+Sales routes require a live session, active organization membership and
+organization, verified active branch, the `core.sales` entitlement, and the
+permission named above. RLS is forced on `sales` and `sale_lines`. The only
+supported status is `OPEN` (unpaid); total currently equals subtotal. The API
+does not reserve or decrement stock, process or confirm payments, calculate
+taxes/discounts, finalize sales, or return receipts. The POS frontend is not
+wired to this contract. See the [Sales module boundary](../modules/sales.md).
+
 ## Workflow execution history
 
 | Method | Route                                                               | Behavior                                                                                                        |

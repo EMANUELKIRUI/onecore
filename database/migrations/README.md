@@ -171,6 +171,25 @@ operation. No schema snapshot change is needed. Review
 apply it with `onecore_migrator`; assignment writes remain tenant-scoped by
 `app.current_organization_id`.
 
+## Sales checkout foundation
+
+The forward-only migration `20261010184156_sales_checkout_foundation` adds
+tenant-owned `sales` and `sale_lines`, the `core.sales` module/permission
+catalog metadata, forced tenant RLS, immutable transaction snapshots, and
+column-scoped `onecore_app` grants. It intentionally creates no organization
+entitlements, plan eligibility, role grants, inventory records, or payment
+records. It follows the existing migration chain and is not a repair or a way
+around `20261010020000_branch_administration_contract`.
+
+The ordered disposable PGlite suite has replayed the checked-in migrations,
+including this addition. No external migration ledger was inspected and this
+migration was not applied to a deployment. Before applying it to any target,
+the migration owner must follow the read-only ledger/RLS/permission evidence
+procedure above. If the branch-administration predecessor is absent and
+blocked by its forced-RLS backfill, stop the ordered runner and use only the
+approved recovery process already documented here; do not skip, rewrite, or
+manually mark any migration successful.
+
 ## Production lifecycle mutations
 
 The lifecycle mutation migration grants the runtime role column-scoped `INSERT`

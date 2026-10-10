@@ -351,6 +351,12 @@ describe("Business Manager capability boundary", () => {
     expect(application).toContain("resetPosWorkspaceState()");
     expect(application).toContain("No sale or payment will be submitted.");
     expect(application).toContain(
+      "A separate authorized backend API can create unpaid OPEN sales",
+    );
+    expect(application).not.toContain(
+      "no sales or payment API is currently supported",
+    );
+    expect(application).toContain(
       "Stock availability is not provided by this API.",
     );
     expect(application).not.toMatch(
