@@ -120,6 +120,15 @@ export {
   updateCustomer,
 } from "./business-manager.js";
 export {
+  checkoutSale,
+  cancelSale,
+  getSale,
+  listSales,
+  listSaleCatalogItems,
+  recordSaleRefund,
+  SalesOperationError,
+} from "./sales.js";
+export {
   createModuleRegistry,
   moduleVersionSatisfies,
   type ModuleRegistry,

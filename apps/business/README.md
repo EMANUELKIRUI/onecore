@@ -35,6 +35,13 @@ or branch clears and reloads the view. Workflow activity is available from the
 existing Phase 18 execution-history API; a tenant audit-log read API is not
 available.
 
+The Branches view lists organization branches with pagination and supports
+creation, inline name/code/address edits, and soft deactivation/reactivation.
+Navigation requires `core.organization.branch.read`; create and edit/status
+controls require `core.organization.branch.create` and
+`core.organization.branch.update`, respectively. The API independently
+authorizes every request and exposes no suspended/closed lifecycle mutation.
+
 Branch-scoped customer and catalog reads include organization-wide records and
 records for the verified current branch, never records for other branches.
 Branch-scoped updates and deactivation are limited to current-branch records.
@@ -65,10 +72,11 @@ can be updated through the existing self-service preferences API.
 Login/session handling, profile/session summary, password change, and sign-out
 are included. Regional organization settings and legal name can be updated
 through the existing settings API; effective feature values remain read-only.
-The branch view lists only active branch choices returned by the authenticated
-session. The member view lists only the signed-in user's own
-active memberships; no tenant member directory, membership details/role
-assignment UI, organization lifecycle editor, or branch management API is
+The branch selector continues to use active choices returned by the
+authenticated session, while the Branches view manages organization branch
+records through its permission-gated API. The member view lists only the
+signed-in user's own active memberships; no tenant member directory,
+membership details/role assignment UI, or organization lifecycle editor is
 available to this app. Likewise, there is no tenant-authorized audit-log read
 API or active-session/device revocation API. These unavailable capabilities
 are identified in the UI rather than represented with fake data or CRUD.

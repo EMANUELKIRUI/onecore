@@ -148,6 +148,103 @@ export const catalogListQuerySchema = z
   .strict();
 export type CatalogListQuery = z.infer<typeof catalogListQuerySchema>;
 
+const saleAmountSchema = z
+  .string()
+  .regex(/^(?:0|[1-9]\d{0,11})(?:\.\d{1,6})?$/);
+
+export const salePaymentMethods = ["CASH", "MANUAL"] as const;
+export const salePaymentMethodSchema = z.enum(salePaymentMethods);
+export type SalePaymentMethod = z.infer<typeof salePaymentMethodSchema>;
+
+export const saleCheckoutInputSchema = z
+  .object({
+    idempotencyKey: z.string().trim().min(8).max(128),
+    customerId: z.uuid().nullable().optional(),
+    items: z
+      .array(
+        z
+          .object({
+            catalogItemId: z.uuid(),
+            quantity: z.number().int().min(1).max(100_000),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(100),
+    discountAmount: saleAmountSchema.optional(),
+    paymentMethod: salePaymentMethodSchema,
+    paymentReference: z.string().trim().min(1).max(100).nullable().optional(),
+  })
+  .strict();
+export type SaleCheckoutInput = z.infer<typeof saleCheckoutInputSchema>;
+
+export const saleCancellationInputSchema = z
+  .object({ reason: z.string().trim().min(3).max(500) })
+  .strict();
+export type SaleCancellationInput = z.infer<typeof saleCancellationInputSchema>;
+
+export const saleRefundInputSchema = z
+  .object({
+    idempotencyKey: z.string().trim().min(8).max(128),
+    amount: saleAmountSchema,
+    reason: z.string().trim().min(3).max(500),
+  })
+  .strict();
+export type SaleRefundInput = z.infer<typeof saleRefundInputSchema>;
+
+export const saleListQuerySchema = z
+  .object({
+    branchId: z.uuid().optional(),
+    status: z
+      .enum(["COMPLETED", "PARTIALLY_REFUNDED", "REFUNDED", "CANCELLED"])
+      .optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    offset: z.coerce.number().int().min(0).max(10_000).default(0),
+  })
+  .strict();
+export type SaleListQuery = z.infer<typeof saleListQuerySchema>;
+
+const amountScale = 1_000_000n;
+
+function amountToMicros(amount: string): bigint {
+  const [whole = "0", fraction = ""] = amount.split(".");
+  return BigInt(whole) * amountScale + BigInt(fraction.padEnd(6, "0"));
+}
+
+function microsToAmount(amount: bigint): string {
+  const whole = amount / amountScale;
+  const fraction = (amount % amountScale).toString().padStart(6, "0");
+  return `${whole}.${fraction}`;
+}
+
+export function calculateSaleAmounts(
+  items: readonly { price: string; quantity: number }[],
+  discountAmount: string,
+  taxRateBasisPoints: number,
+): { subtotal: string; discount: string; tax: string; total: string } {
+  if (
+    !Number.isInteger(taxRateBasisPoints) ||
+    taxRateBasisPoints < 0 ||
+    taxRateBasisPoints > 10_000
+  ) {
+    throw new RangeError("Invalid configured tax rate.");
+  }
+  const subtotal = items.reduce(
+    (sum, item) => sum + amountToMicros(item.price) * BigInt(item.quantity),
+    0n,
+  );
+  const discount = amountToMicros(discountAmount);
+  if (discount > subtotal) throw new RangeError("Discount exceeds subtotal.");
+  const taxableAmount = subtotal - discount;
+  const tax = (taxableAmount * BigInt(taxRateBasisPoints) + 5_000n) / 10_000n;
+  return {
+    subtotal: microsToAmount(subtotal),
+    discount: microsToAmount(discount),
+    tax: microsToAmount(tax),
+    total: microsToAmount(taxableAmount + tax),
+  };
+}
+
 export interface Customer {
   id: string;
   organizationId: string;

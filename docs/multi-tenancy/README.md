@@ -24,6 +24,19 @@ Without tenant context, tenant rows are invisible and tenant writes fail. Never 
 
 Branches are organization-owned and use the typed lifecycle `ACTIVE`, `INACTIVE`, `SUSPENDED`, or `CLOSED`. Membership branch access defaults to `ASSIGNED` and can include multiple `membership_branches` assignments; trusted organization-wide membership access uses the explicit `ALL` mode. The server persists branch context in the existing session only after verifying the active organization, membership, branch, and assignment. Organization switching clears branch context. This selects a branch but is not complete branch-level data authorization: future branch-bearing business tables must include both organization and branch identity, use a composite `(organization_id, branch_id)` foreign key, apply branch predicates/RLS where appropriate, and query through authorized membership scope.
 
+The Branches management API reads and mutates the existing organization-owned
+`branches` rows. They remain under the existing `ENABLE` and `FORCE ROW LEVEL
+SECURITY` tenant policy. Permission keys and narrowly scoped runtime column
+grants do not replace or bypass that policy; no branch table or RLS policy is
+introduced for management.
+
+Membership branch assignments reuse the existing composite tenant foreign keys
+and forced RLS policy on `membership_branches`. `ASSIGNED` memberships use
+those rows to select active branches; `ALL` memberships continue to use all
+active branches regardless of assignment rows. The assignment API does not
+change `branch_access_mode`, and refuses assignment mutations in `ALL` mode so
+the stored associations cannot be mistaken for effective access changes.
+
 Phase 18 workflow executions and action-progress records remain owned by the
 source event's organization. Executions retain the event's verified branch
 when present, use same-organization foreign keys, and cannot be read outside

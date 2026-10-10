@@ -343,6 +343,227 @@ export const catalogItems = pgTable(
   ],
 );
 
+export const sales = pgTable(
+  "sales",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    saleNumber: varchar("sale_number", { length: 40 }).notNull(),
+    customerId: uuid("customer_id"),
+    cashierUserId: uuid("cashier_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull(),
+    subtotal: numeric("subtotal", { precision: 18, scale: 6 }).notNull(),
+    discount: numeric("discount", { precision: 18, scale: 6 })
+      .notNull()
+      .default("0"),
+    tax: numeric("tax", { precision: 18, scale: 6 }).notNull().default("0"),
+    total: numeric("total", { precision: 18, scale: 6 }).notNull(),
+    status: varchar("status", { length: 30 }).notNull().default("COMPLETED"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    unique("sales_organization_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    unique("sales_organization_branch_id_unique").on(
+      table.organizationId,
+      table.branchId,
+      table.id,
+    ),
+    unique("sales_org_number_unique").on(
+      table.organizationId,
+      table.saleNumber,
+    ),
+    unique("sales_org_idempotency_unique").on(
+      table.organizationId,
+      table.idempotencyKey,
+    ),
+    foreignKey({
+      name: "sales_organization_fk",
+      columns: [table.organizationId],
+      foreignColumns: [organizations.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "sales_branch_fk",
+      columns: [table.organizationId, table.branchId],
+      foreignColumns: [branches.organizationId, branches.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "sales_customer_fk",
+      columns: [table.organizationId, table.customerId],
+      foreignColumns: [customers.organizationId, customers.id],
+    }).onDelete("restrict"),
+    index("sales_org_branch_created_idx").on(
+      table.organizationId,
+      table.branchId,
+      table.createdAt,
+    ),
+    index("sales_org_status_created_idx").on(
+      table.organizationId,
+      table.status,
+      table.createdAt,
+    ),
+    check(
+      "sales_status_check",
+      sql`${table.status} IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED', 'CANCELLED')`,
+    ),
+    check("sales_currency_format", sql`${table.currency} ~ '^[A-Z]{3}$'`),
+    check("sales_subtotal_nonnegative", sql`${table.subtotal} >= 0`),
+    check("sales_discount_nonnegative", sql`${table.discount} >= 0`),
+    check(
+      "sales_discount_not_over_subtotal",
+      sql`${table.discount} <= ${table.subtotal}`,
+    ),
+    check("sales_tax_nonnegative", sql`${table.tax} >= 0`),
+    check("sales_total_nonnegative", sql`${table.total} >= 0`),
+    check(
+      "sales_totals_consistent",
+      sql`${table.total} = ${table.subtotal} - ${table.discount} + ${table.tax}`,
+    ),
+  ],
+);
+
+export const saleItems = pgTable(
+  "sale_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    saleId: uuid("sale_id").notNull(),
+    catalogItemId: uuid("catalog_item_id").notNull(),
+    itemReference: varchar("item_reference", { length: 100 }),
+    itemName: varchar("item_name", { length: 200 }).notNull(),
+    itemType: varchar("item_type", { length: 20 }).notNull(),
+    unit: varchar("unit", { length: 50 }).notNull(),
+    quantity: integer("quantity").notNull(),
+    unitPrice: numeric("unit_price", { precision: 18, scale: 6 }).notNull(),
+    lineSubtotal: numeric("line_subtotal", {
+      precision: 18,
+      scale: 6,
+    }).notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    unique("sale_items_organization_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    foreignKey({
+      name: "sale_items_sale_fk",
+      columns: [table.organizationId, table.branchId, table.saleId],
+      foreignColumns: [sales.organizationId, sales.branchId, sales.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "sale_items_catalog_fk",
+      columns: [table.organizationId, table.catalogItemId],
+      foreignColumns: [catalogItems.organizationId, catalogItems.id],
+    }).onDelete("restrict"),
+    index("sale_items_org_sale_idx").on(table.organizationId, table.saleId),
+    check("sale_items_quantity_positive", sql`${table.quantity} > 0`),
+    check("sale_items_price_nonnegative", sql`${table.unitPrice} >= 0`),
+    check(
+      "sale_items_subtotal_consistent",
+      sql`${table.lineSubtotal} = ${table.unitPrice} * ${table.quantity}`,
+    ),
+    check(
+      "sale_items_type_check",
+      sql`${table.itemType} IN ('PRODUCT', 'SERVICE')`,
+    ),
+  ],
+);
+
+export const salePayments = pgTable(
+  "sale_payments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    saleId: uuid("sale_id").notNull(),
+    paymentMethod: varchar("payment_method", { length: 20 }).notNull(),
+    amount: numeric("amount", { precision: 18, scale: 6 }).notNull(),
+    paymentReference: varchar("payment_reference", { length: 100 }),
+    recordedByUserId: uuid("recorded_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    unique("sale_payments_organization_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    unique("sale_payments_org_sale_unique").on(
+      table.organizationId,
+      table.saleId,
+    ),
+    foreignKey({
+      name: "sale_payments_sale_fk",
+      columns: [table.organizationId, table.branchId, table.saleId],
+      foreignColumns: [sales.organizationId, sales.branchId, sales.id],
+    }).onDelete("restrict"),
+    index("sale_payments_org_branch_created_idx").on(
+      table.organizationId,
+      table.branchId,
+      table.createdAt,
+    ),
+    check(
+      "sale_payments_method_check",
+      sql`${table.paymentMethod} IN ('CASH', 'MANUAL')`,
+    ),
+    check("sale_payments_amount_nonnegative", sql`${table.amount} >= 0`),
+  ],
+);
+
+export const saleRefunds = pgTable(
+  "sale_refunds",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    saleId: uuid("sale_id").notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    amount: numeric("amount", { precision: 18, scale: 6 }).notNull(),
+    reason: varchar("reason", { length: 500 }).notNull(),
+    recordedByUserId: uuid("recorded_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    unique("sale_refunds_organization_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    unique("sale_refunds_org_idempotency_unique").on(
+      table.organizationId,
+      table.idempotencyKey,
+    ),
+    foreignKey({
+      name: "sale_refunds_sale_fk",
+      columns: [table.organizationId, table.branchId, table.saleId],
+      foreignColumns: [sales.organizationId, sales.branchId, sales.id],
+    }).onDelete("restrict"),
+    index("sale_refunds_org_branch_created_idx").on(
+      table.organizationId,
+      table.branchId,
+      table.createdAt,
+    ),
+    check("sale_refunds_amount_positive", sql`${table.amount} > 0`),
+    check(
+      "sale_refunds_reason_nonempty",
+      sql`length(btrim(${table.reason})) >= 3`,
+    ),
+  ],
+);
+
 export const users = pgTable(
   "users",
   {

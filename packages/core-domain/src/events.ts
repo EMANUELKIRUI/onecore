@@ -225,6 +225,32 @@ const eventDefinitions = {
     compatibilityPolicy: "ADDITIVE_ONLY",
     payloadSchema: z.object({ catalogItemId: z.uuid() }).strict(),
   },
+  SALE_COMPLETED: {
+    version: 1,
+    owningModule: "sales",
+    description: "A branch-scoped sale was completed.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        saleId: z.uuid(),
+        saleNumber: z.string().trim().min(1).max(40),
+      })
+      .strict(),
+  },
+  SALE_CANCELLED: {
+    version: 1,
+    owningModule: "sales",
+    description: "A sale was cancelled.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z.object({ saleId: z.uuid() }).strict(),
+  },
+  SALE_REFUNDED: {
+    version: 1,
+    owningModule: "sales",
+    description: "A manual sale refund was recorded.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z.object({ saleId: z.uuid(), refundId: z.uuid() }).strict(),
+  },
   JOB_ENQUEUED: {
     version: 1,
     owningModule: "core.jobs",

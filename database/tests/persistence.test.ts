@@ -271,7 +271,7 @@ describe("PostgreSQL persistence foundation", () => {
     await client.close();
   });
 
-  it("migrates only the documented least-privilege runtime table grants", () => {
+  it("migrates only the documented least-privilege runtime table grants", async () => {
     const required = [
       "users:SELECT",
       "sessions:SELECT",
@@ -395,7 +395,6 @@ describe("PostgreSQL persistence foundation", () => {
 
     const forbidden = [
       "users:UPDATE",
-      "organizations:INSERT",
       "organizations:UPDATE",
       "users:DELETE",
       "users:INSERT",
@@ -419,6 +418,27 @@ describe("PostgreSQL persistence foundation", () => {
       );
     }
     expect(initialApplicationSchemaCreate).toBe(false);
+
+    const applicationInsertPolicy = await client.query<{
+      permissive: string;
+      cmd: string;
+      with_check: string | null;
+    }>(`
+      SELECT permissive, cmd, with_check
+      FROM pg_policies
+      WHERE schemaname = 'public'
+        AND tablename = 'organizations'
+        AND policyname = 'organizations_platform_superadmin_or_application_insert'
+    `);
+    expect(applicationInsertPolicy.rows).toHaveLength(1);
+    expect(applicationInsertPolicy.rows[0]).toMatchObject({
+      permissive: "RESTRICTIVE",
+      cmd: "INSERT",
+    });
+    expect(applicationInsertPolicy.rows[0]?.with_check).toContain("PENDING");
+    expect(applicationInsertPolicy.rows[0]?.with_check).toContain(
+      "organization_application_submission",
+    );
   });
 
   it("keeps lifecycle grants column-scoped and system-role provisioning restrictive", async () => {

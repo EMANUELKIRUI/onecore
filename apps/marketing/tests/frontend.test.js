@@ -7,6 +7,10 @@ const registration = await readFile(
   new URL("../register/index.html", import.meta.url),
   "utf8",
 );
+const registrationApplication = await readFile(
+  new URL("../register/registration.js", import.meta.url),
+  "utf8",
+);
 
 describe("public marketing experience", () => {
   it("provides the requested public sections and consistent sign-in entry points", () => {
@@ -32,18 +36,25 @@ describe("public marketing experience", () => {
     expect(page).not.toMatch(/https?:\/\/(?!localhost)/i);
   });
 
-  it("explains registration is blocked by backend scope without collecting data", () => {
+  it("describes the reviewed organization application flow", () => {
     expect(registration).toContain('id="registration-title"');
-    expect(registration).toContain("Online registration is not available yet");
     expect(registration).toContain(
-      "authenticated OneCore platform administrators",
+      "Submit your organization details for review.",
     );
-    expect(registration).toContain("PENDING");
-    expect(registration).toContain("No registration has been submitted.");
+    expect(registration).toContain('id="registration-form"');
+    expect(registration).toContain('src="./registration.js"');
+    expect(registrationApplication).toContain(
+      '"/public/organization-applications/modules"',
+    );
+    expect(registrationApplication).toContain(
+      '"/public/organization-applications"',
+    );
+    expect(registrationApplication).toContain('method: "POST"');
+    expect(registrationApplication).toContain("Your request is pending review");
     expect(registration).toContain('href="../../business/"');
-    expect(registration).not.toMatch(
-      /<form\b|fetch\(|localStorage|sessionStorage/i,
+    expect(registrationApplication).not.toMatch(/localStorage|sessionStorage/);
+    expect(registrationApplication).not.toMatch(
+      /plans?\s*:\s*\[|mock|fake api/i,
     );
-    expect(registration).not.toMatch(/plans?\s*:\s*\[|mock|fake api/i);
   });
 });

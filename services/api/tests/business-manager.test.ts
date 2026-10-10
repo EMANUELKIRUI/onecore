@@ -55,6 +55,11 @@ async function applyMigrations(): Promise<void> {
 }
 
 const permissionKeys = [
+  "core.organization.user.read",
+  "core.organization.user.update",
+  "core.organization.branch.read",
+  "core.organization.branch.create",
+  "core.organization.branch.update",
   "core.business_manager.customer.create",
   "core.business_manager.customer.read",
   "core.business_manager.customer.update",
@@ -97,7 +102,9 @@ function allowBusinessManager(): AuthorizationService {
       platformRoles: [],
       permissions: permissionKeys.map((key) => ({
         key,
-        moduleKey: "core.business_manager",
+        moduleKey: key.startsWith("core.organization.")
+          ? "core.organization"
+          : "core.business_manager",
         scopeType: "ORGANIZATION",
         scope: {},
       })),
@@ -243,6 +250,237 @@ describe("Business Manager API", () => {
     });
     expect(invalid.statusCode).toBe(400);
 
+    const createdBranch = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/branches`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { name: "Nairobi HQ", code: "hq", address: "Nairobi, Kenya" },
+    });
+    expect(createdBranch.statusCode).toBe(201);
+    expect(createdBranch.json().branch).toMatchObject({
+      name: "Nairobi HQ",
+      code: "HQ",
+      status: "ACTIVE",
+      address: "Nairobi, Kenya",
+    });
+    const branchId = createdBranch.json().branch.id as string;
+    const listedBranches = await app.inject({
+      method: "GET",
+      url: `/organizations/${organizationId}/branches?limit=1&offset=0`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(listedBranches.statusCode).toBe(200);
+    expect(listedBranches.json()).toMatchObject({
+      total: 1,
+      limit: 1,
+      items: [{ id: branchId, name: "Nairobi HQ", code: "HQ" }],
+    });
+    const duplicateBranch = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/branches`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { name: "Duplicate", code: "HQ" },
+    });
+    expect(duplicateBranch.statusCode).toBe(409);
+    const deactivatedBranch = await app.inject({
+      method: "PATCH",
+      url: `/organizations/${organizationId}/branches/${branchId}`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { name: "Nairobi Main", status: "INACTIVE" },
+    });
+    expect(deactivatedBranch.statusCode).toBe(200);
+    expect(deactivatedBranch.json().branch).toMatchObject({
+      name: "Nairobi Main",
+      status: "INACTIVE",
+    });
+    const reactivatedBranch = await app.inject({
+      method: "PATCH",
+      url: `/organizations/${organizationId}/branches/${branchId}`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { status: "ACTIVE" },
+    });
+    expect(reactivatedBranch.statusCode).toBe(200);
+    expect(reactivatedBranch.json().branch.status).toBe("ACTIVE");
+
+    const secondBranch = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/branches`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { name: "Mombasa Office", code: "MBA" },
+    });
+    expect(secondBranch.statusCode).toBe(201);
+    const secondBranchId = secondBranch.json().branch.id as string;
+
+    const assignmentUserRows = await database
+      .insert(schema.users)
+      .values({
+        email: "branch-assignment@onecore.test",
+        displayName: "Branch Assignment Target",
+        status: "ACTIVE",
+      })
+      .returning();
+    const assignmentUser = assignmentUserRows[0];
+    if (!assignmentUser) throw new Error("Assignment user fixture missing");
+    const assignmentMembershipRows = await database
+      .insert(schema.organizationMemberships)
+      .values({
+        organizationId,
+        userId: assignmentUser.id,
+        status: "ACTIVE",
+        branchAccessMode: "ASSIGNED",
+      })
+      .returning();
+    const assignmentMembership = assignmentMembershipRows[0];
+    if (!assignmentMembership)
+      throw new Error("Assignment membership fixture missing");
+    const assignmentsPath = `/organizations/${organizationId}/members/${assignmentMembership.id}/branches`;
+    const initialAssignments = await app.inject({
+      method: "GET",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(initialAssignments.statusCode).toBe(200);
+    expect(initialAssignments.json()).toEqual({
+      membershipId: assignmentMembership.id,
+      branchAccessMode: "ASSIGNED",
+      assignedBranches: [],
+    });
+    expect(initialAssignments.json()).not.toHaveProperty("userId");
+    const createdAssignments = await app.inject({
+      method: "POST",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [branchId, secondBranchId] },
+    });
+    expect(createdAssignments.statusCode).toBe(200);
+    expect(createdAssignments.json().assignedBranches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ branchId }),
+        expect.objectContaining({ branchId: secondBranchId }),
+      ]),
+    );
+    const repeatedAssignment = await app.inject({
+      method: "POST",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [branchId] },
+    });
+    expect(repeatedAssignment.statusCode).toBe(200);
+    expect(repeatedAssignment.json().assignedBranches).toHaveLength(2);
+    const foreignBranchAssignment = await app.inject({
+      method: "POST",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [crypto.randomUUID()] },
+    });
+    expect(foreignBranchAssignment.statusCode).toBe(404);
+    const removedAssignment = await app.inject({
+      method: "DELETE",
+      url: `${assignmentsPath}/${branchId}`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(removedAssignment.statusCode).toBe(200);
+    const remainingAssignments = await app.inject({
+      method: "GET",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(remainingAssignments.json().assignedBranches).toEqual([
+      expect.objectContaining({ branchId: secondBranchId }),
+    ]);
+
+    const allAccessUserRows = await database
+      .insert(schema.users)
+      .values({
+        email: "branch-all-access@onecore.test",
+        displayName: "All Branch Access Target",
+        status: "ACTIVE",
+      })
+      .returning();
+    const allAccessUser = allAccessUserRows[0];
+    if (!allAccessUser) throw new Error("ALL access user fixture missing");
+    const allAccessMembershipRows = await database
+      .insert(schema.organizationMemberships)
+      .values({
+        organizationId,
+        userId: allAccessUser.id,
+        status: "ACTIVE",
+        branchAccessMode: "ALL",
+      })
+      .returning();
+    const allAccessMembership = allAccessMembershipRows[0];
+    if (!allAccessMembership)
+      throw new Error("ALL access membership fixture missing");
+    const allAccessPath = `/organizations/${organizationId}/members/${allAccessMembership.id}/branches`;
+    const allAccessAssignment = await app.inject({
+      method: "POST",
+      url: allAccessPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [branchId] },
+    });
+    expect(allAccessAssignment.statusCode).toBe(409);
+    const allAccessRemoval = await app.inject({
+      method: "DELETE",
+      url: `${allAccessPath}/${branchId}`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(allAccessRemoval.statusCode).toBe(409);
+
+    const otherOrganizationRows = await database
+      .insert(schema.organizations)
+      .values({
+        name: "Other Assignment Tenant",
+        slug: `other-assignment-${crypto.randomUUID()}`,
+        industry: "TEST",
+        status: "ACTIVE",
+      })
+      .returning();
+    const otherOrganization = otherOrganizationRows[0];
+    if (!otherOrganization)
+      throw new Error("Other organization fixture missing");
+    const otherUserRows = await database
+      .insert(schema.users)
+      .values({
+        email: "other-assignment@onecore.test",
+        displayName: "Other Tenant Member",
+        status: "ACTIVE",
+      })
+      .returning();
+    const otherUser = otherUserRows[0];
+    if (!otherUser) throw new Error("Other user fixture missing");
+    const otherMembershipRows = await database
+      .insert(schema.organizationMemberships)
+      .values({
+        organizationId: otherOrganization.id,
+        userId: otherUser.id,
+        status: "ACTIVE",
+        branchAccessMode: "ASSIGNED",
+      })
+      .returning();
+    const otherMembership = otherMembershipRows[0];
+    if (!otherMembership) throw new Error("Other membership fixture missing");
+    const mismatchedMembership = await app.inject({
+      method: "GET",
+      url: `/organizations/${organizationId}/members/${otherMembership.id}/branches`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(mismatchedMembership.statusCode).toBe(404);
+    const mismatchedOrganization = await app.inject({
+      method: "GET",
+      url: `/organizations/${otherOrganization.id}/members/${assignmentMembership.id}/branches`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(mismatchedOrganization.statusCode).toBe(404);
+    const ownMembershipId = identity.memberships.get(userId)?.[0]?.membershipId;
+    if (!ownMembershipId) throw new Error("Actor membership fixture missing");
+    const selfAssignment = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/members/${ownMembershipId}/branches`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [branchId] },
+    });
+    expect(selfAssignment.statusCode).toBe(403);
+
     const customerResponse = await app.inject({
       method: "POST",
       url: `/organizations/${organizationId}/business/customers`,
@@ -387,6 +625,13 @@ describe("Business Manager API", () => {
       .where(sql`${schema.auditLogs.organizationId} = ${organizationId}`);
     expect(JSON.stringify(audits)).not.toContain("sales@acme.example");
     expect(audits.length).toBeGreaterThanOrEqual(6);
+    expect(audits.map(({ action }) => action)).toEqual(
+      expect.arrayContaining([
+        "membership.branch.assigned",
+        "membership.branch.unassigned",
+        "authorization.membership_branch.denied",
+      ]),
+    );
     await app.close();
   });
 
@@ -435,6 +680,45 @@ describe("Business Manager API", () => {
       cookies: { onecore_session: sessionSecret },
     });
     expect(denied.statusCode).toBe(403);
+    const deniedBranchRead = await app.inject({
+      method: "GET",
+      url: `/organizations/${organizationId}/branches`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const deniedBranchCreate = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/branches`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { name: "Restricted", code: "NOPE" },
+    });
+    const deniedBranchUpdate = await app.inject({
+      method: "PATCH",
+      url: `/organizations/${organizationId}/branches/${crypto.randomUUID()}`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { status: "INACTIVE" },
+    });
+    expect(deniedBranchRead.statusCode).toBe(403);
+    expect(deniedBranchCreate.statusCode).toBe(403);
+    expect(deniedBranchUpdate.statusCode).toBe(403);
+    const deniedMembershipBranchRead = await app.inject({
+      method: "GET",
+      url: `/organizations/${organizationId}/members/${crypto.randomUUID()}/branches`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const deniedMembershipBranchAssign = await app.inject({
+      method: "POST",
+      url: `/organizations/${organizationId}/members/${crypto.randomUUID()}/branches`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [crypto.randomUUID()] },
+    });
+    const deniedMembershipBranchUnassign = await app.inject({
+      method: "DELETE",
+      url: `/organizations/${organizationId}/members/${crypto.randomUUID()}/branches/${crypto.randomUUID()}`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(deniedMembershipBranchRead.statusCode).toBe(403);
+    expect(deniedMembershipBranchAssign.statusCode).toBe(403);
+    expect(deniedMembershipBranchUnassign.statusCode).toBe(403);
     await app.close();
 
     const authorizedApp = buildApp(
@@ -448,6 +732,18 @@ describe("Business Manager API", () => {
       cookies: { onecore_session: sessionSecret },
     });
     expect(foreign.statusCode).toBe(404);
+    const foreignBranches = await authorizedApp.inject({
+      method: "GET",
+      url: `/organizations/${otherOrganizationId}/branches`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(foreignBranches.statusCode).toBe(404);
+    const foreignMemberBranches = await authorizedApp.inject({
+      method: "GET",
+      url: `/organizations/${otherOrganizationId}/members/${crypto.randomUUID()}/branches`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(foreignMemberBranches.statusCode).toBe(404);
     await authorizedApp.close();
   });
 });

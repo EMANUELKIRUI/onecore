@@ -246,6 +246,9 @@ describe("lifecycle API routes", () => {
       headers: { "content-type": "application/json" },
       payload: { ...applicationPayload, ownerEmail: "not-an-email" },
     });
+    expect(invalid.statusCode).toBe(400);
+    expect(lifecycle.submitOrganizationApplication).not.toHaveBeenCalled();
+
     const duplicate = await app.inject({
       method: "POST",
       url: "/public/organization-applications",
@@ -253,9 +256,8 @@ describe("lifecycle API routes", () => {
       payload: applicationPayload,
     });
 
-    expect(invalid.statusCode).toBe(400);
-    expect(lifecycle.submitOrganizationApplication).not.toHaveBeenCalled();
     expect(duplicate.statusCode).toBe(409);
+    expect(lifecycle.submitOrganizationApplication).toHaveBeenCalledTimes(1);
     expect(duplicate.json().error.message).toBe(
       "An application using these details already exists.",
     );

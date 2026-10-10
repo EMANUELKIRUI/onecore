@@ -32,6 +32,9 @@ import {
   catalogItemCreateInputSchema,
   catalogItemUpdateInputSchema,
   catalogListQuerySchema,
+  calculateSaleAmounts,
+  saleCheckoutInputSchema,
+  saleRefundInputSchema,
   workflowTriggerEventTypes,
 } from "../src/index.js";
 
@@ -84,6 +87,42 @@ describe("platform domain values", () => {
     expect(() => catalogListQuerySchema.parse({ offset: "-1" })).toThrow();
   });
 
+  it("validates sale commands and calculates fixed-point totals", () => {
+    const sale = saleCheckoutInputSchema.parse({
+      idempotencyKey: "register-01-checkout-42",
+      items: [
+        {
+          catalogItemId: "11111111-1111-4111-8111-111111111111",
+          quantity: 3,
+        },
+      ],
+      discountAmount: "0.100000",
+      paymentMethod: "CASH",
+    });
+    expect(sale.items[0]?.quantity).toBe(3);
+    expect(
+      calculateSaleAmounts(
+        [{ price: "0.100001", quantity: 3 }],
+        "0.100000",
+        750,
+      ),
+    ).toEqual({
+      subtotal: "0.300003",
+      discount: "0.100000",
+      tax: "0.015000",
+      total: "0.215003",
+    });
+    expect(() =>
+      saleCheckoutInputSchema.parse({ items: [], total: "0" }),
+    ).toThrow();
+    expect(() =>
+      saleRefundInputSchema.parse({ amount: "1", reason: "ok" }),
+    ).toThrow();
+    expect(() =>
+      calculateSaleAmounts([{ price: "1.00", quantity: 1 }], "1.01", 0),
+    ).toThrow();
+  });
+
   it("keeps Business Manager mutation events outside the workflow trigger allowlist", () => {
     expect(workflowTriggerEventTypes).not.toContain("CUSTOMER_CREATED");
     expect(workflowTriggerEventTypes).not.toContain("CATALOG_ITEM_CREATED");
@@ -112,6 +151,52 @@ describe("platform domain values", () => {
     }
   });
 
+  it("defines separate sales payment, cancellation, and refund permissions", () => {
+    const permissions = new Set(permissionCatalog.map(({ key }) => key));
+    expect(permissions.has("sales.sale.create")).toBe(true);
+    expect(permissions.has("sales.sale.payment_record")).toBe(true);
+    expect(permissions.has("sales.sale.cancel")).toBe(true);
+    expect(permissions.has("sales.sale.refund")).toBe(true);
+  });
+
+  it("defines branch permissions for default organization roles", () => {
+    const permissions = new Set(permissionCatalog.map(({ key }) => key));
+    const branchPermissions = [
+      "core.organization.branch.read",
+      "core.organization.branch.create",
+      "core.organization.branch.update",
+    ];
+    for (const permission of branchPermissions) {
+      expect(permissions.has(permission)).toBe(true);
+    }
+    for (const roleName of [
+      "Organization Owner",
+      "Organization Admin",
+      "Manager",
+      "Staff",
+      "Viewer",
+    ]) {
+      const role = defaultOrganizationRoleTemplates.find(
+        ({ name }) => name === roleName,
+      );
+      expect(role).toBeDefined();
+      if (roleName === "Organization Owner") {
+        expect(role?.permissionKeys).toBeNull();
+        continue;
+      }
+      expect(role?.permissionKeys).toContain("core.organization.branch.read");
+      const canManageBranches = [
+        "Organization Admin",
+      ].includes(roleName);
+      expect(role?.permissionKeys?.includes("core.organization.branch.create")).toBe(
+        canManageBranches,
+      );
+      expect(role?.permissionKeys?.includes("core.organization.branch.update")).toBe(
+        canManageBranches,
+      );
+    }
+  });
+
   it("registers the required versioned platform event contracts", () => {
     expect(Object.keys(eventRegistry).sort()).toEqual(
       [
@@ -136,6 +221,9 @@ describe("platform domain values", () => {
         "JOB_COMPLETED",
         "JOB_FAILED",
         "NOTIFICATION_CREATED",
+        "SALE_CANCELLED",
+        "SALE_COMPLETED",
+        "SALE_REFUNDED",
         "COMMUNICATION_QUEUED",
         "STORAGE_OBJECT_CREATED",
         "STORAGE_OBJECT_DELETED",

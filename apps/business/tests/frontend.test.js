@@ -7,6 +7,10 @@ const application = await readFile(
   new URL("../app.js", import.meta.url),
   "utf8",
 );
+const branchApi = await readFile(
+  new URL("../../../services/api/src/branches.ts", import.meta.url),
+  "utf8",
+);
 const styles = await readFile(
   new URL("../../../packages/ui/styles.css", import.meta.url),
   "utf8",
@@ -74,13 +78,8 @@ describe("authenticated business shell", () => {
     ]) {
       expect(application).toContain(path);
     }
-    expect(application).toContain(
-      "Branch choices come only from the authenticated session",
-    );
     expect(application).toContain("no tenant-authorized audit read API");
-    expect(application).not.toMatch(
-      /\/organizations\/[^`"]+\/(branches|members|audit)/,
-    );
+    expect(application).not.toMatch(/\/organizations\/[^`"]+\/(members|audit)/);
     expect(application).not.toContain("version.body");
     expect(application).not.toContain("secretReference");
     expect(application).not.toMatch(
@@ -163,6 +162,27 @@ describe("Business Manager capability boundary", () => {
     expect(page).toContain('id="app-view"');
     expect(page).toContain('id="loading-view"');
     expect(application).toContain('"/auth/session"');
+    expect(page).toContain('id="branches-nav"');
+    expect(page).toMatch(/id="branches-nav"[\s\S]*?hidden/);
+    expect(application).toContain('"branches-nav"');
+    expect(application).toContain("async function loadBranchesView()");
+    expect(application).toContain("function renderBranchCreateForm");
+    expect(application).toContain("function renderBranchTable");
+    expect(application).toContain("createInlineBranchInput");
+    expect(application).toContain("capabilities.create === true");
+    expect(application).toContain("capabilities.update === true");
+    expect(application).toContain('method: "POST"');
+    expect(application).toContain('method: "PATCH"');
+    expect(branchApi).toContain(
+      'const collectionPath = "/organizations/:organizationId/branches"',
+    );
+    expect(branchApi).toContain("app.get(collectionPath");
+    expect(branchApi).toContain("app.post(collectionPath");
+    expect(branchApi).toContain("app.patch(resourcePath");
+    expect(application).not.toMatch(/\/branches\/(?:deactivate|reactivate)/);
+    expect(application).not.toMatch(
+      /\/organizations\/[^`"]+\/branches\/[^`"]+\/status/,
+    );
   });
 
   it("uses tenant-scoped Business Manager APIs for customer and catalog CRUD", () => {

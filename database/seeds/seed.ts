@@ -129,6 +129,11 @@ const moduleDefinitions = [
     name: "Business Manager",
     features: [],
   },
+  {
+    key: "sales",
+    name: "Sales & POS",
+    features: [],
+  },
 ];
 
 try {
@@ -563,6 +568,9 @@ try {
           "core.organization.user.read",
           "core.organization.user.create",
           "core.organization.user.update",
+          "core.organization.branch.read",
+          "core.organization.branch.create",
+          "core.organization.branch.update",
           "core.organization.settings.read",
           "core.organization.settings.update",
           "core.business_manager.customer.read",

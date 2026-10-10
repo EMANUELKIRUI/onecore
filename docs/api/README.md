@@ -15,7 +15,27 @@ The service is `services/api`. It requires `DATABASE_URL` for a non-owner, `NOBY
 
 Login failures return a generic 401 regardless of whether the account exists or is active. Login is rate-limited by IP. State-changing routes require JSON and validate browser origin. The cookie secret is never included in response JSON. See [authentication security](../security/authentication.md).
 
-Authentication is not the complete authorization engine. There are currently no business-domain CRUD routes. Any such routes must use `requireAuthenticated()` and `requireOrganizationMembership()`, then apply permission, module-entitlement, branch-row, and data-scope checks in the service/query before returning business data. Organization and branch IDs are requested context only; the server verifies current membership, organization/branch status, and branch access. Branch selection does not replace RBAC or data-scope checks. Platform roles do not grant operational access.
+Authentication is not the complete authorization engine. Business routes must validate membership, permission, module entitlement where applicable, branch-row access, and data scope before returning or mutating tenant data. Organization and branch IDs are requested context only; the server verifies current membership, organization/branch status, and branch access. Branch selection does not replace RBAC or data-scope checks. Platform roles do not grant operational access.
+
+## Branch management
+
+| Method  | Route                                                    | Permission                        | Behavior                                                                                                                                                     |
+| ------- | -------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET`   | `/organizations/:organizationId/branches?limit=&offset=` | `core.organization.branch.read`   | Lists tenant branches in name/code order and returns `items`, `total`, `limit`, `offset`, and the caller's `create`/`update` capabilities.                   |
+| `POST`  | `/organizations/:organizationId/branches`                | `core.organization.branch.create` | Creates an active branch from `name`, `code`, and optional string `address`. Duplicate codes return `409`.                                                   |
+| `PATCH` | `/organizations/:organizationId/branches/:branchId`      | `core.organization.branch.update` | Updates name, code, address, or active status. `INACTIVE` soft-deactivates and `ACTIVE` reactivates; suspended/closed lifecycle transitions are not exposed. |
+
+All routes require active organization membership and an organization-scoped permission grant. Route organization IDs are consistency checks, and branch rows remain protected by forced tenant RLS. List capability flags control frontend affordances only; each mutation independently checks its permission.
+
+## Membership branch assignments
+
+| Method   | Route                                                                     | Permission                      | Behavior                                                                                                                                                             |
+| -------- | ------------------------------------------------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/organizations/:organizationId/members/:membershipId/branches`           | `core.organization.user.read`   | Returns `membershipId`, `branchAccessMode`, and explicit `assignedBranches` containing only branch ID, name, code, and status. No user identity fields are returned. |
+| `POST`   | `/organizations/:organizationId/members/:membershipId/branches`           | `core.organization.user.update` | Accepts `{ "branchIds": ["<uuid>"] }`; atomically assigns one or more active branches to an active `ASSIGNED` membership. Repeated assignments are idempotent.       |
+| `DELETE` | `/organizations/:organizationId/members/:membershipId/branches/:branchId` | `core.organization.user.update` | Removes one explicit membership-branch assignment and returns `{ "removed": true, "membershipId": "...", "branchId": "..." }`.                                       |
+
+These routes require organization-scoped permission grants and verify the target membership and branches within the authenticated organization. Cross-organization targets return `404`; self-assignment is denied and audited. Assigning or unassigning while `branchAccessMode` is `ALL` returns `409` rather than silently changing effective access. `ALL` continues to grant all active branches; this API does not mutate the access mode. Each successful assignment or removal is audited in the same transaction. Existing forced RLS on `organization_memberships`, `membership_branches`, and `branches` remains in force; the API returns no user identity data.
 
 Validate every external input at the API boundary. Route handlers should delegate business decisions to application services; domain code must not depend on Fastify.
 

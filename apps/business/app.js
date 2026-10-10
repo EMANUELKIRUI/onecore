@@ -97,9 +97,110 @@ const workflowMessages = {
     "workflow.action.NOTIFICATION": "Arifa ya ndani ya programu",
   },
 };
+const branchMessages = {
+  en: {
+    "branches.nav": "Branches",
+    "branches.eyebrow": "Organization",
+    "branches.title": "Branches",
+    "branches.description":
+      "Manage branch names, codes, addresses, and active status.",
+    "branches.loading": "Loading branches…",
+    "branches.empty": "No branches are available for this organization.",
+    "branches.noMore": "There are no more branches.",
+    "branches.loadFailed": "Branches could not be loaded. Please try again.",
+    "branches.create": "Create branch",
+    "branches.createTitle": "New branch",
+    "branches.name": "Name",
+    "branches.code": "Code",
+    "branches.address": "Address (optional)",
+    "branches.status": "Status",
+    "branches.actions": "Actions",
+    "branches.active": "Active",
+    "branches.inactive": "Inactive",
+    "branches.suspended": "Suspended",
+    "branches.closed": "Closed",
+    "branches.edit": "Edit",
+    "branches.save": "Save changes",
+    "branches.cancel": "Cancel",
+    "branches.deactivate": "Deactivate",
+    "branches.reactivate": "Reactivate",
+    "branches.previous": "Previous",
+    "branches.next": "Next",
+    "branches.pageLabel": "Branch pages",
+    "branches.showing": "Showing {shown} of {total}",
+    "branches.created": "Branch created.",
+    "branches.updated": "Branch updated.",
+    "branches.deactivated": "Branch deactivated.",
+    "branches.reactivated": "Branch reactivated.",
+    "branches.confirmDeactivate": "Deactivate {name}?",
+    "branches.accessDenied": "You are not authorized to manage branches.",
+    "branches.error.network":
+      "The service could not be reached. Check your connection and try again.",
+    "branches.error.session": "Your session has expired. Sign in again.",
+    "branches.error.forbidden":
+      "You are not authorized to complete this request.",
+    "branches.error.invalid":
+      "Some entered values are invalid. Review them and try again.",
+    "branches.error.conflict":
+      "A branch with that code already exists. Refresh and try again.",
+    "branches.error.generic":
+      "The request could not be completed. Please try again.",
+    "branches.retry": "Retry",
+  },
+  sw: {
+    "branches.nav": "Matawi",
+    "branches.eyebrow": "Shirika",
+    "branches.title": "Matawi",
+    "branches.description":
+      "Dhibiti majina, misimbo, anwani na hali ya matawi.",
+    "branches.loading": "Inapakia matawi…",
+    "branches.empty": "Hakuna matawi yanayopatikana kwa shirika hili.",
+    "branches.noMore": "Hakuna matawi mengine.",
+    "branches.loadFailed":
+      "Imeshindikana kupakia matawi. Tafadhali jaribu tena.",
+    "branches.create": "Unda tawi",
+    "branches.createTitle": "Tawi jipya",
+    "branches.name": "Jina",
+    "branches.code": "Msimbo",
+    "branches.address": "Anwani (si lazima)",
+    "branches.status": "Hali",
+    "branches.actions": "Vitendo",
+    "branches.active": "Linafanya kazi",
+    "branches.inactive": "Limesitishwa",
+    "branches.suspended": "Limesimamishwa",
+    "branches.closed": "Limefungwa",
+    "branches.edit": "Hariri",
+    "branches.save": "Hifadhi mabadiliko",
+    "branches.cancel": "Ghairi",
+    "branches.deactivate": "Sitisha",
+    "branches.reactivate": "Washa tena",
+    "branches.previous": "Iliyotangulia",
+    "branches.next": "Inayofuata",
+    "branches.pageLabel": "Kurasa za matawi",
+    "branches.showing": "Inaonyesha {shown} kati ya {total}",
+    "branches.created": "Tawi limeundwa.",
+    "branches.updated": "Tawi limesasishwa.",
+    "branches.deactivated": "Tawi limesitishwa.",
+    "branches.reactivated": "Tawi limewashwa tena.",
+    "branches.confirmDeactivate": "Sitisha {name}?",
+    "branches.accessDenied": "Huna ruhusa ya kudhibiti matawi.",
+    "branches.error.network":
+      "Huduma haipatikani. Angalia muunganisho wako kisha ujaribu tena.",
+    "branches.error.session": "Kipindi chako kimeisha. Ingia tena.",
+    "branches.error.forbidden": "Huna ruhusa ya kutekeleza ombi hili.",
+    "branches.error.invalid":
+      "Baadhi ya thamani si sahihi. Zikague kisha ujaribu tena.",
+    "branches.error.conflict":
+      "Tawi lenye msimbo huo tayari lipo. Onyesha upya kisha ujaribu tena.",
+    "branches.error.generic": "Ombi halikukamilika. Tafadhali jaribu tena.",
+    "branches.retry": "Jaribu tena",
+  },
+};
 let currentTheme = 0;
 let currentSession;
 let workflowLoadSequence = 0;
+let branchLoadSequence = 0;
+let branchOffset = 0;
 let dashboardLoadSequence = 0;
 let workflowNavigationSequence = 0;
 let globalSearchSequence = 0;
@@ -205,6 +306,19 @@ function workflowText(key) {
     messages: workflowMessages,
     fallbackText: key,
   });
+}
+
+function branchText(key, values = {}) {
+  return translate(key, {
+    locale: preferenceLocale,
+    messages: branchMessages,
+    fallbackText: key,
+  }).replace(/\{(\w+)\}/g, (match, name) => values[name] ?? match);
+}
+
+function setBranchesNavigationText() {
+  document.querySelector("#branches-nav-label").textContent =
+    branchText("branches.nav");
 }
 
 function workflowStatusLabel(status) {
@@ -476,6 +590,7 @@ function renderRoleCards(container, roles) {
 
 function renderPreferences(container, result, organizationId) {
   preferenceLocale = resolveLocale(result.locale ?? workflowLocale);
+  setBranchesNavigationText();
   const localeField = document.createElement("div");
   localeField.className = "oc-field";
   const localeLabel = document.createElement("label");
@@ -502,6 +617,7 @@ function renderPreferences(container, result, organizationId) {
         { method: "PUT", body: { locale: localeSelect.value } },
       );
       preferenceLocale = resolveLocale(localeSelect.value);
+      setBranchesNavigationText();
       announce("Language preference updated.", "success");
     } catch (error) {
       announce(errorMessage(error), "error");
@@ -1187,33 +1303,7 @@ function loadBoundaryView(view) {
     return;
   }
   if (view === "branches") {
-    const branches = currentSession?.availableBranches ?? [];
-    if (branches.length === 0) {
-      appendText(
-        content,
-        "p",
-        "No active branches are available to your current organization membership.",
-        "oc-state oc-state--empty",
-      );
-      return;
-    }
-    renderSimpleTable(
-      content,
-      ["Branch", "Code", "Context"],
-      branches.map((branch) => [
-        branch.name,
-        branch.code || "—",
-        branch.branchId === currentSession.branch?.branchId
-          ? "Selected"
-          : "Available for selection",
-      ]),
-    );
-    appendText(
-      content,
-      "p",
-      "Branch choices come only from the authenticated session response. Use the verified branch selector above to switch context.",
-      "oc-help",
-    );
+    void loadBranchesView();
     return;
   }
   if (view === "members") {
@@ -1239,6 +1329,376 @@ function loadBoundaryView(view) {
     "Audit records are written by the platform, but there is no tenant-authorized audit read API available to this workspace. No activity is fabricated or inferred from unrelated data.",
     "oc-state oc-state--empty",
   );
+}
+
+function branchRequestError(error) {
+  if (error instanceof ApiError) {
+    if (error.status === 0) return branchText("branches.error.network");
+    if (error.status === 401) return branchText("branches.error.session");
+    if (error.status === 403) return branchText("branches.error.forbidden");
+    if (error.status === 400) return branchText("branches.error.invalid");
+    if (error.status === 409) return branchText("branches.error.conflict");
+  }
+  return branchText("branches.error.generic");
+}
+
+function appendBranchError(container, error, retry) {
+  const alert = appendText(
+    container,
+    "div",
+    branchRequestError(error),
+    "oc-alert oc-alert--error",
+  );
+  alert.setAttribute("role", "alert");
+  const button = document.createElement("button");
+  button.className = "oc-button oc-button--secondary";
+  button.type = "button";
+  button.textContent = branchText("branches.retry");
+  button.addEventListener("click", retry);
+  container.append(button);
+}
+
+function branchFormField(form, name, value = "", required = false) {
+  const field = document.createElement("div");
+  field.className = "oc-field";
+  const id = `branch-${name}`;
+  const label = document.createElement("label");
+  label.htmlFor = id;
+  label.textContent = branchText(`branches.${name}`);
+  const input = document.createElement("input");
+  input.id = id;
+  input.className = "oc-input";
+  input.name = name;
+  input.maxLength = name === "address" ? 1000 : name === "code" ? 50 : 200;
+  input.required = required;
+  input.value = value ?? "";
+  field.append(label, input);
+  form.append(field);
+  return input;
+}
+
+function renderBranchCreateForm(container) {
+  const form = document.createElement("form");
+  form.className = "oc-card oc-grid";
+  form.setAttribute("aria-label", branchText("branches.create"));
+  appendText(
+    form,
+    "h2",
+    branchText("branches.createTitle"),
+    "oc-section-title",
+  );
+  branchFormField(form, "name", "", true);
+  branchFormField(form, "code", "", true);
+  branchFormField(form, "address");
+  const error = appendText(form, "p", "", "oc-alert oc-alert--error");
+  error.setAttribute("role", "alert");
+  hide(error);
+  const submit = document.createElement("button");
+  submit.className = "oc-button";
+  submit.type = "submit";
+  submit.textContent = branchText("branches.create");
+  form.append(submit);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    hide(error);
+    if (!form.reportValidity()) return;
+    const values = Object.fromEntries(new FormData(form));
+    values.name = values.name.trim();
+    values.code = values.code.trim();
+    values.address = values.address.trim() || null;
+    setBusy(submit, true);
+    try {
+      await authenticatedRequest(branchesEndpoint(), {
+        method: "POST",
+        body: values,
+      });
+      branchOffset = 0;
+      announce(branchText("branches.created"), "success");
+      await loadBranchesView();
+    } catch (requestError) {
+      error.textContent = branchRequestError(requestError);
+      show(error);
+    } finally {
+      setBusy(submit, false);
+    }
+  });
+  container.append(form);
+}
+
+function branchesEndpoint() {
+  const organizationId = currentSession?.organization?.organizationId;
+  return organizationId
+    ? `/organizations/${encodeURIComponent(organizationId)}/branches`
+    : null;
+}
+
+function createInlineBranchInput(value, label, required = false) {
+  const input = document.createElement("input");
+  input.className = "oc-input";
+  input.value = value ?? "";
+  input.maxLength = label === "address" ? 1000 : label === "code" ? 50 : 200;
+  input.required = required;
+  input.setAttribute("aria-label", branchText(`branches.${label}`));
+  return input;
+}
+
+function renderBranchTable(container, items, canUpdate) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "oc-table-wrap";
+  const table = document.createElement("table");
+  table.className = "oc-table";
+  const headings = [
+    "branches.name",
+    "branches.code",
+    "branches.status",
+    "branches.address",
+    "branches.actions",
+  ];
+  const head = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  for (const key of headings) {
+    const cell = appendText(headerRow, "th", branchText(key));
+    cell.scope = "col";
+  }
+  head.append(headerRow);
+  const body = document.createElement("tbody");
+  for (const branch of items) {
+    const row = document.createElement("tr");
+    for (const value of [
+      branch.name,
+      branch.code,
+      branch.status,
+      branch.address || "—",
+    ]) {
+      const cell = document.createElement("td");
+      if (value === branch.status) {
+        const statusKey = `branches.${String(value).toLowerCase()}`;
+        cell.append(
+          createStatusBadge(
+            branchText(statusKey),
+            statusVariant(String(value)),
+          ),
+        );
+      } else {
+        cell.textContent = String(value ?? "—");
+      }
+      row.append(cell);
+    }
+    const actions = document.createElement("td");
+    actions.className = "oc-cluster";
+    if (canUpdate) {
+      const edit = document.createElement("button");
+      edit.className = "oc-button oc-button--quiet";
+      edit.type = "button";
+      edit.textContent = branchText("branches.edit");
+      edit.setAttribute(
+        "aria-label",
+        `${branchText("branches.edit")} ${branch.name}`,
+      );
+      edit.addEventListener("click", () => {
+        row.replaceChildren();
+        const nameCell = document.createElement("td");
+        const codeCell = document.createElement("td");
+        const statusCell = document.createElement("td");
+        const addressCell = document.createElement("td");
+        const actionCell = document.createElement("td");
+        const name = createInlineBranchInput(branch.name, "name", true);
+        const code = createInlineBranchInput(branch.code, "code", true);
+        const address = createInlineBranchInput(branch.address, "address");
+        nameCell.append(name);
+        codeCell.append(code);
+        statusCell.append(
+          createStatusBadge(
+            branchText(`branches.${branch.status.toLowerCase()}`),
+            statusVariant(branch.status),
+          ),
+        );
+        addressCell.append(address);
+        const save = document.createElement("button");
+        save.className = "oc-button oc-button--quiet";
+        save.type = "button";
+        save.textContent = branchText("branches.save");
+        save.addEventListener("click", async () => {
+          if (!name.reportValidity() || !code.reportValidity()) return;
+          save.disabled = true;
+          try {
+            await authenticatedRequest(
+              `${branchesEndpoint()}/${encodeURIComponent(branch.id)}`,
+              {
+                method: "PATCH",
+                body: {
+                  name: name.value.trim(),
+                  code: code.value.trim(),
+                  address: address.value.trim() || null,
+                },
+              },
+            );
+            announce(branchText("branches.updated"), "success");
+            await loadBranchesView();
+          } catch (requestError) {
+            appendBranchError(container, requestError, loadBranchesView);
+          } finally {
+            save.disabled = false;
+          }
+        });
+        const cancel = document.createElement("button");
+        cancel.className = "oc-button oc-button--secondary";
+        cancel.type = "button";
+        cancel.textContent = branchText("branches.cancel");
+        cancel.addEventListener("click", () => void loadBranchesView());
+        actionCell.append(save, cancel);
+        row.append(nameCell, codeCell, statusCell, addressCell, actionCell);
+        name.focus();
+      });
+      actions.append(edit);
+
+      if (["ACTIVE", "INACTIVE"].includes(branch.status)) {
+        const activate = branch.status === "INACTIVE";
+        const statusButton = document.createElement("button");
+        statusButton.className = "oc-button oc-button--quiet";
+        statusButton.type = "button";
+        statusButton.textContent = branchText(
+          activate ? "branches.reactivate" : "branches.deactivate",
+        );
+        statusButton.addEventListener("click", async () => {
+          if (
+            !activate &&
+            !window.confirm(
+              branchText("branches.confirmDeactivate", {
+                name: branch.name,
+              }),
+            )
+          ) {
+            return;
+          }
+          statusButton.disabled = true;
+          try {
+            await authenticatedRequest(
+              `${branchesEndpoint()}/${encodeURIComponent(branch.id)}`,
+              {
+                method: "PATCH",
+                body: { status: activate ? "ACTIVE" : "INACTIVE" },
+              },
+            );
+            announce(
+              branchText(
+                activate ? "branches.reactivated" : "branches.deactivated",
+              ),
+              "success",
+            );
+            await loadBranchesView();
+          } catch (requestError) {
+            appendBranchError(container, requestError, loadBranchesView);
+          } finally {
+            statusButton.disabled = false;
+          }
+        });
+        actions.append(statusButton);
+      }
+    }
+    row.append(actions);
+    body.append(row);
+  }
+  table.append(head, body);
+  wrapper.append(table);
+  container.append(wrapper);
+}
+
+async function loadBranchesView() {
+  const session = currentSession;
+  const organizationId = session?.organization?.organizationId;
+  const sequence = ++branchLoadSequence;
+  const content = document.querySelector("#boundary-content");
+  document.querySelector("#boundary-eyebrow").textContent =
+    branchText("branches.eyebrow");
+  document.querySelector("#boundary-title").textContent =
+    branchText("branches.title");
+  document.querySelector("#boundary-description").textContent = branchText(
+    "branches.description",
+  );
+  setBranchesNavigationText();
+  content.replaceChildren();
+  if (!organizationId) {
+    appendText(
+      content,
+      "p",
+      branchText("branches.accessDenied"),
+      "oc-state oc-state--empty",
+    );
+    return;
+  }
+  const loading = appendText(
+    content,
+    "p",
+    branchText("branches.loading"),
+    "oc-state oc-state--loading",
+  );
+  loading.setAttribute("role", "status");
+  try {
+    const params = new globalThis.URLSearchParams({
+      limit: "20",
+      offset: String(branchOffset),
+    });
+    const result = await authenticatedRequest(
+      `${branchesEndpoint()}?${params}`,
+    );
+    if (sequence !== branchLoadSequence || currentSession !== session) return;
+    content.replaceChildren();
+    const capabilities = result.capabilities ?? {};
+    if (capabilities.create === true) renderBranchCreateForm(content);
+    const items = Array.isArray(result.items) ? result.items : [];
+    if (items.length) {
+      renderBranchTable(content, items, capabilities.update === true);
+    } else {
+      appendText(
+        content,
+        "p",
+        branchOffset > 0
+          ? branchText("branches.noMore")
+          : branchText("branches.empty"),
+        "oc-state oc-state--empty",
+      ).setAttribute("role", "status");
+    }
+    const pagination = document.createElement("nav");
+    pagination.className = "oc-pagination";
+    pagination.setAttribute("aria-label", branchText("branches.pageLabel"));
+    const pageStatus = appendText(
+      pagination,
+      "span",
+      branchText("branches.showing", {
+        shown: items.length,
+        total: result.total ?? 0,
+      }),
+    );
+    pageStatus.setAttribute("role", "status");
+    const controls = document.createElement("div");
+    controls.className = "oc-pagination__controls";
+    const previous = document.createElement("button");
+    previous.className = "oc-button oc-button--secondary";
+    previous.type = "button";
+    previous.textContent = branchText("branches.previous");
+    previous.disabled = branchOffset === 0;
+    previous.addEventListener("click", () => {
+      branchOffset = Math.max(0, branchOffset - 20);
+      void loadBranchesView();
+    });
+    const next = document.createElement("button");
+    next.className = "oc-button oc-button--secondary";
+    next.type = "button";
+    next.textContent = branchText("branches.next");
+    next.disabled = branchOffset + items.length >= (result.total ?? 0);
+    next.addEventListener("click", () => {
+      branchOffset += 20;
+      void loadBranchesView();
+    });
+    controls.append(previous, next);
+    pagination.append(pageStatus, controls);
+    content.append(pagination);
+  } catch (requestError) {
+    if (sequence !== branchLoadSequence || currentSession !== session) return;
+    content.replaceChildren();
+    appendBranchError(content, requestError, loadBranchesView);
+  }
 }
 
 function businessResourceEndpoint(view) {
@@ -2231,6 +2691,11 @@ async function updateResourceNavigation(session) {
         `/organizations/${encodeURIComponent(organizationId)}/business/catalog?limit=1`,
     ],
     [
+      "branches-nav",
+      organizationId &&
+        `/organizations/${encodeURIComponent(organizationId)}/branches?limit=1`,
+    ],
+    [
       "notifications-nav",
       organizationId &&
         `/organizations/${encodeURIComponent(organizationId)}/notifications?limit=1`,
@@ -2295,6 +2760,8 @@ async function updateResourceNavigation(session) {
               false;
           } else if (id === "products-nav") {
             document.querySelector("#dashboard-catalog-action").hidden = false;
+          } else if (id === "branches-nav") {
+            setBranchesNavigationText();
           } else if (id === "notifications-nav") {
             document.querySelector("#notification-shortcut").hidden = false;
             document.querySelector("#dashboard-notifications-link").hidden =
@@ -2630,6 +3097,7 @@ function selectView(view) {
     : validViews.includes(view)
       ? view
       : "not-found";
+  if (selected !== "branches") branchLoadSequence += 1;
   const pageTitle =
     resourceViews[selected]?.title ??
     boundaryViews[selected]?.title ??
@@ -2688,7 +3156,13 @@ function selectView(view) {
 
 function renderSession(session) {
   globalSearchSequence += 1;
+  const previousOrganizationId = currentSession?.organization?.organizationId;
   currentSession = session;
+  if (previousOrganizationId !== session.organization?.organizationId) {
+    branchOffset = 0;
+    branchLoadSequence += 1;
+  }
+  setBranchesNavigationText();
   hide(loadingView);
   hide(errorView);
   hide(authView);

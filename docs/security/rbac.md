@@ -86,6 +86,12 @@ dispatch principal before creating an in-app notification. Stored session IDs
 are identifiers only, not credentials; revoked or expired sessions cannot
 authorize an action. UI navigation and route visibility do not grant access.
 
+Branch management uses `core.organization.branch.read` for listing and
+`core.organization.branch.create` / `core.organization.branch.update` for
+organization-scoped creation and editing, including soft
+deactivation/reactivation. Each API operation authorizes its own permission;
+the Business app's navigation and control visibility are usability hints only.
+
 ## Audit and future boundaries
 
 Permission decisions, prevented privilege escalation, and RBAC mutations use
