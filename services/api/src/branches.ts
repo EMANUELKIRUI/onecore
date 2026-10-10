@@ -53,6 +53,19 @@ interface OperationResponse {
   body: unknown;
 }
 
+function executeRows(result: unknown): Record<string, unknown>[] {
+  if (Array.isArray(result)) return result as Record<string, unknown>[];
+  if (
+    typeof result === "object" &&
+    result !== null &&
+    "rows" in result &&
+    Array.isArray(result.rows)
+  ) {
+    return result.rows as Record<string, unknown>[];
+  }
+  return [];
+}
+
 function requestContext(request: {
   auth: AuthorizationContext | null;
 }): AuthorizationContext | null {
@@ -248,7 +261,7 @@ export function registerBranchRoutes(
             ON CONFLICT ("organization_id", "code") DO NOTHING
             RETURNING "id"
           `);
-          const insertedId = inserted[0]?.id;
+          const insertedId = executeRows(inserted)[0]?.id;
           if (insertedId === undefined) return conflict();
           const parsedId = z.uuid().safeParse(insertedId);
           if (!parsedId.success) {

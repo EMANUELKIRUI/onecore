@@ -84,6 +84,42 @@ policy, so no Drizzle snapshot change is required. Branch inserts name only
 `organization_id`, `name`, and `code`; forced tenant RLS remains the row
 boundary. Review
 `20261010020000_branch_administration_contract/migration.sql` before applying.
+An isolated PostgreSQL 18.6 replay of its role-permission backfill with
+pre-existing Owner/Admin rows failed as `onecore_migrator` because the
+cross-tenant `role_permissions` insert has no transaction-local organization
+context. The deployment migration ledger must be checked before any repair;
+never edit this migration if it has been applied. A forward-only repair
+migration, `20261010040000_branch_permission_backfill_repair`, sets
+`app.current_organization_id` per tenant and backfills the missing branch and
+membership-branch permissions for every Organization Owner/Admin system role
+without widening tenant scope. The repair is repeatable and safe after the
+earlier backfill, but it does not replace or bypass that migration. The normal
+ordered runner cannot reach it while the predecessor is absent from the ledger
+and failing.
+
+Before migration or recovery in any environment, inspect that environment's
+ledger and verify the resulting permission rows using an authorized
+read-only connection. If `20261010020000_branch_administration_contract` is
+recorded, verify its effects and continue with the normal runner; the later
+repair will fill any missing branch or membership-branch grants. If it is not
+recorded, stop normal migration retries. Do not insert a ledger row by itself,
+skip the predecessor, or assume the later repair will execute. The migration
+owner must approve a controlled recovery that applies and verifies all effects
+of the predecessor, using tenant-scoped role-permission writes and preserving
+its grants, before truthfully recording successful completion in the ledger.
+Alternatively, restore a verified backup and follow the approved recovery
+procedure. A new later migration alone is not a recovery for this ordering
+failure. No deployment ledger was inspected as part of this change.
+
+The membership-branch assignment contract reuses the existing
+`membership_branches` relation, composite tenant foreign keys, and forced RLS
+policy. It adds separate organization-scoped read, assign, and remove
+permissions, backfills the two administrative system roles, and grants
+`onecore_app` only the required association insert columns and delete
+operation. No schema snapshot change is needed. Review
+`20261010030000_membership_branch_assignment_contract/migration.sql` and
+apply it with `onecore_migrator`; assignment writes remain tenant-scoped by
+`app.current_organization_id`.
 
 ## Production lifecycle mutations
 

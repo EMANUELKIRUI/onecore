@@ -7,6 +7,81 @@ retroactively assign status labels. See the [architecture overview](overview.md)
 [architecture decisions](adr/), and the [communications foundation](communications.md)
 for the recorded platform foundations.
 
+## Membership and Branch Administration
+
+### Status
+
+IMPLEMENTED — VERIFICATION PENDING
+
+### Scope
+
+Organization branch administration reuses the existing `branches` table and
+adds tenant-authorized listing, creation, update, code uniqueness, soft status
+changes, pagination, and the existing Business app interface. Membership
+branch administration reuses `membership_branches` and exposes separate
+organization-scoped read, assign, and remove permissions. Effective access
+reports active branches for both `ASSIGNED` and `ALL` membership modes;
+explicit assignment mutations are rejected in `ALL` mode. Changing the mode
+remains a trusted, separate operation and is not exposed by these routes.
+
+### Evidence and Remaining Work
+
+- The current `main`/`origin/main` baseline already contains the member
+  directory, branch CRUD API, branch UI, branch-code validation, and
+  insufficient-scope denial audit behavior.
+- Membership branch API tests pass through both route/RLS fixtures and the
+  centralized authorization service, including read-only denial, distinct
+  branch permissions, idempotent assignment, invalid/inactive/cross-tenant
+  references, `ALL` conflicts, self-target denial, removal, and audit records.
+- `npm run test -w @onecore/api -- tests/business-manager.test.ts` passes
+  (5 tests); `npm run typecheck -w @onecore/api` and
+  `npm run typecheck:test -w @onecore/api` pass. The Business app frontend
+  suite passes (15 tests).
+- PostgreSQL 18.6 accepted the full migration chain using
+  `onecore_migrator` with `NOSUPERUSER NOBYPASSRLS`. The new assignment
+  migration also succeeded as that role with existing Owner/Admin rows and
+  left affected tables owned by the migrator with forced RLS enabled.
+- Replaying the existing `20261010020000_branch_administration_contract`
+  role-permission backfill with pre-existing system roles fails as
+  `onecore_migrator` because the cross-tenant insert violates forced RLS on
+  `role_permissions`. The forward-only
+  `20261010040000_branch_permission_backfill_repair` migration now backfills
+  the branch and membership-branch permissions one tenant at a time. Its
+  idempotency was tested against two tenants in PGlite and its tenant-scoped
+  execution was tested in disposable PostgreSQL 18.6 after the assignment
+  migration.
+- The deployment migration ledger remains unknown. The ordered migration
+  runner cannot reach migration `20261010040000` if migration `20261010020000`
+  is still unapplied and fails on existing roles; that predecessor must be
+  reconciled based on the actual deployment ledger before continuing. Do not
+  edit the historical migration or manually advance a ledger without that
+  evidence.
+- Branch administration and membership assignment remain
+  `IMPLEMENTED — VERIFICATION PENDING` until the deployment migration history
+  is reconciled and a browser-level UI check is performed. Membership branch
+  assignment also has no Business app UI. No live production database was
+  accessed.
+
+## Sales/POS
+
+### Status
+
+BLOCKED
+
+The repository currently has Business Manager customer and catalog master
+data, but no sales tables, transaction API, payment/refund domain, POS
+frontend, or Sales/POS integration tests. The current Phase 18 roadmap
+explicitly excludes these business modules. Sales-related permission names in
+the broad catalog are not an implementation or entitlement decision. Before
+designing migrations or exposing navigation, product must approve scope,
+module/plan entitlement policy, supported local payment-record semantics, and
+the sales lifecycle. Until then, no organization or plan is automatically
+granted Sales access, and no Sales/POS capability is operational.
+
+The prompt-referenced migration `20261009155918_damp_anthem` is not present
+in this repository or current `main`; no corresponding Sales/POS tables,
+endpoint handlers, or Sales module registration were found.
+
 ## Phase 18 — Workflow Execution and Automation Foundation
 
 ### Status

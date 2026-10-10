@@ -35,15 +35,29 @@ It is not POS, Sales, Inventory, Finance, or CRM.
   identity, contact/address, country, currency, locale, and time zone.
   Lifecycle/name mutation and arbitrary JSON rendering are not supported.
 
-### Branches — PARTIALLY IMPLEMENTED
+### Branch administration — IMPLEMENTED — VERIFICATION PENDING
 
-- **Support:** Branch and membership-branch tables exist. Session identity
-  resolves active branches available to the current membership.
-- **API/authorization:** `GET /auth/session` returns authorized active branch
-  choices; `POST /auth/branch` validates access and updates session context.
-  There is no tenant branch-directory or branch-management route.
-- **UI:** Shows session-authorized choices and reuses the existing selector;
-  no branch CRUD/status editor.
+- **Support:** Branch and membership-branch tables exist with tenant-composite
+  keys and forced RLS. Session identity resolves active branches available to
+  the current membership.
+- **API/authorization:** Branch listing, creation, and update use
+  `core.organization.branch.read/create/update` at organization scope.
+  Membership branch listing, assignment, and removal use separate
+  `core.organization.membership_branch.read/assign/remove` permissions. The
+  assignment API rejects inactive or cross-tenant branches, self-targeting,
+  and explicit mutations against `ALL` memberships.
+- **UI:** The existing Business app provides paginated branch administration,
+  create/update forms, active/inactive status changes, and permission-aware
+  navigation. Membership branch assignment has no UI.
+- **Verification:** API tests cover route authorization, denial auditing,
+  branch-code validation, assignment idempotency, tenant/lifecycle checks,
+  and RLS. The assignment and repair migrations succeed as non-bypass
+  `onecore_migrator` on PostgreSQL 18.6 with existing Owner/Admin fixtures.
+  Replay of the earlier branch-admin permission backfill with existing roles
+  fails the forced-RLS check, and the ordered migration runner cannot reach
+  the later repair while that predecessor remains unapplied. The deployment
+  migration history must be reconciled, and membership assignment has no UI;
+  the feature is not complete.
 
 ### Customers — IMPLEMENTED
 

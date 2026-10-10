@@ -80,8 +80,14 @@ identity and membership status only. The member roles disclosure reads
 `core.rbac.membership_role.assign` and
 `core.rbac.membership_role.remove`. The UI is not an authorization boundary:
 the API enforces organization scope, protects owner capability and self-role
-changes, and audits role mutations. Organization lifecycle editing and branch
-management are not available. Likewise, there is no tenant-authorized
+changes, and audits role mutations. Organization lifecycle editing is not
+available. Branch administration is available through the permission-aware
+Branches view: it lists paginated organization branches and offers create,
+update, and `ACTIVE`/`INACTIVE` actions only when the API returns the matching
+capabilities. The API independently enforces `core.organization.branch.read`,
+`.create`, and `.update`, organization context, audit behavior, and forced
+RLS. Membership-to-branch assignment is not exposed in this UI. Likewise,
+there is no tenant-authorized
 audit-log read API or active-session/device revocation API. These unavailable
 capabilities are identified in the UI rather than represented with fake data
 or CRUD.

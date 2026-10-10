@@ -105,19 +105,20 @@ forced tenant RLS policy. Its explicit permission contract is:
 Every route verifies the route organization against the live authenticated
 membership and requires the matching permission at organization scope.
 
-| Method | Route | Request | Response |
-| ------ | ----- | ------- | -------- |
-| `GET` | `/organizations/:organizationId/branches?limit=&offset=` | Optional `limit` (1–100, default 50) and `offset` (0–10000, default 0). | `{ branches: [{ id, name, code, status, createdAt, updatedAt }], limit, offset, hasMore, capabilities: { canCreate, canUpdate } }`; includes inactive branches for administrative visibility. Capability values reflect organization-scoped grants and only guide UI visibility; mutation routes independently authorize each request. |
-| `POST` | `/organizations/:organizationId/branches` | `{ name, code }`; name is trimmed and required (max 200 characters), code is trimmed, uppercased, and restricted to 1–50 ASCII letters/digits/underscore/hyphen. | `201 { branch: { id, name, code, status, createdAt, updatedAt } }`; new branches use the existing `ACTIVE` default. Duplicate organization codes return `409`. |
-| `PATCH` | `/organizations/:organizationId/branches/:branchId` | A non-empty subset of `{ name, code, status }`; status accepts `ACTIVE` or `INACTIVE`. | `200 { branch: { id, name, code, status, createdAt, updatedAt } }`; a branch outside the active tenant returns `404`. |
+| Method  | Route                                                    | Request                                                                                                                                                          | Response                                                                                                                                                                                                                                                                                                                               |
+| ------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`   | `/organizations/:organizationId/branches?limit=&offset=` | Optional `limit` (1–100, default 50) and `offset` (0–10000, default 0).                                                                                          | `{ branches: [{ id, name, code, status, createdAt, updatedAt }], limit, offset, hasMore, capabilities: { canCreate, canUpdate } }`; includes inactive branches for administrative visibility. Capability values reflect organization-scoped grants and only guide UI visibility; mutation routes independently authorize each request. |
+| `POST`  | `/organizations/:organizationId/branches`                | `{ name, code }`; name is trimmed and required (max 200 characters), code is trimmed, uppercased, and restricted to 1–50 ASCII letters/digits/underscore/hyphen. | `201 { branch: { id, name, code, status, createdAt, updatedAt } }`; new branches use the existing `ACTIVE` default. Duplicate organization codes return `409`.                                                                                                                                                                         |
+| `PATCH` | `/organizations/:organizationId/branches/:branchId`      | A non-empty subset of `{ name, code, status }`; status accepts `ACTIVE` or `INACTIVE`.                                                                           | `200 { branch: { id, name, code, status, createdAt, updatedAt } }`; a branch outside the active tenant returns `404`.                                                                                                                                                                                                                  |
 
 Create and update operations write an append-only audit record in the same
 tenant transaction. Deactivation is a soft status change; rows are never
 deleted. Reactivation is supported by setting status back to `ACTIVE`.
-`SUSPENDED` and `CLOSED` lifecycle transitions, membership-to-branch
-assignment, changing `branchAccessMode`, branch hierarchy, branch-specific
-configuration, and business transactions are explicitly outside this slice.
-The existing `membership_branches` table is not mutated by these endpoints.
+`SUSPENDED` and `CLOSED` lifecycle transitions, changing `branchAccessMode`,
+branch hierarchy, branch-specific configuration, and business transactions
+are explicitly outside this slice. The separate membership assignment API
+below mutates the existing `membership_branches` relation; branch
+administration itself does not.
 
 The forward-only branch-administration migration adds the three permission
 catalog entries, grants them to existing system Organization Owner/Admin
@@ -125,3 +126,23 @@ roles, and adds only the branch insert/update column privileges needed by the
 API. It does not alter branch schema or RLS policy. The `onecore_app` insert
 uses only `organization_id`, `name`, and `code`; existing forced RLS continues
 to restrict rows to `app.current_organization_id`.
+
+## Membership branch assignments
+
+| Method   | Route                                                                     | Request                                  | Response                                                                                                                                                                                                                                                      |
+| -------- | ------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/organizations/:organizationId/members/:membershipId/branches`           | No body.                                 | `200 { membershipId, branchAccessMode, explicitAssignments, effectiveAccess: { mode, branches } }`; explicit assignments include inactive branches, while effective access includes active branches only. `ALL` resolves to every active organization branch. |
+| `POST`   | `/organizations/:organizationId/members/:membershipId/branches`           | `{ branchIds: [uuid, ...] }`, 1–100 IDs. | `200 { membershipId, assignedBranchIds, addedBranchIds }`; repeated IDs and repeated requests are idempotent.                                                                                                                                                 |
+| `DELETE` | `/organizations/:organizationId/members/:membershipId/branches/:branchId` | No body.                                 | `200 { membershipId, branchId, removed: true }`; a missing assignment returns a generic `404`.                                                                                                                                                                |
+
+The routes require the separate organization-scoped permissions
+`core.organization.membership_branch.read`,
+`core.organization.membership_branch.assign`, and
+`core.organization.membership_branch.remove`. Mutations require an active
+target membership and active same-organization branches, reject self-targets,
+and lock the target membership for the transaction. Explicit assignment
+mutations return `409` while `branchAccessMode` is `ALL`; mode transitions are
+not exposed. Permission decisions, self-target denials, and successful
+changes are recorded in the tenant audit log in the same transaction.
+Responses contain branch metadata only and never return membership identity
+details.

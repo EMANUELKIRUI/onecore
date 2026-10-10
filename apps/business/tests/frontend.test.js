@@ -89,9 +89,7 @@ describe("authenticated business shell", () => {
     expect(application).toContain('method: "DELETE"');
     expect(application).toContain("Watumiaji na wanachama");
     expect(page).toContain('id="members-nav"');
-    expect(application).not.toMatch(
-      /\/organizations\/[^`"]+\/(branches|audit)/,
-    );
+    expect(application).not.toMatch(/\/organizations\/[^`"]+\/audit/);
     expect(application).not.toContain("version.body");
     expect(application).not.toContain("secretReference");
     expect(application).not.toMatch(
@@ -109,6 +107,22 @@ describe("authenticated business shell", () => {
     expect(page).toContain('data-view="members"');
     expect(page).toContain('data-view="audit"');
     expect(page).toContain('aria-label="Breadcrumb"');
+  });
+
+  it("connects branch administration to permission-aware APIs", () => {
+    expect(application).toContain('"branches-nav"');
+    expect(application).toContain(
+      "/organizations/${encodeURIComponent(organizationId)}/branches?limit=20&offset=${branchOffset}",
+    );
+    expect(application).toContain("result.capabilities?.canCreate === true");
+    expect(application).toContain("result.capabilities?.canUpdate === true");
+    expect(application).toContain('method: "POST"');
+    expect(application).toContain('method: "PATCH"');
+    expect(application).toContain('branchText("branch.empty")');
+    expect(application).toContain('branchText("branch.loading")');
+    expect(application).toContain('branchText("branch.denied")');
+    expect(application).toContain('retry.textContent = "Retry"');
+    expect(application).not.toContain("session.permissions");
   });
 
   it("preserves semantic and responsive foundation requirements", () => {

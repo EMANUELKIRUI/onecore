@@ -170,6 +170,24 @@ describe("platform domain values", () => {
     }
   });
 
+  it("keeps membership branch read and mutation permissions distinct in admin provisioning", () => {
+    const branchPermissionKeys = [
+      "core.organization.membership_branch.read",
+      "core.organization.membership_branch.assign",
+      "core.organization.membership_branch.remove",
+    ];
+    const catalogKeys = new Set(permissionCatalog.map(({ key }) => key));
+    const adminRole = defaultOrganizationRoleTemplates.find(
+      ({ name }) => name === "Organization Admin",
+    );
+    expect(branchPermissionKeys.every((key) => catalogKeys.has(key))).toBe(
+      true,
+    );
+    expect(adminRole?.permissionKeys).toEqual(
+      expect.arrayContaining(branchPermissionKeys),
+    );
+  });
+
   it("registers the required versioned platform event contracts", () => {
     expect(Object.keys(eventRegistry).sort()).toEqual(
       [

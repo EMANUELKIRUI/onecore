@@ -51,6 +51,13 @@ column-scoped insert grants; updates are soft status/detail changes. This
 slice does not alter membership assignments or `branchAccessMode`, and does
 not change the existing `users` RLS policy.
 
+Membership branch assignment reuses the existing composite-key association
+and forced tenant RLS. The dedicated read, assign, and remove routes validate
+the authenticated organization, lock active target memberships, reject
+inactive or cross-tenant branches, and keep `ALL` memberships immutable from
+the explicit-assignment API. Runtime insert/delete grants do not expand table
+ownership or bypass RLS.
+
 Phase 18 workflow executions and action-progress records remain owned by the
 source event's organization. Executions retain the event's verified branch
 when present, use same-organization foreign keys, and cannot be read outside

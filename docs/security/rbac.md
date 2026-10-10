@@ -86,8 +86,14 @@ branch list, create, and update routes, and every operation additionally
 requires an organization-scoped grant. The update permission covers `ACTIVE`
 and `INACTIVE` soft-status transitions as well as name/code changes; branch
 rows remain protected by the existing forced tenant RLS policy. No permission
-for membership-to-branch assignment or `branchAccessMode` changes is introduced
-in this slice.
+for `branchAccessMode` changes is introduced in this slice. Membership branch
+assignment uses the separate organization-scoped
+`core.organization.membership_branch.read`,
+`core.organization.membership_branch.assign`, and
+`core.organization.membership_branch.remove` permissions. Read authority does
+not imply mutation authority. Assignment changes require an active target,
+reject self-targeting, and are unavailable while the target uses `ALL` branch
+access; all changes and denied self-target attempts are audited transactionally.
 
 Workflow execution history uses the existing
 `core.organization.workflows.read` permission and `core.configuration`

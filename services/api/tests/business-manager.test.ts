@@ -15,6 +15,7 @@ import type {
   OrganizationTransaction,
   ResolvedAuthorizationContext,
 } from "@onecore/database";
+import { createAuthorizationService } from "@onecore/database";
 import { loadConfig } from "@onecore/config";
 import * as schema from "@onecore/database";
 import { buildApp } from "../src/app.js";
@@ -72,11 +73,15 @@ const permissionKeys = [
   "core.organization.branch.read",
   "core.organization.branch.create",
   "core.organization.branch.update",
+  "core.organization.membership_branch.read",
+  "core.organization.membership_branch.assign",
+  "core.organization.membership_branch.remove",
 ] as const;
 
 function allowBusinessManager(
   permissions: readonly string[] = permissionKeys,
   scopeType: ResolvedAuthorizationContext["permissions"][number]["scopeType"] = "ORGANIZATION",
+  branchAccessMode: ResolvedAuthorizationContext["branchAccessMode"] = "ALL",
 ): AuthorizationService {
   async function withPermission<T>(
     requestContext: AuthorizationContext | null,
@@ -104,7 +109,7 @@ function allowBusinessManager(
       membershipId: requestContext.membershipId,
       branchId: requestContext.branchId,
       branch: null,
-      branchAccessMode: "ALL",
+      branchAccessMode,
       roles: [],
       platformRoles: [],
       permissions: permissions.map((key) => ({
@@ -878,6 +883,17 @@ describe("Business Manager API", () => {
     expect(limitedRoleAssignment.statusCode).toBe(403);
     expect(limitedRoleRemoval.statusCode).toBe(403);
     expect(limitedBranchRead.statusCode).toBe(403);
+    const branchScopeDenialAudits = await database
+      .select({ id: schema.auditLogs.id })
+      .from(schema.auditLogs)
+      .where(
+        sql`${schema.auditLogs.organizationId} = ${organization.id}
+          and ${schema.auditLogs.action} = 'authorization.permission.denied'
+          and ${schema.auditLogs.resourceId} = 'core.organization.branch.read'
+          and ${schema.auditLogs.requestMetadata}->>'target' = 'organization_branch'
+          and ${schema.auditLogs.requestMetadata}->>'reason' = 'insufficient_scope'`,
+      );
+    expect(branchScopeDenialAudits.length).toBeGreaterThan(0);
     await limitedScopeApp.close();
 
     const authorizedApp = buildApp(
@@ -930,6 +946,12 @@ describe("Business Manager API", () => {
       method: "GET",
       url: `/organizations/${otherOrganization.id}/branches`,
       cookies: { onecore_session: sessionSecret },
+    });
+    const invalidBranchCode = await authorizedApp.inject({
+      method: "POST",
+      url: branchesPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { name: "Invalid code", code: "CENTRAL OFFICE" },
     });
     const createdBranch = await authorizedApp.inject({
       method: "POST",
@@ -1076,7 +1098,8 @@ describe("Business Manager API", () => {
     });
     expect(invalidBranchList.statusCode).toBe(404);
     expect(foreignBranchList.statusCode).toBe(404);
-    expect(createdBranch.statusCode).toBe(201);
+    expect(invalidBranchCode.statusCode).toBe(400);
+    expect(createdBranch.statusCode, createdBranch.body).toBe(201);
     expect(createdBranch.json().branch).toMatchObject({
       name: "Central",
       code: "CENTRAL",
@@ -1289,5 +1312,715 @@ describe("Business Manager API", () => {
     });
     await readOnlyBranchApp.close();
     await authorizedApp.close();
+  });
+
+  it("lists, assigns, and removes membership branch assignments safely", async () => {
+    const [organization] = await database
+      .insert(schema.organizations)
+      .values({
+        name: "Branch Assignment Organization",
+        slug: `branch-assignment-${crypto.randomUUID()}`,
+        industry: "TEST",
+        status: "ACTIVE",
+      })
+      .returning();
+    const [otherOrganization] = await database
+      .insert(schema.organizations)
+      .values({
+        name: "Foreign Branch Assignment Organization",
+        slug: `foreign-branch-assignment-${crypto.randomUUID()}`,
+        industry: "TEST",
+        status: "ACTIVE",
+      })
+      .returning();
+    if (!organization || !otherOrganization) {
+      throw new Error("Branch assignment organizations were not created");
+    }
+    const createdUsers = await database
+      .insert(schema.users)
+      .values([
+        {
+          email: `branch-actor-${crypto.randomUUID()}@onecore.test`,
+          displayName: "Branch Assignment Actor",
+        },
+        {
+          email: `branch-target-${crypto.randomUUID()}@onecore.test`,
+          displayName: "Branch Assignment Target",
+        },
+        {
+          email: `branch-all-${crypto.randomUUID()}@onecore.test`,
+          displayName: "Organization-wide Target",
+        },
+        {
+          email: `branch-invited-${crypto.randomUUID()}@onecore.test`,
+          displayName: "Invited Target",
+        },
+        {
+          email: `branch-foreign-${crypto.randomUUID()}@onecore.test`,
+          displayName: "Foreign Target",
+        },
+      ])
+      .returning();
+    const [actor, target, allTarget, invitedTarget, foreignTarget] =
+      createdUsers;
+    if (!actor || !target || !allTarget || !invitedTarget || !foreignTarget) {
+      throw new Error("Branch assignment users were not created");
+    }
+    const createdMemberships = await database
+      .insert(schema.organizationMemberships)
+      .values([
+        {
+          organizationId: organization.id,
+          userId: actor.id,
+          status: "ACTIVE",
+          branchAccessMode: "ALL",
+        },
+        {
+          organizationId: organization.id,
+          userId: target.id,
+          status: "ACTIVE",
+          branchAccessMode: "ASSIGNED",
+        },
+        {
+          organizationId: organization.id,
+          userId: allTarget.id,
+          status: "ACTIVE",
+          branchAccessMode: "ALL",
+        },
+        {
+          organizationId: organization.id,
+          userId: invitedTarget.id,
+          status: "INVITED",
+          branchAccessMode: "ASSIGNED",
+        },
+        {
+          organizationId: otherOrganization.id,
+          userId: foreignTarget.id,
+          status: "ACTIVE",
+          branchAccessMode: "ASSIGNED",
+        },
+      ])
+      .returning();
+    const actorMembership = createdMemberships.find(
+      (membership) => membership.userId === actor.id,
+    );
+    const targetMembership = createdMemberships.find(
+      (membership) => membership.userId === target.id,
+    );
+    const allTargetMembership = createdMemberships.find(
+      (membership) => membership.userId === allTarget.id,
+    );
+    const invitedTargetMembership = createdMemberships.find(
+      (membership) => membership.userId === invitedTarget.id,
+    );
+    const foreignTargetMembership = createdMemberships.find(
+      (membership) => membership.userId === foreignTarget.id,
+    );
+    if (
+      !actorMembership ||
+      !targetMembership ||
+      !allTargetMembership ||
+      !invitedTargetMembership ||
+      !foreignTargetMembership
+    ) {
+      throw new Error("Branch assignment memberships were not created");
+    }
+    const createdBranches = await database
+      .insert(schema.branches)
+      .values([
+        {
+          organizationId: organization.id,
+          name: "Central",
+          code: `CENTRAL-${crypto.randomUUID().slice(0, 8)}`,
+          status: "ACTIVE",
+        },
+        {
+          organizationId: organization.id,
+          name: "South",
+          code: `SOUTH-${crypto.randomUUID().slice(0, 8)}`,
+          status: "ACTIVE",
+        },
+        {
+          organizationId: organization.id,
+          name: "Inactive",
+          code: `INACTIVE-${crypto.randomUUID().slice(0, 8)}`,
+          status: "INACTIVE",
+        },
+        {
+          organizationId: otherOrganization.id,
+          name: "Foreign",
+          code: `FOREIGN-${crypto.randomUUID().slice(0, 8)}`,
+          status: "ACTIVE",
+        },
+      ])
+      .returning();
+    const [centralBranch, southBranch, inactiveBranch, foreignBranch] =
+      createdBranches;
+    if (!centralBranch || !southBranch || !inactiveBranch || !foreignBranch) {
+      throw new Error("Branch assignment branches were not created");
+    }
+
+    const sessionSecret = "v".repeat(43);
+    const secretHash = createHash("sha256").update(sessionSecret).digest("hex");
+    const identity = new MemoryIdentityRepository();
+    identity.addUser({
+      id: actor.id,
+      email: actor.email,
+      displayName: actor.displayName,
+      status: "ACTIVE",
+      passwordHash: null,
+      failedLoginAttempts: 0,
+      failedLoginWindowStartedAt: null,
+      lockedUntil: null,
+      lastLoginAt: null,
+    });
+    identity.addMembership(actor.id, {
+      organizationId: organization.id,
+      name: organization.name,
+      slug: organization.slug,
+      branchAccessMode: "ALL",
+      membershipId: actorMembership.id,
+    });
+    identity.sessions.set(secretHash, {
+      id: crypto.randomUUID(),
+      secretHash,
+      userId: actor.id,
+      organizationId: organization.id,
+      branchId: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      lastUsedAt: new Date(),
+      revokedAt: null,
+      ipAddress: null,
+      userAgent: null,
+    });
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      allowBusinessManager(),
+    );
+    const assignmentsPath = `/organizations/${organization.id}/members/${targetMembership.id}/branches`;
+    const anonymous = await app.inject({
+      method: "GET",
+      url: assignmentsPath,
+    });
+    const anonymousAssign = await app.inject({
+      method: "POST",
+      url: assignmentsPath,
+      payload: { branchIds: [centralBranch.id] },
+    });
+    expect(anonymous.statusCode).toBe(401);
+    expect(anonymousAssign.statusCode).toBe(401);
+
+    const readOnlyApp = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      allowBusinessManager(["core.organization.membership_branch.read"]),
+    );
+    const readOnlyList = await readOnlyApp.inject({
+      method: "GET",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const readOnlyAssign = await readOnlyApp.inject({
+      method: "POST",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [centralBranch.id] },
+    });
+    const readOnlyRemove = await readOnlyApp.inject({
+      method: "DELETE",
+      url: `${assignmentsPath}/${centralBranch.id}`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(readOnlyList.statusCode).toBe(200);
+    expect(readOnlyAssign.statusCode).toBe(403);
+    expect(readOnlyRemove.statusCode).toBe(403);
+    await readOnlyApp.close();
+
+    const assigned = await app.inject({
+      method: "POST",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: {
+        branchIds: [centralBranch.id, centralBranch.id, southBranch.id],
+      },
+    });
+    const repeated = await app.inject({
+      method: "POST",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [centralBranch.id, southBranch.id] },
+    });
+    const listed = await app.inject({
+      method: "GET",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const inactiveBranchResponse = await app.inject({
+      method: "POST",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [inactiveBranch.id] },
+    });
+    const foreignBranchAssignment = await app.inject({
+      method: "POST",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [foreignBranch.id] },
+    });
+    const allModeAssignment = await app.inject({
+      method: "POST",
+      url: `/organizations/${organization.id}/members/${allTargetMembership.id}/branches`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [centralBranch.id] },
+    });
+    const selfTarget = await app.inject({
+      method: "POST",
+      url: `/organizations/${organization.id}/members/${actorMembership.id}/branches`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [centralBranch.id] },
+    });
+    const inactiveMembership = await app.inject({
+      method: "POST",
+      url: `/organizations/${organization.id}/members/${invitedTargetMembership.id}/branches`,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [centralBranch.id] },
+    });
+    const foreignMembership = await app.inject({
+      method: "GET",
+      url: `/organizations/${organization.id}/members/${foreignTargetMembership.id}/branches`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const wrongOrganization = await app.inject({
+      method: "GET",
+      url: `/organizations/${otherOrganization.id}/members/${targetMembership.id}/branches`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const removeExisting = await app.inject({
+      method: "DELETE",
+      url: `${assignmentsPath}/${centralBranch.id}`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const removeMissing = await app.inject({
+      method: "DELETE",
+      url: `${assignmentsPath}/${centralBranch.id}`,
+      cookies: { onecore_session: sessionSecret },
+    });
+
+    expect(assigned.statusCode, assigned.body).toBe(200);
+    expect(assigned.json().assignedBranchIds).toEqual([
+      centralBranch.id,
+      southBranch.id,
+    ]);
+    expect(assigned.json().addedBranchIds).toHaveLength(2);
+    expect(repeated.statusCode).toBe(200);
+    expect(repeated.json().addedBranchIds).toEqual([]);
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({
+      membershipId: targetMembership.id,
+      branchAccessMode: "ASSIGNED",
+      explicitAssignments: expect.arrayContaining([
+        expect.objectContaining({ id: centralBranch.id, status: "ACTIVE" }),
+        expect.objectContaining({ id: southBranch.id, status: "ACTIVE" }),
+      ]),
+      effectiveAccess: {
+        mode: "ASSIGNED",
+        branches: expect.arrayContaining([
+          expect.objectContaining({ id: centralBranch.id }),
+          expect.objectContaining({ id: southBranch.id }),
+        ]),
+      },
+    });
+    expect(inactiveBranchResponse.statusCode).toBe(404);
+    expect(foreignBranchAssignment.statusCode).toBe(404);
+    expect(allModeAssignment.statusCode).toBe(409);
+    expect(selfTarget.statusCode).toBe(403);
+    expect(inactiveMembership.statusCode).toBe(404);
+    expect(foreignMembership.statusCode).toBe(404);
+    expect(wrongOrganization.statusCode).toBe(404);
+    expect(removeExisting.statusCode).toBe(200);
+    expect(removeMissing.statusCode).toBe(404);
+
+    const remainingAssignments = await database
+      .select({ branchId: schema.membershipBranches.branchId })
+      .from(schema.membershipBranches)
+      .where(
+        sql`${schema.membershipBranches.organizationId} = ${organization.id}
+          and ${schema.membershipBranches.membershipId} = ${targetMembership.id}`,
+      );
+    expect(remainingAssignments.map(({ branchId }) => branchId)).toEqual([
+      southBranch.id,
+    ]);
+    const assignmentAudits = await database
+      .select({ action: schema.auditLogs.action })
+      .from(schema.auditLogs)
+      .where(
+        sql`${schema.auditLogs.organizationId} = ${organization.id}
+          and ${schema.auditLogs.resource} = 'membership_branch'`,
+      );
+    const assignmentActions = assignmentAudits.map(({ action }) => action);
+    expect(
+      assignmentActions.filter(
+        (action) => action === "membership.branch.assigned",
+      ),
+    ).toHaveLength(2);
+    expect(
+      assignmentActions.filter(
+        (action) => action === "membership.branch.removed",
+      ),
+    ).toHaveLength(1);
+    await app.close();
+  });
+
+  it("enforces branch assignment permissions through centralized authorization", async () => {
+    const [organization] = await database
+      .insert(schema.organizations)
+      .values({
+        name: "Central Authorization Organization",
+        slug: `central-branch-auth-${crypto.randomUUID()}`,
+        industry: "TEST",
+        status: "ACTIVE",
+      })
+      .returning();
+    const [actor, target] = await database
+      .insert(schema.users)
+      .values([
+        {
+          email: `central-actor-${crypto.randomUUID()}@onecore.test`,
+          displayName: "Central Authorization Actor",
+        },
+        {
+          email: `central-target-${crypto.randomUUID()}@onecore.test`,
+          displayName: "Central Authorization Target",
+        },
+      ])
+      .returning();
+    if (!organization || !actor || !target) {
+      throw new Error("Central authorization fixtures were not created");
+    }
+    const [actorMembership, targetMembership] = await database
+      .insert(schema.organizationMemberships)
+      .values([
+        {
+          organizationId: organization.id,
+          userId: actor.id,
+          status: "ACTIVE",
+          branchAccessMode: "ALL",
+        },
+        {
+          organizationId: organization.id,
+          userId: target.id,
+          status: "ACTIVE",
+          branchAccessMode: "ASSIGNED",
+        },
+      ])
+      .returning();
+    if (!actorMembership || !targetMembership) {
+      throw new Error("Central authorization memberships were not created");
+    }
+    const [branch] = await database
+      .insert(schema.branches)
+      .values({
+        organizationId: organization.id,
+        name: "Authorized Branch",
+        code: `AUTHORIZED-${crypto.randomUUID().slice(0, 8)}`,
+      })
+      .returning();
+    const [role] = await database
+      .insert(schema.roles)
+      .values({ organizationId: organization.id, name: "Assignment Reader" })
+      .returning();
+    if (!branch || !role) {
+      throw new Error("Central authorization branch or role was not created");
+    }
+    await database.insert(schema.membershipRoles).values({
+      organizationId: organization.id,
+      membershipId: actorMembership.id,
+      roleId: role.id,
+    });
+    const [readPermission] = await database
+      .select({ id: schema.permissions.id })
+      .from(schema.permissions)
+      .where(
+        eq(schema.permissions.key, "core.organization.membership_branch.read"),
+      )
+      .limit(1);
+    const [assignPermission] = await database
+      .select({ id: schema.permissions.id })
+      .from(schema.permissions)
+      .where(
+        eq(
+          schema.permissions.key,
+          "core.organization.membership_branch.assign",
+        ),
+      )
+      .limit(1);
+    const [removePermission] = await database
+      .select({ id: schema.permissions.id })
+      .from(schema.permissions)
+      .where(
+        eq(
+          schema.permissions.key,
+          "core.organization.membership_branch.remove",
+        ),
+      )
+      .limit(1);
+    if (!readPermission || !assignPermission || !removePermission) {
+      throw new Error("Membership branch permissions were not migrated");
+    }
+    await database.insert(schema.rolePermissions).values({
+      organizationId: organization.id,
+      roleId: role.id,
+      permissionId: readPermission.id,
+      scopeType: "ORGANIZATION",
+    });
+
+    const [module] = await database
+      .insert(schema.modules)
+      .values({
+        key: "core.organization",
+        name: "Organization Administration",
+        lifecycle: "AVAILABLE",
+        isAvailable: true,
+      })
+      .onConflictDoUpdate({
+        target: schema.modules.key,
+        set: {
+          name: "Organization Administration",
+          lifecycle: "AVAILABLE",
+          isAvailable: true,
+        },
+      })
+      .returning({ id: schema.modules.id });
+    if (!module) throw new Error("Organization module was not provisioned");
+    const manifest = {
+      name: "core.organization",
+      version: "1.0.0",
+      displayName: "Organization Administration",
+      lifecycle: "AVAILABLE",
+      description: "Organization administration module",
+      dependencies: [],
+      permissions: [],
+      features: [],
+    };
+    await database
+      .insert(schema.moduleVersions)
+      .values({
+        moduleId: module.id,
+        version: "1.0.0",
+        status: "AVAILABLE",
+        manifest,
+      })
+      .onConflictDoUpdate({
+        target: [schema.moduleVersions.moduleId, schema.moduleVersions.version],
+        set: { status: "AVAILABLE", manifest },
+      });
+    await database
+      .insert(schema.organizationModules)
+      .values({
+        organizationId: organization.id,
+        moduleId: module.id,
+        status: "ENABLED",
+        source: "MANUAL",
+        enabledAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [
+          schema.organizationModules.organizationId,
+          schema.organizationModules.moduleId,
+        ],
+        set: { status: "ENABLED", enabledAt: new Date() },
+      });
+    const [plan] = await database
+      .insert(schema.plans)
+      .values({
+        key: `branch-auth-${crypto.randomUUID()}`,
+        name: "Branch Authorization Test",
+        billingInterval: "MONTHLY",
+        currencyCode: "KES",
+        amount: "0.000000",
+        isAvailable: true,
+      })
+      .returning({ id: schema.plans.id });
+    if (!plan) throw new Error("Authorization test plan was not created");
+    await database.insert(schema.planModules).values({
+      planId: plan.id,
+      moduleId: module.id,
+    });
+    const [subscription] = await database
+      .insert(schema.subscriptions)
+      .values({
+        organizationId: organization.id,
+        status: "ACTIVE",
+        startsAt: new Date(Date.now() - 60_000),
+        endsAt: new Date(Date.now() + 60_000),
+      })
+      .returning({ id: schema.subscriptions.id });
+    if (!subscription) {
+      throw new Error("Authorization test subscription was not created");
+    }
+    await database.insert(schema.subscriptionItems).values({
+      organizationId: organization.id,
+      subscriptionId: subscription.id,
+      planId: plan.id,
+      amount: "0.000000",
+      currencyCode: "KES",
+    });
+
+    const sessionSecret = "w".repeat(43);
+    const secretHash = createHash("sha256").update(sessionSecret).digest("hex");
+    const sessionId = crypto.randomUUID();
+    await database.insert(schema.sessions).values({
+      id: sessionId,
+      secretHash,
+      userId: actor.id,
+      organizationId: organization.id,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const identity = new MemoryIdentityRepository();
+    identity.addUser({
+      id: actor.id,
+      email: actor.email,
+      displayName: actor.displayName,
+      status: "ACTIVE",
+      passwordHash: null,
+      failedLoginAttempts: 0,
+      failedLoginWindowStartedAt: null,
+      lockedUntil: null,
+      lastLoginAt: null,
+    });
+    identity.addMembership(actor.id, {
+      organizationId: organization.id,
+      name: organization.name,
+      slug: organization.slug,
+      branchAccessMode: "ALL",
+      membershipId: actorMembership.id,
+    });
+    identity.sessions.set(secretHash, {
+      id: sessionId,
+      secretHash,
+      userId: actor.id,
+      organizationId: organization.id,
+      branchId: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      lastUsedAt: new Date(),
+      revokedAt: null,
+      ipAddress: null,
+      userAgent: null,
+    });
+    const applicationDatabase = {
+      transaction: (
+        operation: (transaction: OrganizationTransaction) => Promise<unknown>,
+      ) =>
+        database.transaction(async (transaction) => {
+          await transaction.execute(sql`SET LOCAL ROLE onecore_app`);
+          return operation(transaction as unknown as OrganizationTransaction);
+        }),
+    } as never;
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      createAuthorizationService(applicationDatabase),
+    );
+    const assignmentsPath = `/organizations/${organization.id}/members/${targetMembership.id}/branches`;
+    const list = await app.inject({
+      method: "GET",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const deniedAssign = await app.inject({
+      method: "POST",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [branch.id] },
+    });
+    expect(list.statusCode).toBe(200);
+    expect(deniedAssign.statusCode).toBe(403);
+
+    await database.insert(schema.rolePermissions).values({
+      organizationId: organization.id,
+      roleId: role.id,
+      permissionId: assignPermission.id,
+      scopeType: "ORGANIZATION",
+    });
+    const allowedAssign = await app.inject({
+      method: "POST",
+      url: assignmentsPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { branchIds: [branch.id] },
+    });
+    expect(allowedAssign.statusCode).toBe(200);
+    const deniedRemove = await app.inject({
+      method: "DELETE",
+      url: `${assignmentsPath}/${branch.id}`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(deniedRemove.statusCode).toBe(403);
+    await database.insert(schema.rolePermissions).values({
+      organizationId: organization.id,
+      roleId: role.id,
+      permissionId: removePermission.id,
+      scopeType: "ORGANIZATION",
+    });
+    const allowedRemove = await app.inject({
+      method: "DELETE",
+      url: `${assignmentsPath}/${branch.id}`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(allowedRemove.statusCode).toBe(200);
+
+    const [branchReadPermission] = await database
+      .select({ id: schema.permissions.id })
+      .from(schema.permissions)
+      .where(eq(schema.permissions.key, "core.organization.branch.read"))
+      .limit(1);
+    const [branchCreatePermission] = await database
+      .select({ id: schema.permissions.id })
+      .from(schema.permissions)
+      .where(eq(schema.permissions.key, "core.organization.branch.create"))
+      .limit(1);
+    if (!branchReadPermission || !branchCreatePermission) {
+      throw new Error("Branch administration permissions were not migrated");
+    }
+    const branchesPath = `/organizations/${organization.id}/branches`;
+    const deniedBranchRead = await app.inject({
+      method: "GET",
+      url: branchesPath,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(deniedBranchRead.statusCode).toBe(403);
+    await database.insert(schema.rolePermissions).values({
+      organizationId: organization.id,
+      roleId: role.id,
+      permissionId: branchReadPermission.id,
+      scopeType: "ORGANIZATION",
+    });
+    const allowedBranchRead = await app.inject({
+      method: "GET",
+      url: branchesPath,
+      cookies: { onecore_session: sessionSecret },
+    });
+    const deniedBranchCreate = await app.inject({
+      method: "POST",
+      url: branchesPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { name: "Not granted", code: "NOT-GRANTED" },
+    });
+    expect(allowedBranchRead.statusCode).toBe(200);
+    expect(deniedBranchCreate.statusCode).toBe(403);
+    await database.insert(schema.rolePermissions).values({
+      organizationId: organization.id,
+      roleId: role.id,
+      permissionId: branchCreatePermission.id,
+      scopeType: "ORGANIZATION",
+    });
+    const allowedBranchCreate = await app.inject({
+      method: "POST",
+      url: branchesPath,
+      cookies: { onecore_session: sessionSecret },
+      payload: { name: "Authorized Branch Two", code: "AUTHORIZED-2" },
+    });
+    expect(allowedBranchCreate.statusCode).toBe(201);
+    await app.close();
   });
 });
