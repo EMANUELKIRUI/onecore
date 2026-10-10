@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -173,6 +173,104 @@ describe("Sales persistence", () => {
 
   afterAll(async () => {
     await client.close();
+  });
+
+  it("preserves disabled Sales module and permissions when provisioning is replayed", async () => {
+    const statements = (await readFile(salesMigrationPath, "utf8"))
+      .split("--> statement-breakpoint")
+      .map((statement) => statement.trim());
+    const moduleProvisioning = statements.find((statement) =>
+      statement.startsWith('INSERT INTO "modules"'),
+    );
+    const permissionProvisioning = statements.find((statement) =>
+      statement.startsWith('INSERT INTO "permissions"'),
+    );
+    if (!moduleProvisioning || !permissionProvisioning) {
+      throw new Error("Sales module and permission provisioning was not found");
+    }
+
+    const [salesModule] = await database
+      .select({
+        lifecycle: schema.modules.lifecycle,
+        isAvailable: schema.modules.isAvailable,
+      })
+      .from(schema.modules)
+      .where(eq(schema.modules.key, "core.sales"));
+    const permissions = await database
+      .select({
+        key: schema.permissions.key,
+        status: schema.permissions.status,
+      })
+      .from(schema.permissions)
+      .where(
+        inArray(schema.permissions.key, [
+          "core.sales.sale.create",
+          "core.sales.sale.read",
+        ]),
+      );
+    if (!salesModule || permissions.length !== 2) {
+      throw new Error("Sales provisioning rows were not migrated");
+    }
+
+    try {
+      await database
+        .update(schema.modules)
+        .set({ lifecycle: "RETIRED", isAvailable: false })
+        .where(eq(schema.modules.key, "core.sales"));
+      await database
+        .update(schema.permissions)
+        .set({ status: "INACTIVE" })
+        .where(
+          inArray(schema.permissions.key, [
+            "core.sales.sale.create",
+            "core.sales.sale.read",
+          ]),
+        );
+      await client.exec(moduleProvisioning);
+      await client.exec(permissionProvisioning);
+
+      const [disabledModule] = await database
+        .select({
+          lifecycle: schema.modules.lifecycle,
+          isAvailable: schema.modules.isAvailable,
+        })
+        .from(schema.modules)
+        .where(eq(schema.modules.key, "core.sales"));
+      const disabledPermissions = await database
+        .select({
+          key: schema.permissions.key,
+          status: schema.permissions.status,
+        })
+        .from(schema.permissions)
+        .where(
+          inArray(schema.permissions.key, [
+            "core.sales.sale.create",
+            "core.sales.sale.read",
+          ]),
+        );
+      expect(disabledModule).toEqual({
+        lifecycle: "RETIRED",
+        isAvailable: false,
+      });
+      expect(disabledPermissions.map(({ status }) => status)).toEqual([
+        "INACTIVE",
+        "INACTIVE",
+      ]);
+    } finally {
+      await database
+        .update(schema.modules)
+        .set({
+          lifecycle: salesModule.lifecycle,
+          isAvailable: salesModule.isAvailable,
+        })
+        .where(eq(schema.modules.key, "core.sales"));
+      for (const permission of permissions) {
+        await database
+          .update(schema.permissions)
+          .set({ status: permission.status })
+          .where(eq(schema.permissions.key, permission.key));
+      }
+    }
   });
 
   it("persists exact totals and historical catalog snapshots under forced RLS", async () => {

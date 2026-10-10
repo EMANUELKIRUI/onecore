@@ -153,6 +153,11 @@ describe("platform domain values", () => {
     );
     expect(nearMaximum.subtotal).toBe("99999999999999999900");
     expect(nearMaximum.total).toBe(nearMaximum.subtotal);
+    const maximumValidSubtotalScaled =
+      salePriceToScaledAmount(maximumPrice) * 1_000_000n * 100n;
+    expect(MAX_SALE_AMOUNT_SCALED - maximumValidSubtotalScaled).toBe(
+      99_999_999n,
+    );
 
     const supportedLineAmounts = Array.from(
       { length: 100 },

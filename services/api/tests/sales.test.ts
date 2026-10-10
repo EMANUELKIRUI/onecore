@@ -8,6 +8,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "@onecore/config";
+import { adjustBranchStock } from "@onecore/database";
 import type {
   AuthorizationContext,
   AuthorizationMetadata,
@@ -58,6 +59,7 @@ function allowSales(
   grantedPermissions: readonly string[] = [
     "core.sales.sale.create",
     "core.sales.sale.read",
+    "core.inventory.stock.reserve",
   ],
 ): AuthorizationService {
   async function withPermission<T>(
@@ -93,7 +95,9 @@ function allowSales(
       platformRoles: [],
       permissions: grantedPermissions.map((key) => ({
         key,
-        moduleKey: "core.sales",
+        moduleKey: key.startsWith("core.inventory")
+          ? "core.inventory"
+          : "core.sales",
         scopeType: "BRANCH",
         scope: {},
       })),
@@ -132,6 +136,54 @@ function allowSales(
     withAnyPermission: async (context, keys, metadata, operation) =>
       withPermission(context, keys[0] ?? "", metadata, operation),
   };
+}
+
+async function receiveStock(
+  organizationId: string,
+  userId: string,
+  branchId: string,
+  catalogItemId: string,
+): Promise<void> {
+  const result = await database.transaction(async (transaction) => {
+    await transaction.execute(sql`SET LOCAL ROLE onecore_app`);
+    await transaction.execute(
+      sql`SELECT set_config('app.current_user_id', ${userId}, true)`,
+    );
+    await transaction.execute(
+      sql`SELECT set_config('app.current_organization_id', ${organizationId}, true)`,
+    );
+    await transaction.execute(
+      sql`SELECT set_config('app.current_branch_id', ${branchId}, true)`,
+    );
+    return adjustBranchStock(
+      transaction as unknown as OrganizationTransaction,
+      {
+        userId,
+        sessionId: crypto.randomUUID(),
+        organizationId,
+        membershipId: crypto.randomUUID(),
+        branchId,
+        branch: { branchId, name: "Sales", code: "SALES" },
+        branchAccessMode: "ASSIGNED",
+        roles: [],
+        platformRoles: [],
+        permissions: [
+          {
+            key: "core.inventory.stock.adjust",
+            moduleKey: "core.inventory",
+            scopeType: "BRANCH",
+            scope: {},
+          },
+        ],
+      },
+      { catalogItemId, movementType: "RECEIPT", delta: 5 },
+      `sales-api-receipt-${crypto.randomUUID()}`,
+      crypto.randomUUID(),
+    );
+  });
+  if (result.outcome !== "CREATED") {
+    throw new Error("API Sales stock fixture was not created");
+  }
 }
 
 describe("Sales API", () => {
@@ -189,6 +241,7 @@ describe("Sales API", () => {
       })
       .returning();
     if (!item) throw new Error("Sales catalog item fixture missing");
+    await receiveStock(organization.id, user.id, branch.id, item.id);
 
     const sessionSecret = "s".repeat(43);
     const secretHash = createHash("sha256").update(sessionSecret).digest("hex");

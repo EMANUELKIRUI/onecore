@@ -27,7 +27,10 @@ export function createApiClient(basePath = "", fetchImplementation = fetch) {
   const normalizedBasePath = basePath.replace(/\/+$/, "");
 
   return {
-    async request(path, { method = "GET", body, signal } = {}) {
+    async request(
+      path,
+      { method = "GET", body, signal, headers = {}, expectedStatus } = {},
+    ) {
       if (
         !path.startsWith("/") ||
         path.startsWith("//") ||
@@ -46,6 +49,7 @@ export function createApiClient(basePath = "", fetchImplementation = fetch) {
             ...(body === undefined
               ? {}
               : { "content-type": "application/json" }),
+            ...headers,
           },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           ...(signal === undefined ? {} : { signal }),
@@ -66,6 +70,15 @@ export function createApiClient(basePath = "", fetchImplementation = fetch) {
         );
       }
 
+      if (expectedStatus !== undefined && response.status !== expectedStatus) {
+        if (response.ok) {
+          throw new ApiError(
+            response.status,
+            "UNEXPECTED_STATUS",
+            "The service returned an unexpected response.",
+          );
+        }
+      }
       if (response.status === 204) return null;
       let payload;
       try {

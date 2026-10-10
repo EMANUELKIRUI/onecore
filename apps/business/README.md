@@ -57,13 +57,14 @@ data scopes, and database row-level security. See
 for resource fields, routes, lifecycle, and security boundaries.
 
 Business Manager owns product/service master data only. Inventory owns
-quantities, locations, and stock movements. The app does not implement POS
-checkout, Inventory, Finance, Sales, or CRM transactions.
+quantities, locations, and stock movements. POS submits unpaid sale requests
+through the existing Sales API; it does not add inventory management, Finance,
+or CRM transaction features.
 
-## Point of sale — IMPLEMENTED — INCOMPLETE
+## Point of sale
 
-The authenticated Point of sale view is a catalog-backed workspace, not a
-sales transaction system. It reads active products and services from
+The authenticated Point of sale view combines a catalog-backed draft with
+authorized creation of unpaid sales. It reads active products and services from
 `GET /organizations/:organizationId/business/catalog` using the existing
 organization authorization, module entitlement, branch context, data-scope,
 and tenant RLS checks. Search is limited to the catalog API's supported item
@@ -71,13 +72,26 @@ name and reference/SKU fields; barcode search and stock availability are not
 available.
 
 Users can prepare an in-memory draft cart with positive whole-number
-quantities and exact catalog-decimal line and subtotal estimates. The draft is
-not stored, does not reserve stock, does not apply tax or discounts, and is
-cleared when the organization or branch context changes. The backend now has
-authorized create/list/detail APIs for immutable unpaid sales, but this view is
-not wired to them and checkout remains unavailable in the UI. There is no
-payment API or finalized receipt; the backend transaction history is limited
-to the supported sales reads. The UI does not create local or simulated sales.
+quantities and exact catalog-decimal line and subtotal estimates. Checkout
+sends only catalog item IDs and quantities to
+`POST /organizations/:organizationId/sales`; the API determines prices,
+currency, and totals. A validated `201` response displays the returned sale ID,
+status, currency, total, and line amounts as **Unpaid — OPEN**. The cart is
+cleared only after that confirmed response.
+
+Before sending, the browser stores the idempotency key, authenticated
+user/organization/branch context, and exact request lines in tab-scoped session
+storage. An uncertain network result can retry that same request and key; a changed request or
+idempotency conflict blocks a new checkout. The API has no lookup by
+idempotency key, so ambiguous attempts cannot always be reconciled
+automatically and may require an authorized operator to inspect Sales records.
+Authentication tokens and prices are not stored with the attempt.
+
+The existing Sales API currently requires `core.inventory.stock.reserve` and
+delegates product lines to its inventory reservation service. POS does not
+query availability or offer inventory controls, and checkout can be rejected
+by the server. The API has no payment action or finalized receipt; the UI does
+not create local or simulated sales.
 
 ## Existing workspace capabilities
 

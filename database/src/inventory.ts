@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import {
   createDomainEvent,
@@ -41,16 +41,6 @@ export interface SaleStockLine {
   catalogItemId: string;
   itemType: "PRODUCT" | "SERVICE";
   quantity: number;
-}
-
-function hasPermissionScope(
-  context: ResolvedAuthorizationContext,
-  permission: string,
-): boolean {
-  return context.permissions.some(
-    ({ key, scopeType }) =>
-      key === permission && (scopeType === "ORGANIZATION" || scopeType === "BRANCH"),
-  );
 }
 
 async function setActorContext(
@@ -218,23 +208,20 @@ export async function createSaleReservations(
     .filter((line) => line.itemType === "PRODUCT")
     .sort((left, right) => left.catalogItemId.localeCompare(right.catalogItemId));
   for (const line of products) {
-    let reservation: { id: string } | undefined;
+    const reservationId = randomUUID();
     try {
-      [reservation] = await transaction
-        .insert(inventoryReservations)
-        .values({
-          organizationId: context.organizationId,
-          branchId,
-          saleId,
-          catalogItemId: line.catalogItemId,
-          quantity: line.quantity,
-        })
-        .returning({ id: inventoryReservations.id });
+      await transaction.execute(sql`
+        INSERT INTO inventory_reservations (
+          id, organization_id, branch_id, sale_id, catalog_item_id, quantity
+        ) VALUES (
+          ${reservationId}, ${context.organizationId}, ${branchId}, ${saleId},
+          ${line.catalogItemId}, ${line.quantity}
+        )
+      `);
     } catch (error) {
       if (hasInsufficientStockCause(error)) throw new InsufficientStockError();
       throw error;
     }
-    if (!reservation) throw new Error("Inventory reservation insert failed");
     const [movement] = await transaction
       .select({
         id: inventoryMovements.id,
@@ -245,7 +232,7 @@ export async function createSaleReservations(
       .where(
         and(
           eq(inventoryMovements.organizationId, context.organizationId),
-          eq(inventoryMovements.reservationId, reservation.id),
+          eq(inventoryMovements.reservationId, reservationId),
           eq(inventoryMovements.movementType, "RESERVATION"),
         ),
       )

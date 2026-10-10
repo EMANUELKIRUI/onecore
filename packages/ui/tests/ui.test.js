@@ -52,6 +52,42 @@ describe("shared UI foundations", () => {
     await expect(api.request("/\\attacker.example")).rejects.toThrow(TypeError);
   });
 
+  it("sends idempotency headers and accepts only the expected success status", async () => {
+    const fetchImplementation = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ sale: { status: "OPEN" } }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const api = createApiClient("", fetchImplementation);
+
+    await expect(
+      api.request("/organizations/org-1/sales", {
+        method: "POST",
+        body: { lines: [] },
+        headers: { "Idempotency-Key": "checkout-key" },
+        expectedStatus: 201,
+      }),
+    ).resolves.toEqual({ sale: { status: "OPEN" } });
+    expect(fetchImplementation.mock.calls[0]?.[1].headers).toMatchObject({
+      "Idempotency-Key": "checkout-key",
+    });
+
+    const unexpected = createApiClient(
+      "",
+      async () =>
+        new Response(JSON.stringify({ sale: { status: "OPEN" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    await expect(
+      unexpected.request("/organizations/org-1/sales", {
+        expectedStatus: 201,
+      }),
+    ).rejects.toMatchObject({ status: 200, code: "UNEXPECTED_STATUS" });
+  });
+
   it("normalizes network failures without exposing the underlying exception", async () => {
     const api = createApiClient("", async () => {
       throw new Error("private connection detail");

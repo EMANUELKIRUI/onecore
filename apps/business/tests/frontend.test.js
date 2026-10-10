@@ -7,6 +7,7 @@ const application = await readFile(
   new URL("../app.js", import.meta.url),
   "utf8",
 );
+const pos = await readFile(new URL("../pos.js", import.meta.url), "utf8");
 const styles = await readFile(
   new URL("../../../packages/ui/styles.css", import.meta.url),
   "utf8",
@@ -48,7 +49,7 @@ describe("authenticated business shell", () => {
     ]) {
       expect(application).toContain(path);
     }
-    expect(application).not.toMatch(/localStorage|sessionStorage/);
+    expect(application).not.toMatch(/localStorage/);
     expect(application).not.toMatch(
       /["'`]\/(?:pos|inventory|finance|payroll|crm)(?:\/|["'`?])/i,
     );
@@ -224,7 +225,7 @@ describe("Business Manager capability boundary", () => {
     );
     expect(application).toContain('method: "DELETE"');
     expect(application).toContain("window.confirm");
-    expect(application).not.toMatch(/localStorage|sessionStorage/);
+    expect(application).not.toMatch(/localStorage/);
     expect(application).not.toMatch(
       /customers\s*:\s*\[\s*\{|products\s*:\s*\[\s*\{/,
     );
@@ -349,20 +350,58 @@ describe("Business Manager capability boundary", () => {
     expect(application).toContain("requestError.status === 403");
     expect(application).toContain("currentSession !== session");
     expect(application).toContain("resetPosWorkspaceState()");
-    expect(application).toContain("No sale or payment will be submitted.");
+    expect(application).toContain("function submitPosCheckout");
     expect(application).toContain(
-      "A separate authorized backend API can create unpaid OPEN sales",
+      "request: (path, options) => authenticatedRequest(path, options)",
     );
-    expect(application).not.toContain(
-      "no sales or payment API is currently supported",
+    expect(application).toContain("globalThis.crypto.randomUUID()");
+    expect(application).toContain(
+      'appendText(confirmation, "h3", "Unpaid — OPEN"',
+    );
+    expect(application).toContain("posSaleConfirmation.total");
+    expect(pos).toContain(
+      "/organizations/${encodeURIComponent(attempt.organizationId)}/sales",
+    );
+    expect(pos).toContain("expectedStatus: 201");
+    expect(pos).toContain('headers: { "Idempotency-Key": attempt.key }');
+    expect(pos).toContain(
+      "storage.setItem(CHECKOUT_STORAGE_KEY, JSON.stringify(attempt))",
+    );
+    expect(application).toContain(
+      'const canStartCheckout = attemptState.kind === "NONE" && posCart.size > 0;',
+    );
+    expect(application).toContain(
+      "checkout.disabled =\n      posCheckoutSubmitting ||\n      !context.organizationId",
+    );
+    expect(application).not.toContain("checkout.disabled =\n      locked ||");
+    const checkoutFlowStart = application.indexOf(
+      "async function submitPosCheckout",
+    );
+    const confirmedStart = application.indexOf(
+      'if (result.kind === "SUCCESS")',
+      checkoutFlowStart,
+    );
+    const failureStart = application.indexOf("} else {", confirmedStart);
+    expect(application.slice(confirmedStart, failureStart)).toContain(
+      "posCart.clear()",
+    );
+    expect(application.slice(failureStart, failureStart + 180)).not.toContain(
+      "posCart.clear()",
+    );
+    expect(application).toContain(
+      "resetPosWorkspaceState({ clearCart: false })",
     );
     expect(application).toContain(
       "Stock availability is not provided by this API.",
     );
     expect(application).not.toMatch(
-      /\/(sales|payments|transactions|receipts|inventory)\b/i,
+      /\/(payments|transactions|receipts|inventory)\b/i,
     );
-    expect(application).not.toMatch(/localStorage|sessionStorage/);
+    expect(application).not.toMatch(/localStorage/);
+    expect(application).toContain("globalThis.sessionStorage");
+    expect(application).not.toMatch(
+      /payment (?:completed|received)|stock reserved|inventory decremented/i,
+    );
     expect(styles).toContain(".oc-pos-layout");
     expect(styles).toContain("@media (max-width: 720px)");
     expect(styles).toContain(".oc-pos-cart");

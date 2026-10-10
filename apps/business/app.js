@@ -14,9 +14,11 @@ import {
 import {
   addDraftCartItem,
   catalogPriceToScaledAmount,
+  createSaleCheckoutController,
   draftCartSubtotal,
   formatScaledAmount,
   removeDraftCartItem,
+  saleCheckoutMessage,
   setDraftCartQuantity,
 } from "./pos.js";
 
@@ -264,6 +266,9 @@ let posContext = "";
 let posSearch = "";
 let posOffset = 0;
 const posCart = new Map();
+let posCheckoutSubmitting = false;
+let posCheckoutNotice = null;
+let posSaleConfirmation = null;
 let memberLoadSequence = 0;
 let memberOffset = 0;
 let memberContext = "";
@@ -467,7 +472,7 @@ function sessionExpired() {
   currentSession = undefined;
   businessResourceSequence += 1;
   businessResourceContext = "";
-  resetPosWorkspaceState();
+  resetPosWorkspaceState({ clearCart: false });
   businessResourceOffsets.customers = 0;
   businessResourceOffsets.products = 0;
   businessResourceFilters.customers = {};
@@ -492,6 +497,18 @@ async function authenticatedRequest(path, options) {
     throw error;
   }
 }
+
+let posCheckoutStorage;
+try {
+  posCheckoutStorage = globalThis.sessionStorage;
+} catch {
+  posCheckoutStorage = null;
+}
+const posCheckoutController = createSaleCheckoutController({
+  storage: posCheckoutStorage,
+  request: (path, options) => authenticatedRequest(path, options),
+  createKey: () => globalThis.crypto.randomUUID(),
+});
 
 function appendText(container, tagName, text, className) {
   const element = document.createElement(tagName);
@@ -2446,16 +2463,28 @@ function businessBranchLabel(branchId) {
   );
 }
 
-function resetPosWorkspaceState() {
+function resetPosWorkspaceState({ clearCart = true } = {}) {
   posLoadSequence += 1;
   posContext = "";
   posSearch = "";
   posOffset = 0;
-  posCart.clear();
+  if (clearCart) {
+    posCart.clear();
+    posCheckoutNotice = null;
+    posSaleConfirmation = null;
+  }
 }
 
 function posCatalogEndpoint(organizationId) {
   return `/organizations/${encodeURIComponent(organizationId)}/business/catalog`;
+}
+
+function posCheckoutContext(session = currentSession) {
+  return {
+    organizationId: session?.organization?.organizationId ?? "",
+    userId: session?.user?.id ?? "",
+    branchId: session?.branch?.branchId ?? null,
+  };
 }
 
 function posCatalogItemIsValid(item) {
@@ -2479,15 +2508,107 @@ function posCatalogItemIsValid(item) {
 
 function renderPosCart(container) {
   container.replaceChildren();
+  const context = posCheckoutContext();
+  const attemptState = posCheckoutController.getState(context);
+  const locked =
+    posCheckoutSubmitting ||
+    ["PENDING", "UNCERTAIN", "CONFLICT", "OTHER_CONTEXT", "INVALID"].includes(
+      attemptState.kind,
+    );
   appendText(container, "h2", "Draft cart", "oc-section-title");
   appendText(
     container,
     "p",
-    "Temporary in-memory draft only. It does not reserve stock or create a sale.",
+    "A local draft until checkout is confirmed. No payment is collected.",
     "oc-help",
   );
+  if (posCheckoutSubmitting) {
+    appendText(
+      container,
+      "p",
+      "Submitting checkout…",
+      "oc-state oc-state--loading",
+    ).setAttribute("role", "status");
+  } else if (
+    attemptState.kind === "PENDING" ||
+    attemptState.kind === "UNCERTAIN"
+  ) {
+    appendText(
+      container,
+      "p",
+      `An attempt for ${attemptState.attempt.request.lines.length} catalog item(s) is not confirmed. Retry the exact same checkout attempt.`,
+      "oc-alert",
+    ).setAttribute("role", "status");
+  } else if (attemptState.kind === "CONFLICT") {
+    appendText(
+      container,
+      "p",
+      saleCheckoutMessage({ kind: "CONFLICT" }),
+      "oc-alert oc-alert--error",
+    ).setAttribute("role", "alert");
+  } else if (attemptState.kind === "OTHER_CONTEXT") {
+    appendText(
+      container,
+      "p",
+      saleCheckoutMessage({ kind: "OTHER_CONTEXT" }),
+      "oc-alert oc-alert--error",
+    ).setAttribute("role", "alert");
+  } else if (attemptState.kind === "INVALID") {
+    appendText(
+      container,
+      "p",
+      saleCheckoutMessage({ kind: "INVALID" }),
+      "oc-alert oc-alert--error",
+    ).setAttribute("role", "alert");
+  } else if (attemptState.kind === "STORAGE_ERROR") {
+    appendText(
+      container,
+      "p",
+      saleCheckoutMessage({ kind: "STORAGE_ERROR" }),
+      "oc-alert oc-alert--error",
+    ).setAttribute("role", "alert");
+  }
+  if (posCheckoutNotice) {
+    const notice = appendText(
+      container,
+      "p",
+      posCheckoutNotice.message,
+      posCheckoutNotice.error ? "oc-alert oc-alert--error" : "oc-alert",
+    );
+    notice.setAttribute("role", posCheckoutNotice.error ? "alert" : "status");
+  }
+  if (posSaleConfirmation) {
+    const confirmation = document.createElement("section");
+    confirmation.className = "oc-alert";
+    confirmation.setAttribute("role", "status");
+    appendText(confirmation, "h3", "Unpaid — OPEN", "oc-section-title");
+    appendText(confirmation, "p", `Sale ID: ${posSaleConfirmation.id}`);
+    appendText(
+      confirmation,
+      "p",
+      `Server total: ${posSaleConfirmation.total} ${posSaleConfirmation.currency}`,
+    );
+    const serverLines = document.createElement("ul");
+    for (const line of posSaleConfirmation.lines) {
+      appendText(
+        serverLines,
+        "li",
+        `${line.itemName}: ${line.unitPrice} ${posSaleConfirmation.currency} × ${line.quantity} = ${line.lineTotal} ${posSaleConfirmation.currency}`,
+      );
+    }
+    confirmation.append(serverLines);
+    container.append(confirmation);
+  }
   if (posCart.size === 0) {
     appendText(container, "p", "No items in your draft cart yet.", "oc-muted");
+    if (attemptState.attempt) {
+      appendText(
+        container,
+        "p",
+        "The saved request contains catalog item IDs and quantities only; server pricing will be shown after confirmation.",
+        "oc-help",
+      );
+    }
   } else {
     const list = document.createElement("div");
     list.className = "oc-stack";
@@ -2518,12 +2639,14 @@ function renderPosCart(container) {
       quantity.className = "oc-input";
       quantity.type = "number";
       quantity.min = "1";
-      quantity.max = String(Number.MAX_SAFE_INTEGER);
+      quantity.max = "1000000";
       quantity.step = "1";
       quantity.required = true;
       quantity.value = String(item.quantity);
       quantity.inputMode = "numeric";
+      quantity.disabled = locked;
       quantity.addEventListener("change", () => {
+        if (locked) return;
         if (setDraftCartQuantity(posCart, item.id, quantity.value)) {
           renderPosCart(container);
         } else {
@@ -2544,8 +2667,10 @@ function renderPosCart(container) {
       remove.type = "button";
       remove.className = "oc-button oc-button--secondary";
       remove.textContent = "Remove";
+      remove.disabled = locked;
       remove.setAttribute("aria-label", `Remove ${item.name} from draft`);
       remove.addEventListener("click", () => {
+        if (locked) return;
         removeDraftCartItem(posCart, item.id);
         renderPosCart(container);
       });
@@ -2569,25 +2694,114 @@ function renderPosCart(container) {
   appendText(
     container,
     "p",
-    "Estimate only: no tax or discounts are calculated. The server must determine any future sale total.",
+    "Catalog subtotal estimate only. No tax or discounts are calculated; the server determines the sale total.",
     "oc-help",
   );
-  appendText(
-    container,
-    "div",
-    "A separate authorized backend API can create unpaid OPEN sales, but this draft view is not connected to it. No sale or payment will be submitted. No stock is reserved.",
-    "oc-alert",
-  ).setAttribute("role", "status");
+  const matchingAttempt =
+    (attemptState.kind === "PENDING" || attemptState.kind === "UNCERTAIN") &&
+    attemptState.attempt;
+  const canStartCheckout = attemptState.kind === "NONE" && posCart.size > 0;
+  if (matchingAttempt || canStartCheckout) {
+    const checkout = document.createElement("button");
+    checkout.type = "button";
+    checkout.className = "oc-button";
+    checkout.textContent = matchingAttempt
+      ? "Retry same checkout"
+      : "Create unpaid sale";
+    checkout.disabled =
+      posCheckoutSubmitting ||
+      !context.organizationId ||
+      !context.branchId ||
+      (matchingAttempt && attemptState.kind === "CONFLICT");
+    checkout.addEventListener("click", () => {
+      if (posCheckoutSubmitting || !currentSession) return;
+      void submitPosCheckout(container, currentSession);
+    });
+    container.append(checkout);
+    if (!context.branchId) {
+      appendText(
+        container,
+        "p",
+        "An authorized active branch is required for checkout.",
+        "oc-help",
+      );
+    }
+  }
   if (posCart.size > 0) {
     const clear = document.createElement("button");
     clear.type = "button";
     clear.className = "oc-button oc-button--quiet";
     clear.textContent = "Clear draft";
+    clear.disabled = locked;
     clear.addEventListener("click", () => {
+      if (locked) return;
       posCart.clear();
       renderPosCart(container);
     });
     container.append(clear);
+  }
+}
+
+async function submitPosCheckout(container, session) {
+  if (posCheckoutSubmitting) return;
+  posCheckoutSubmitting = true;
+  const context = posCheckoutContext(session);
+  const productAddButtons = [
+    ...(container
+      .closest(".oc-pos-layout")
+      ?.querySelectorAll(".oc-pos-product button") ?? []),
+  ];
+  productAddButtons.forEach((button) => {
+    button.disabled = true;
+  });
+  const contextSelectors = [organizationSelect, branchSelect].filter(Boolean);
+  const priorDisabledState = contextSelectors.map(
+    (selector) => selector.disabled,
+  );
+  contextSelectors.forEach((selector) => {
+    selector.disabled = true;
+  });
+  posCheckoutNotice = { message: "Submitting checkout…", error: false };
+  renderPosCart(container);
+  let result;
+  try {
+    result = await posCheckoutController.submit(posCart, context);
+  } catch {
+    result = { kind: "UNCERTAIN", reason: "REQUEST_FAILED" };
+  } finally {
+    posCheckoutSubmitting = false;
+    contextSelectors.forEach((selector, index) => {
+      selector.disabled = priorDisabledState[index];
+    });
+  }
+  if (result.kind === "SUCCESS") {
+    if (currentSession === session) {
+      posCart.clear();
+      posSaleConfirmation = result.sale;
+      posCheckoutNotice = null;
+    }
+    announce("Sale confirmed. Unpaid — OPEN.", "success");
+  } else {
+    posCheckoutNotice = {
+      message: saleCheckoutMessage(result),
+      error: result.kind !== "IN_PROGRESS",
+    };
+  }
+  if (currentSession === session) {
+    const state = posCheckoutController.getState(context);
+    const locked = [
+      "PENDING",
+      "UNCERTAIN",
+      "CONFLICT",
+      "OTHER_CONTEXT",
+      "INVALID",
+    ].includes(state.kind);
+    const currency = posCart.values().next().value?.currency;
+    productAddButtons.forEach((button) => {
+      button.disabled =
+        locked || (currency && currency !== button.dataset.currency);
+    });
+    renderPosCart(container);
   }
 }
 
@@ -2604,6 +2818,14 @@ function renderPosWorkspace(container, response, session, search, offset) {
   const selectedBranch = session.availableBranches.find(
     (branch) => branch.branchId === session.branch?.branchId,
   );
+  const checkoutState = posCheckoutController.getState(
+    posCheckoutContext(session),
+  );
+  const checkoutLocked =
+    posCheckoutSubmitting ||
+    ["PENDING", "UNCERTAIN", "CONFLICT", "OTHER_CONTEXT", "INVALID"].includes(
+      checkoutState.kind,
+    );
   const workspace = document.createElement("div");
   workspace.className = "oc-pos-layout";
   const catalog = document.createElement("section");
@@ -2691,7 +2913,8 @@ function renderPosWorkspace(container, response, session, search, offset) {
       add.type = "button";
       add.className = "oc-button oc-button--secondary";
       add.textContent = "Add to draft";
-      add.disabled = currencyMismatch;
+      add.dataset.currency = item.currency;
+      add.disabled = currencyMismatch || checkoutLocked;
       if (currencyMismatch) {
         appendText(
           card,
@@ -2701,6 +2924,15 @@ function renderPosWorkspace(container, response, session, search, offset) {
         );
       }
       add.addEventListener("click", () => {
+        const state = posCheckoutController.getState(
+          posCheckoutContext(session),
+        );
+        if (
+          posCheckoutSubmitting ||
+          !["NONE", "STORAGE_ERROR"].includes(state.kind)
+        ) {
+          return;
+        }
         if (!addDraftCartItem(posCart, item)) {
           announce(
             "This draft uses another currency. Clear it before adding this item.",
