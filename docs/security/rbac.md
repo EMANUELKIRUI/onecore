@@ -65,16 +65,29 @@ The organization administration endpoints currently include `GET /roles`,
 `GET /roles/:roleId`, `POST /roles`, `PATCH /roles/:roleId`, `GET /permissions`,
 `POST /roles/:roleId/permissions`,
 `DELETE /roles/:roleId/permissions/:permissionId`,
+`GET /organizations/:organizationId/members/:membershipId/roles`,
 `POST /auth/membership/roles`, and
 `DELETE /auth/membership/roles/:membershipId/:roleId`. Each is protected by a
 catalogued administration permission. Actors cannot assign themselves roles,
 assign role permissions they do not hold at the requested scope, grant the
 reserved owner capability, or modify a role they themselves hold. Assignment
-targets are resolved within the authenticated organization and must be active.
+targets are resolved within the authenticated organization; target memberships
+must be active. Role assignment reads membership records only and does not
+expand the users identity-read policy.
 Role-definition and assignment mutations require organization-scoped
 administration permissions. A branch-scoped manager may read the role catalog
 within an authorized branch but cannot alter organization-level role
 definitions or assignments.
+
+Branch administration uses three additional canonical permissions:
+`core.organization.branch.read`, `core.organization.branch.create`, and
+`core.organization.branch.update`. They are required by the organization
+branch list, create, and update routes, and every operation additionally
+requires an organization-scoped grant. The update permission covers `ACTIVE`
+and `INACTIVE` soft-status transitions as well as name/code changes; branch
+rows remain protected by the existing forced tenant RLS policy. No permission
+for membership-to-branch assignment or `branchAccessMode` changes is introduced
+in this slice.
 
 Workflow execution history uses the existing
 `core.organization.workflows.read` permission and `core.configuration`

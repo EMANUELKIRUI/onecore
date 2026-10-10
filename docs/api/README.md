@@ -66,3 +66,62 @@ authoritative.
 - `POST /organizations/:organizationId/invitations` creates or reuses an identity and records an `INVITED` membership. It requires `core.organization.user.create` in the verified organization context.
 
 Each successful mutation, its audit record, and its lifecycle outbox event commit in one transaction. A platform SUPERADMIN is never added to a tenant as bootstrap owner; the explicit owner must be a distinct identity. Ordinary invitations persist pending identity and `INVITED` membership state; no email/SMS delivery or token/acceptance flow is configured or claimed.
+
+## Organization member directory
+
+| Method | Route                                                        | Behavior                                                                                                                                              |
+| ------ | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/organizations/:organizationId/members?limit=&offset=`      | Lists bounded pages of organization membership identity and status for callers with the organization-scoped `core.organization.user.read` permission. |
+| `GET`  | `/organizations/:organizationId/members/:membershipId/roles` | Returns assigned and active organization roles for that membership; requires organization-scoped `core.rbac.role.read`.                               |
+
+The route verifies the organization against the authenticated membership,
+records permission checks through centralized authorization, and only reads
+member identities after authorization. It returns membership ID, email,
+display name, membership status, and membership creation time; it never
+returns credentials, user security state, branch assignments, or role grants.
+The `users` RLS directory-read policy is enabled only for the verified tenant
+and only after the route sets its transaction-local directory context.
+The roles route returns role IDs, names, and status only; it does not query or
+return user identity records. Role assignment and removal use the existing
+`POST /auth/membership/roles` and
+`DELETE /auth/membership/roles/:membershipId/:roleId` routes, requiring
+`core.rbac.membership_role.assign` and
+`core.rbac.membership_role.remove` respectively. Those mutations remain
+organization-scoped, audited, and transactional with their role-change event;
+they reject self-assignment/removal, cross-tenant targets, and owner capability
+changes. Assignment requires an active organization membership. Forced RLS
+limits role and membership queries to the verified tenant.
+
+## Branch administration
+
+The first branch-administration slice reuses the existing `branches` table and
+forced tenant RLS policy. Its explicit permission contract is:
+
+- `core.organization.branch.read` for paginated organization branch listings.
+- `core.organization.branch.create` for branch creation.
+- `core.organization.branch.update` for branch detail updates and
+  `ACTIVE`/`INACTIVE` transitions.
+
+Every route verifies the route organization against the live authenticated
+membership and requires the matching permission at organization scope.
+
+| Method | Route | Request | Response |
+| ------ | ----- | ------- | -------- |
+| `GET` | `/organizations/:organizationId/branches?limit=&offset=` | Optional `limit` (1–100, default 50) and `offset` (0–10000, default 0). | `{ branches: [{ id, name, code, status, createdAt, updatedAt }], limit, offset, hasMore, capabilities: { canCreate, canUpdate } }`; includes inactive branches for administrative visibility. Capability values reflect organization-scoped grants and only guide UI visibility; mutation routes independently authorize each request. |
+| `POST` | `/organizations/:organizationId/branches` | `{ name, code }`; name is trimmed and required (max 200 characters), code is trimmed, uppercased, and restricted to 1–50 ASCII letters/digits/underscore/hyphen. | `201 { branch: { id, name, code, status, createdAt, updatedAt } }`; new branches use the existing `ACTIVE` default. Duplicate organization codes return `409`. |
+| `PATCH` | `/organizations/:organizationId/branches/:branchId` | A non-empty subset of `{ name, code, status }`; status accepts `ACTIVE` or `INACTIVE`. | `200 { branch: { id, name, code, status, createdAt, updatedAt } }`; a branch outside the active tenant returns `404`. |
+
+Create and update operations write an append-only audit record in the same
+tenant transaction. Deactivation is a soft status change; rows are never
+deleted. Reactivation is supported by setting status back to `ACTIVE`.
+`SUSPENDED` and `CLOSED` lifecycle transitions, membership-to-branch
+assignment, changing `branchAccessMode`, branch hierarchy, branch-specific
+configuration, and business transactions are explicitly outside this slice.
+The existing `membership_branches` table is not mutated by these endpoints.
+
+The forward-only branch-administration migration adds the three permission
+catalog entries, grants them to existing system Organization Owner/Admin
+roles, and adds only the branch insert/update column privileges needed by the
+API. It does not alter branch schema or RLS policy. The `onecore_app` insert
+uses only `organization_id`, `name`, and `code`; existing forced RLS continues
+to restrict rows to `app.current_organization_id`.

@@ -8,10 +8,10 @@ service APIs. They must not access persistence directly.
 - `business/`: organization-facing application. The initial authenticated
   shell uses the existing session, organization, branch, logout, and password
   change endpoints.
-- `superadmin/`: reserved for platform administration; no frontend is
-  implemented because the platform administration UI/API capability set is
-  not yet established.
-- `support/`: reserved for support workflows.
+- `superadmin/`: supports organization-application review through the
+  platform lifecycle API; broader platform administration remains deferred.
+- `support/`: provides an unavailable-state shell; support APIs and workflows
+  are not implemented.
 - `status/`: reserved for service status experience.
 
 The pages are dependency-free native ES modules and styles. Serve each

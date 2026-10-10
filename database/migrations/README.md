@@ -66,6 +66,25 @@ privileges remain absent. Create the `onecore_app` role as non-owner and
 `NOBYPASSRLS` before applying migrations; do not provision its table access
 with ad-hoc grants.
 
+The organization member-directory migration adds a SELECT-only policy on the
+existing `users` table; it does not alter table structure or runtime grants.
+The policy requires both the verified organization GUC and the
+transaction-local directory marker set by the API only after the canonical
+organization-scoped `core.organization.user.read` authorization succeeds.
+Without that marker, user visibility remains limited to the current identity
+or login lookup. Review the additive policy in
+`20261010010000_organization_member_directory/migration.sql`; no Drizzle
+snapshot change is needed because the migration changes only an RLS policy.
+
+The branch-administration contract migration is additive: it inserts the
+canonical branch permission catalog entries, grants them to existing system
+Organization Owner/Admin roles, and grants the API only the branch insert and
+update columns used by the branch API. It changes no table structure or RLS
+policy, so no Drizzle snapshot change is required. Branch inserts name only
+`organization_id`, `name`, and `code`; forced tenant RLS remains the row
+boundary. Review
+`20261010020000_branch_administration_contract/migration.sql` before applying.
+
 ## Production lifecycle mutations
 
 The lifecycle mutation migration grants the runtime role column-scoped `INSERT`

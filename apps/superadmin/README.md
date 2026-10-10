@@ -1,3 +1,7 @@
 # Superadmin application
 
-Reserved for platform administration. Not implemented in Phase 1.
+The static application supports reviewing and transitioning organization
+applications through the authenticated platform lifecycle API. Approval records
+review status only; organization activation and bootstrap-owner provisioning
+remain separate operations. Broader platform administration screens and APIs
+are not implemented.

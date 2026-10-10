@@ -26,6 +26,8 @@ import { registerIntegrationSecurityRoutes } from "./integration-resources.js";
 import { registerEventRoutes } from "./events.js";
 import { registerWorkflowRoutes } from "./workflows.js";
 import { registerBusinessManagerRoutes } from "./business-manager.js";
+import { registerMemberRoutes } from "./members.js";
+import { registerBranchRoutes } from "./branches.js";
 import { registerModuleRoutes } from "./modules.js";
 import { registerLifecycleRoutes } from "./lifecycle.js";
 import { createApiFastify } from "./fastify-instance.js";
@@ -205,6 +207,8 @@ export function buildApp(
   registerEventRoutes(app, correlatedAuthorization);
   registerWorkflowRoutes(app, correlatedAuthorization);
   registerBusinessManagerRoutes(app, correlatedAuthorization);
+  registerMemberRoutes(app, correlatedAuthorization);
+  registerBranchRoutes(app, correlatedAuthorization);
   registerModuleRoutes(app, correlatedAuthorization);
   if (options.lifecycleMutations) {
     registerLifecycleRoutes(

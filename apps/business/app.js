@@ -97,6 +97,115 @@ const workflowMessages = {
     "workflow.action.NOTIFICATION": "Arifa ya ndani ya programu",
   },
 };
+const memberMessages = {
+  en: {
+    "member.nav": "Users & members",
+    "member.title": "Organization members",
+    "member.description":
+      "View organization members and, where authorized, manage their assigned roles.",
+    "member.loading": "Loading organization members…",
+    "member.selectOrganization": "Select an organization to view its members.",
+    "member.empty": "No organization members are available.",
+    "member.accessDenied":
+      "You are not authorized to view organization members.",
+    "member.rolesAccessDenied":
+      "You are not authorized to view this member's roles.",
+    "member.name": "Name",
+    "member.email": "Email",
+    "member.status": "Membership status",
+    "member.added": "Added",
+    "member.roles": "Roles",
+    "member.manageRoles": "Manage roles",
+    "member.rolesLoading": "Loading roles…",
+    "member.assignedRoles": "Assigned roles",
+    "member.noAssignedRoles": "No roles are assigned.",
+    "member.inactiveRole": "Inactive",
+    "member.availableRoles": "Available roles",
+    "member.noAvailableRoles": "No additional active roles are available.",
+    "member.assignRole": "Assign role",
+    "member.removeRole": "Remove",
+    "member.confirmRoleRemoval": "Remove this role from the member?",
+    "member.roleUpdated": "Member roles updated.",
+    "member.pages": "Organization member pages",
+    "member.previous": "Previous",
+    "member.next": "Next",
+  },
+  sw: {
+    "member.nav": "Watumiaji na wanachama",
+    "member.title": "Wanachama wa shirika",
+    "member.description":
+      "Tazama wanachama wa shirika na udhibiti majukumu yao pale unaporuhusiwa.",
+    "member.loading": "Inapakia wanachama wa shirika…",
+    "member.selectOrganization": "Chagua shirika ili kutazama wanachama wake.",
+    "member.empty": "Hakuna wanachama wa shirika wanaopatikana.",
+    "member.accessDenied": "Huna ruhusa ya kutazama wanachama wa shirika.",
+    "member.rolesAccessDenied":
+      "Huna ruhusa ya kuona majukumu ya mwanachama huyu.",
+    "member.name": "Jina",
+    "member.email": "Barua pepe",
+    "member.status": "Hali ya uanachama",
+    "member.added": "Aliongezwa",
+    "member.roles": "Majukumu",
+    "member.manageRoles": "Dhibiti majukumu",
+    "member.rolesLoading": "Inapakia majukumu…",
+    "member.assignedRoles": "Majukumu yaliyopangiwa",
+    "member.noAssignedRoles": "Hakuna majukumu yaliyopangiwa.",
+    "member.inactiveRole": "Haifanyi kazi",
+    "member.availableRoles": "Majukumu yanayopatikana",
+    "member.noAvailableRoles": "Hakuna majukumu mengine yanayotumika.",
+    "member.assignRole": "Pangia jukumu",
+    "member.removeRole": "Ondoa",
+    "member.confirmRoleRemoval": "Ondoa jukumu hili kwa mwanachama?",
+    "member.roleUpdated": "Majukumu ya mwanachama yamesasishwa.",
+    "member.pages": "Kurasa za wanachama wa shirika",
+    "member.previous": "Iliyotangulia",
+    "member.next": "Inayofuata",
+  },
+};
+const branchMessages = {
+  en: {
+    "branch.title": "Organization branches",
+    "branch.description":
+      "View all organization branches and manage branch details and active status.",
+    "branch.loading": "Loading organization branches…",
+    "branch.selectOrganization": "Select an organization to manage branches.",
+    "branch.name": "Branch name",
+    "branch.code": "Branch code",
+    "branch.status": "Status",
+    "branch.created": "Create branch",
+    "branch.save": "Save changes",
+    "branch.status.active": "Active",
+    "branch.status.inactive": "Inactive",
+    "branch.empty": "No branches are recorded for this organization.",
+    "branch.denied": "You are not authorized to view organization branches.",
+    "branch.previous": "Previous",
+    "branch.next": "Next",
+    "branch.pages": "Organization branch pages",
+    "branch.createdSuccess": "Branch created.",
+    "branch.updatedSuccess": "Branch updated.",
+  },
+  sw: {
+    "branch.title": "Matawi ya shirika",
+    "branch.description":
+      "Tazama matawi yote ya shirika na udhibiti maelezo na hali ya tawi.",
+    "branch.loading": "Inapakia matawi ya shirika…",
+    "branch.selectOrganization": "Chagua shirika ili kudhibiti matawi.",
+    "branch.name": "Jina la tawi",
+    "branch.code": "Msimbo wa tawi",
+    "branch.status": "Hali",
+    "branch.created": "Unda tawi",
+    "branch.save": "Hifadhi mabadiliko",
+    "branch.status.active": "Linafanya kazi",
+    "branch.status.inactive": "Halifanyi kazi",
+    "branch.empty": "Hakuna matawi yaliyorekodiwa kwa shirika hili.",
+    "branch.denied": "Huna ruhusa ya kuona matawi ya shirika.",
+    "branch.previous": "Iliyotangulia",
+    "branch.next": "Inayofuata",
+    "branch.pages": "Kurasa za matawi ya shirika",
+    "branch.createdSuccess": "Tawi limeundwa.",
+    "branch.updatedSuccess": "Tawi limesasishwa.",
+  },
+};
 let currentTheme = 0;
 let currentSession;
 let workflowLoadSequence = 0;
@@ -107,6 +216,12 @@ let resourceLoadSequence = 0;
 let resourceNavigationSequence = 0;
 let businessResourceSequence = 0;
 let businessResourceContext = "";
+let memberLoadSequence = 0;
+let memberOffset = 0;
+let memberContext = "";
+let branchLoadSequence = 0;
+let branchOffset = 0;
+let branchContext = "";
 const businessResourceOffsets = { customers: 0, products: 0 };
 const businessResourceFilters = { customers: {}, products: {} };
 const resourceOffsets = { notifications: 0, templates: 0, deliveries: 0 };
@@ -170,7 +285,7 @@ const boundaryViews = {
   branches: {
     title: "Branches",
     description:
-      "Branches below are only the active branches authorized for your signed-in membership.",
+      "View and manage organization branches. Branch selection remains verified by the server.",
     eyebrow: "Organization",
   },
   customers: {
@@ -188,7 +303,7 @@ const boundaryViews = {
   members: {
     title: "Users & members",
     description:
-      "Membership administration is not available in this workspace.",
+      "View memberships in your verified organization. The API controls access to member information.",
     eyebrow: "Organization",
   },
   audit: {
@@ -203,6 +318,22 @@ function workflowText(key) {
   return translate(key, {
     locale: workflowLocale,
     messages: workflowMessages,
+    fallbackText: key,
+  });
+}
+
+function branchText(key) {
+  return translate(key, {
+    locale: preferenceLocale,
+    messages: branchMessages,
+    fallbackText: key,
+  });
+}
+
+function memberText(key) {
+  return translate(key, {
+    locale: preferenceLocale,
+    messages: memberMessages,
     fallbackText: key,
   });
 }
@@ -1305,50 +1436,19 @@ function loadBoundaryView(view) {
     return;
   }
   if (view === "branches") {
-    const branches = currentSession?.availableBranches ?? [];
-    if (branches.length === 0) {
-      appendText(
-        content,
-        "p",
-        "No active branches are available to your current organization membership.",
-        "oc-state oc-state--empty",
-      );
-      return;
-    }
-    renderSimpleTable(
-      content,
-      ["Branch", "Code", "Context"],
-      branches.map((branch) => [
-        branch.name,
-        branch.code || "—",
-        branch.branchId === currentSession.branch?.branchId
-          ? "Selected"
-          : "Available for selection",
-      ]),
-    );
-    appendText(
-      content,
-      "p",
-      "Branch choices come only from the authenticated session response. Use the verified branch selector above to switch context.",
-      "oc-help",
-    );
+    document.querySelector("#boundary-title").textContent =
+      branchText("branch.title");
+    document.querySelector("#boundary-description").textContent =
+      branchText("branch.description");
+    void loadBranchesView(content);
     return;
   }
   if (view === "members") {
-    const memberships = currentSession?.memberships ?? [];
-    appendText(
-      content,
-      "div",
-      "The session API returns only your own active organization memberships. A tenant member directory, membership status details, and role assignment UI are not exposed by a list API.",
-      "oc-state oc-state--empty",
-    );
-    if (memberships.length) {
-      renderSimpleTable(
-        content,
-        ["Your organization access"],
-        memberships.map((membership) => [membership.name]),
-      );
-    }
+    document.querySelector("#boundary-title").textContent =
+      memberText("member.title");
+    document.querySelector("#boundary-description").textContent =
+      memberText("member.description");
+    void loadMembersView(content);
     return;
   }
   appendText(
@@ -1357,6 +1457,632 @@ function loadBoundaryView(view) {
     "Audit records are written by the platform, but there is no tenant-authorized audit read API available to this workspace. No activity is fabricated or inferred from unrelated data.",
     "oc-state oc-state--empty",
   );
+}
+
+async function loadBranchesView(content, statusMessage) {
+  const sequence = ++branchLoadSequence;
+  const session = currentSession;
+  const organizationId = session?.organization?.organizationId;
+  const context = organizationId ?? "";
+  if (context !== branchContext) {
+    branchContext = context;
+    branchOffset = 0;
+  }
+  content.replaceChildren();
+  if (!organizationId) {
+    appendText(
+      content,
+      "p",
+      branchText("branch.selectOrganization"),
+      "oc-state oc-state--empty",
+    );
+    return;
+  }
+
+  const choices = session?.availableBranches ?? [];
+  appendText(content, "h2", "Your available branch context", "oc-section-title");
+  if (choices.length > 0) {
+    renderSimpleTable(
+      content,
+      ["Branch", "Code", "Context"],
+      choices.map((branch) => [
+        branch.name,
+        branch.code || "—",
+        branch.branchId === session.branch?.branchId
+          ? "Selected"
+          : "Available for selection",
+      ]),
+    );
+  } else {
+    appendText(
+      content,
+      "p",
+      "No active branches are available to your current organization membership.",
+      "oc-state oc-state--empty",
+    );
+  }
+  appendText(
+    content,
+    "p",
+    "Branch choices come only from the authenticated session response. Use the verified branch selector above to switch context.",
+    "oc-help",
+  );
+
+  const administration = document.createElement("section");
+  administration.className = "oc-stack";
+  administration.setAttribute("aria-label", branchText("branch.title"));
+  content.append(administration);
+  void loadBranchAdministration(
+    administration,
+    organizationId,
+    session,
+    sequence,
+    statusMessage,
+  );
+}
+
+async function loadBranchAdministration(
+  container,
+  organizationId,
+  session,
+  sequence,
+  statusMessage,
+) {
+  const heading = appendText(
+    container,
+    "h2",
+    branchText("branch.title"),
+    "oc-section-title",
+  );
+  heading.id = "branch-administration-heading";
+  const loading = appendText(
+    container,
+    "p",
+    branchText("branch.loading"),
+    "oc-state oc-state--loading",
+  );
+  loading.setAttribute("role", "status");
+  try {
+    const result = await authenticatedRequest(
+      `/organizations/${encodeURIComponent(organizationId)}/branches?limit=20&offset=${branchOffset}`,
+    );
+    if (sequence !== branchLoadSequence || currentSession !== session) return;
+    container.replaceChildren(heading);
+    if (statusMessage) {
+      const status = appendText(container, "p", statusMessage, "oc-muted");
+      status.setAttribute("role", "status");
+    }
+
+    if (result.capabilities?.canCreate === true) {
+      const form = document.createElement("form");
+      form.className = "oc-stack";
+      const formHeading = appendText(
+        form,
+        "h3",
+        branchText("branch.created"),
+        "oc-section-title",
+      );
+      formHeading.id = "branch-create-heading";
+    const grid = document.createElement("div");
+    grid.className = "oc-form-grid";
+    const nameField = createBranchInput(
+      "branch-new-name",
+      "name",
+      branchText("branch.name"),
+      200,
+    );
+    const codeField = createBranchInput(
+      "branch-new-code",
+      "code",
+      branchText("branch.code"),
+      50,
+      "[A-Za-z0-9][A-Za-z0-9_-]*",
+    );
+    grid.append(nameField.wrapper, codeField.wrapper);
+    const error = document.createElement("p");
+    error.className = "oc-alert oc-alert--error";
+    error.setAttribute("role", "alert");
+    error.hidden = true;
+    const create = document.createElement("button");
+    create.type = "submit";
+    create.className = "oc-button";
+    create.textContent = branchText("branch.created");
+    form.append(grid, error, create);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      error.hidden = true;
+      create.disabled = true;
+      try {
+        await authenticatedRequest(
+          `/organizations/${encodeURIComponent(organizationId)}/branches`,
+          {
+            method: "POST",
+            body: {
+              name: nameField.input.value,
+              code: codeField.input.value,
+            },
+          },
+        );
+        branchOffset = 0;
+        await loadBranchesView(
+          document.querySelector("#boundary-content"),
+          branchText("branch.createdSuccess"),
+        );
+      } catch (requestError) {
+        error.textContent = errorMessage(requestError);
+        error.hidden = false;
+        create.disabled = false;
+      }
+    });
+      container.append(form);
+    }
+
+    const branches = Array.isArray(result.branches) ? result.branches : [];
+    if (branches.length === 0 && branchOffset === 0) {
+      appendText(
+        container,
+        "p",
+        branchText("branch.empty"),
+        "oc-state oc-state--empty",
+      );
+    } else {
+      for (const branch of branches) {
+        const card = document.createElement("article");
+        card.className = "oc-card oc-stack";
+        appendText(card, "h3", branch.name, "oc-section-title");
+        appendText(card, "p", `${branch.code} · ${branch.status}`, "oc-muted");
+        if (result.capabilities?.canUpdate === true) {
+          const updateForm = document.createElement("form");
+        updateForm.className = "oc-stack";
+        const updateGrid = document.createElement("div");
+        updateGrid.className = "oc-form-grid";
+        const branchName = createBranchInput(
+          `branch-${branch.id}-name`,
+          "name",
+          branchText("branch.name"),
+          200,
+        );
+        branchName.input.value = branch.name;
+        const branchCode = createBranchInput(
+          `branch-${branch.id}-code`,
+          "code",
+          branchText("branch.code"),
+          50,
+          "[A-Za-z0-9][A-Za-z0-9_-]*",
+        );
+        branchCode.input.value = branch.code;
+        const statusWrapper = document.createElement("div");
+        statusWrapper.className = "oc-field";
+        const statusLabel = document.createElement("label");
+        statusLabel.htmlFor = `branch-${branch.id}-status`;
+        statusLabel.textContent = branchText("branch.status");
+        const statusSelect = document.createElement("select");
+        statusSelect.id = statusLabel.htmlFor;
+        statusSelect.name = "status";
+        statusSelect.className = "oc-input";
+        const unchanged = document.createElement("option");
+        unchanged.value = "";
+        unchanged.textContent = `${branchText("branch.status")}: ${branch.status}`;
+        statusSelect.append(unchanged);
+        for (const statusValue of ["ACTIVE", "INACTIVE"]) {
+          const option = document.createElement("option");
+          option.value = statusValue;
+          option.textContent = branchText(`branch.status.${statusValue.toLowerCase()}`);
+          statusSelect.append(option);
+        }
+        updateGrid.append(
+          branchName.wrapper,
+          branchCode.wrapper,
+          statusWrapper,
+        );
+        statusWrapper.append(statusLabel, statusSelect);
+        const updateError = document.createElement("p");
+        updateError.className = "oc-alert oc-alert--error";
+        updateError.setAttribute("role", "alert");
+        updateError.hidden = true;
+        const save = document.createElement("button");
+        save.type = "submit";
+        save.className = "oc-button oc-button--secondary";
+        save.textContent = branchText("branch.save");
+        updateForm.append(updateGrid, updateError, save);
+        updateForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          updateError.hidden = true;
+          save.disabled = true;
+          const body = {
+            name: branchName.input.value,
+            code: branchCode.input.value,
+            ...(statusSelect.value ? { status: statusSelect.value } : {}),
+          };
+          try {
+            await authenticatedRequest(
+              `/organizations/${encodeURIComponent(organizationId)}/branches/${encodeURIComponent(branch.id)}`,
+              { method: "PATCH", body },
+            );
+            await loadBranchesView(
+              document.querySelector("#boundary-content"),
+              branchText("branch.updatedSuccess"),
+            );
+          } catch (requestError) {
+            updateError.textContent = errorMessage(requestError);
+            updateError.hidden = false;
+            save.disabled = false;
+          }
+        });
+          card.append(updateForm);
+        }
+        container.append(card);
+      }
+    }
+    const pagination = document.createElement("nav");
+    pagination.className = "oc-pagination";
+    pagination.setAttribute("aria-label", branchText("branch.pages"));
+    const controls = document.createElement("div");
+    controls.className = "oc-pagination__controls";
+    const previous = document.createElement("button");
+    previous.type = "button";
+    previous.className = "oc-button oc-button--secondary";
+    previous.textContent = branchText("branch.previous");
+    previous.disabled = branchOffset === 0;
+    previous.addEventListener("click", () => {
+      branchOffset = Math.max(0, branchOffset - 20);
+      void loadBranchesView(document.querySelector("#boundary-content"));
+    });
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "oc-button oc-button--secondary";
+    next.textContent = branchText("branch.next");
+    next.disabled = !result.hasMore;
+    next.addEventListener("click", () => {
+      branchOffset += 20;
+      void loadBranchesView(document.querySelector("#boundary-content"));
+    });
+    controls.append(previous, next);
+    pagination.append(controls);
+    container.append(pagination);
+  } catch (requestError) {
+    if (sequence !== branchLoadSequence || currentSession !== session) return;
+    container.replaceChildren(heading);
+    const error = appendText(
+      container,
+      "p",
+      requestError instanceof ApiError && requestError.status === 403
+        ? branchText("branch.denied")
+        : errorMessage(requestError),
+      "oc-alert oc-alert--error",
+    );
+    error.setAttribute("role", "alert");
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "oc-button oc-button--secondary";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", () => {
+      void loadBranchesView(document.querySelector("#boundary-content"));
+    });
+    container.append(retry);
+  }
+}
+
+function createBranchInput(id, name, labelText, maxLength, pattern) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "oc-field";
+  const label = document.createElement("label");
+  label.htmlFor = id;
+  label.textContent = labelText;
+  const input = document.createElement("input");
+  input.id = id;
+  input.name = name;
+  input.type = "text";
+  input.className = "oc-input";
+  input.maxLength = maxLength;
+  input.required = true;
+  if (pattern) input.pattern = pattern;
+  wrapper.append(label, input);
+  return { wrapper, input };
+}
+
+async function loadMembersView(content) {
+  const sequence = ++memberLoadSequence;
+  const session = currentSession;
+  const organizationId = session?.organization?.organizationId;
+  const context = `${organizationId ?? ""}:${session?.branch?.branchId ?? ""}`;
+  if (context !== memberContext) {
+    memberContext = context;
+    memberOffset = 0;
+  }
+  content.replaceChildren();
+  if (!organizationId) {
+    appendText(
+      content,
+      "p",
+      memberText("member.selectOrganization"),
+      "oc-state oc-state--empty",
+    );
+    return;
+  }
+
+  const loading = appendText(
+    content,
+    "p",
+    memberText("member.loading"),
+    "oc-state oc-state--loading",
+  );
+  loading.setAttribute("role", "status");
+  try {
+    const result = await authenticatedRequest(
+      `/organizations/${encodeURIComponent(organizationId)}/members?limit=20&offset=${memberOffset}`,
+    );
+    if (sequence !== memberLoadSequence || currentSession !== session) return;
+    content.replaceChildren();
+    const members = Array.isArray(result.members) ? result.members : [];
+    if (members.length === 0 && memberOffset === 0) {
+      appendText(
+        content,
+        "p",
+        memberText("member.empty"),
+        "oc-state oc-state--empty",
+      );
+      return;
+    }
+    const tableWrapper = document.createElement("div");
+    tableWrapper.className = "oc-table-wrap";
+    const table = document.createElement("table");
+    table.className = "oc-table";
+    const head = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    for (const label of [
+      memberText("member.name"),
+      memberText("member.email"),
+      memberText("member.status"),
+      memberText("member.added"),
+      memberText("member.roles"),
+    ]) {
+      const header = appendText(headerRow, "th", label);
+      header.scope = "col";
+    }
+    head.append(headerRow);
+    const body = document.createElement("tbody");
+    for (const member of members) {
+      const row = document.createElement("tr");
+      for (const value of [
+        member.displayName,
+        member.email,
+        member.status,
+        formatDateTime(new Date(member.createdAt), {
+          locale: preferenceLocale,
+        }),
+      ]) {
+        appendText(row, "td", String(value ?? "—"));
+      }
+      const rolesCell = document.createElement("td");
+      const disclosure = document.createElement("details");
+      disclosure.className = "oc-dropdown";
+      const summary = appendText(
+        disclosure,
+        "summary",
+        memberText("member.manageRoles"),
+      );
+      summary.setAttribute(
+        "aria-label",
+        `${memberText("member.manageRoles")}: ${member.displayName}`,
+      );
+      const panel = document.createElement("div");
+      panel.className = "oc-stack";
+      panel.setAttribute("aria-live", "polite");
+      disclosure.append(panel);
+      disclosure.addEventListener("toggle", () => {
+        if (!disclosure.open || disclosure.dataset.loaded === "true") return;
+        disclosure.dataset.loaded = "true";
+        void loadMemberRolePanel(panel, organizationId, member, session);
+      });
+      rolesCell.append(disclosure);
+      row.append(rolesCell);
+      body.append(row);
+    }
+    table.append(head, body);
+    tableWrapper.append(table);
+    content.append(tableWrapper);
+    const pagination = document.createElement("nav");
+    pagination.className = "oc-pagination";
+    pagination.setAttribute("aria-label", memberText("member.pages"));
+    const controls = document.createElement("div");
+    controls.className = "oc-pagination__controls";
+    const previous = document.createElement("button");
+    previous.type = "button";
+    previous.className = "oc-button oc-button--secondary";
+    previous.textContent = memberText("member.previous");
+    previous.disabled = memberOffset === 0;
+    previous.addEventListener("click", () => {
+      memberOffset = Math.max(0, memberOffset - 20);
+      void loadMembersView(content);
+    });
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "oc-button oc-button--secondary";
+    next.textContent = memberText("member.next");
+    next.disabled = !result.hasMore;
+    next.addEventListener("click", () => {
+      memberOffset += 20;
+      void loadMembersView(content);
+    });
+    controls.append(previous, next);
+    pagination.append(controls);
+    content.append(pagination);
+  } catch (requestError) {
+    if (sequence !== memberLoadSequence || currentSession !== session) return;
+    content.replaceChildren();
+    const error = appendText(
+      content,
+      "div",
+      requestError instanceof ApiError && requestError.status === 403
+        ? memberText("member.accessDenied")
+        : errorMessage(requestError),
+      "oc-alert oc-alert--error",
+    );
+    error.setAttribute("role", "alert");
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "oc-button oc-button--secondary";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", () => void loadMembersView(content));
+    content.append(retry);
+  }
+}
+
+async function loadMemberRolePanel(
+  panel,
+  organizationId,
+  member,
+  session,
+  statusMessage,
+) {
+  panel.replaceChildren();
+  const loading = appendText(
+    panel,
+    "p",
+    memberText("member.rolesLoading"),
+    "oc-state oc-state--loading",
+  );
+  loading.setAttribute("role", "status");
+  try {
+    const result = await authenticatedRequest(
+      `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(member.id)}/roles`,
+    );
+    if (currentSession !== session || !panel.isConnected) return;
+    panel.replaceChildren();
+    if (statusMessage) {
+      const status = appendText(panel, "p", statusMessage, "oc-muted");
+      status.setAttribute("role", "status");
+    }
+    appendText(panel, "h3", memberText("member.assignedRoles"));
+    const assignedRoles = Array.isArray(result.assignedRoles)
+      ? result.assignedRoles
+      : [];
+    if (assignedRoles.length === 0) {
+      appendText(panel, "p", memberText("member.noAssignedRoles"), "oc-muted");
+    } else {
+      for (const role of assignedRoles) {
+        const item = document.createElement("div");
+        item.className = "oc-pagination__controls";
+        const status =
+          role.status === "ACTIVE"
+            ? role.name
+            : `${role.name} (${memberText("member.inactiveRole")})`;
+        appendText(item, "span", status);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "oc-button oc-button--secondary";
+        remove.textContent = memberText("member.removeRole");
+        remove.addEventListener("click", async () => {
+          if (!window.confirm(memberText("member.confirmRoleRemoval"))) return;
+          remove.disabled = true;
+          try {
+            await authenticatedRequest(
+              `/auth/membership/roles/${encodeURIComponent(member.id)}/${encodeURIComponent(role.id)}`,
+              { method: "DELETE" },
+            );
+            await loadMemberRolePanel(
+              panel,
+              organizationId,
+              member,
+              session,
+              memberText("member.roleUpdated"),
+            );
+          } catch (requestError) {
+            remove.disabled = false;
+            appendText(
+              panel,
+              "p",
+              errorMessage(requestError),
+              "oc-alert oc-alert--error",
+            );
+          }
+        });
+        item.append(remove);
+        panel.append(item);
+      }
+    }
+
+    const availableRoles = Array.isArray(result.availableRoles)
+      ? result.availableRoles.filter(
+          (role) => !assignedRoles.some((assigned) => assigned.id === role.id),
+        )
+      : [];
+    if (member.status === "ACTIVE") {
+      appendText(panel, "h3", memberText("member.availableRoles"));
+      if (availableRoles.length === 0) {
+        appendText(
+          panel,
+          "p",
+          memberText("member.noAvailableRoles"),
+          "oc-muted",
+        );
+      } else {
+        const form = document.createElement("form");
+        form.className = "oc-stack";
+        const select = document.createElement("select");
+        select.required = true;
+        select.setAttribute("aria-label", memberText("member.availableRoles"));
+        for (const role of availableRoles) {
+          const option = document.createElement("option");
+          option.value = role.id;
+          option.textContent = role.name;
+          select.append(option);
+        }
+        const assign = document.createElement("button");
+        assign.type = "submit";
+        assign.className = "oc-button oc-button--secondary";
+        assign.textContent = memberText("member.assignRole");
+        form.append(select, assign);
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          assign.disabled = true;
+          try {
+            await authenticatedRequest("/auth/membership/roles", {
+              method: "POST",
+              body: { membershipId: member.id, roleId: select.value },
+            });
+            await loadMemberRolePanel(
+              panel,
+              organizationId,
+              member,
+              session,
+              memberText("member.roleUpdated"),
+            );
+          } catch (requestError) {
+            assign.disabled = false;
+            appendText(
+              panel,
+              "p",
+              errorMessage(requestError),
+              "oc-alert oc-alert--error",
+            );
+          }
+        });
+        panel.append(form);
+      }
+    }
+  } catch (requestError) {
+    if (currentSession !== session || !panel.isConnected) return;
+    panel.replaceChildren();
+    const error = appendText(
+      panel,
+      "p",
+      requestError instanceof ApiError && requestError.status === 403
+        ? memberText("member.rolesAccessDenied")
+        : errorMessage(requestError),
+      "oc-alert oc-alert--error",
+    );
+    error.setAttribute("role", "alert");
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "oc-button oc-button--secondary";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", () => {
+      void loadMemberRolePanel(panel, organizationId, member, session);
+    });
+    panel.append(retry);
+  }
 }
 
 function businessResourceEndpoint(view) {
@@ -2377,6 +3103,16 @@ async function updateResourceNavigation(session) {
       organizationId &&
         `/organizations/${encodeURIComponent(organizationId)}/modules`,
     ],
+    [
+      "members-nav",
+      organizationId &&
+        `/organizations/${encodeURIComponent(organizationId)}/members?limit=1`,
+    ],
+    [
+      "branches-nav",
+      organizationId &&
+        `/organizations/${encodeURIComponent(organizationId)}/branches?limit=1`,
+    ],
     ["roles-nav", "/roles"],
     [
       "settings-nav",
@@ -2767,6 +3503,7 @@ function selectView(view) {
     : validViews.includes(view)
       ? view
       : "not-found";
+  document.querySelector("#members-nav").textContent = memberText("member.nav");
   const pageTitle =
     resourceViews[selected]?.title ??
     boundaryViews[selected]?.title ??

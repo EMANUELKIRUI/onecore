@@ -20,9 +20,36 @@ The database adds a second boundary:
 
 Without tenant context, tenant rows are invisible and tenant writes fail. Never set the tenant context directly from an API parameter/header before trusted membership resolution. An app process that can issue arbitrary SQL can change its custom GUC; therefore authorization and process/database credential boundaries remain essential.
 
+The organization member-directory route additionally requires
+`core.organization.user.read` at organization scope. Only after that
+authorization does its transaction set
+`app.current_user_directory_organization_id`; the `users` SELECT policy then
+allows identity rows linked to that same tenant's memberships. The marker is
+transaction-local and is never accepted from a request. Other requests retain
+the self/login-only user identity visibility.
+
+Member role administration uses the separate organization-scoped
+`core.rbac.role.read`, `core.rbac.membership_role.assign`, and
+`core.rbac.membership_role.remove` permissions. The role-read route returns
+role metadata without selecting user identity rows; its role and membership
+queries remain protected by their existing forced tenant RLS policies.
+Assignment validates the target through its active organization membership
+without expanding the `users` identity-read policy.
+
 ## Branch scope
 
 Branches are organization-owned and use the typed lifecycle `ACTIVE`, `INACTIVE`, `SUSPENDED`, or `CLOSED`. Membership branch access defaults to `ASSIGNED` and can include multiple `membership_branches` assignments; trusted organization-wide membership access uses the explicit `ALL` mode. The server persists branch context in the existing session only after verifying the active organization, membership, branch, and assignment. Organization switching clears branch context. This selects a branch but is not complete branch-level data authorization: future branch-bearing business tables must include both organization and branch identity, use a composite `(organization_id, branch_id)` foreign key, apply branch predicates/RLS where appropriate, and query through authorized membership scope.
+
+Branch administration now reuses the existing forced-RLS `branches` table.
+The paginated read, create, and update endpoints require organization-scoped
+`core.organization.branch.read`, `core.organization.branch.create`, and
+`core.organization.branch.update` permissions, respectively. The API verifies
+the requested organization against the active membership before querying or
+mutating, and the existing policy restricts all branch rows to the verified
+organization GUC. Creation writes only organization ID, name, and code under
+column-scoped insert grants; updates are soft status/detail changes. This
+slice does not alter membership assignments or `branchAccessMode`, and does
+not change the existing `users` RLS policy.
 
 Phase 18 workflow executions and action-progress records remain owned by the
 source event's organization. Executions retain the event's verified branch

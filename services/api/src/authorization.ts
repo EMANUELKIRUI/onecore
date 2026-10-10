@@ -7,7 +7,6 @@ import {
   permissions,
   rolePermissions,
   roles,
-  users,
   writeAuthorizationMutationEvent,
   type AuthorizationContext,
   type AuthorizationMetadata,
@@ -825,7 +824,6 @@ export function registerAuthorizationRoutes(
             userId: organizationMemberships.userId,
           })
           .from(organizationMemberships)
-          .innerJoin(users, eq(organizationMemberships.userId, users.id))
           .where(
             and(
               eq(
@@ -834,7 +832,6 @@ export function registerAuthorizationRoutes(
               ),
               eq(organizationMemberships.id, parsedBody.data.membershipId),
               eq(organizationMemberships.status, "ACTIVE"),
-              eq(users.status, "ACTIVE"),
             ),
           )
           .limit(1);

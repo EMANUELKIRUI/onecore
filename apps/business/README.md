@@ -69,12 +69,22 @@ Login/session handling, profile/session summary, password change, and sign-out
 are included. Regional organization settings and legal name can be updated
 through the existing settings API; effective feature values remain read-only.
 The branch view lists only active branch choices returned by the authenticated
-session. The member view lists only the signed-in user's own
-active memberships; no tenant member directory, membership details/role
-assignment UI, organization lifecycle editor, or branch management API is
-available to this app. Likewise, there is no tenant-authorized audit-log read
-API or active-session/device revocation API. These unavailable capabilities
-are identified in the UI rather than represented with fake data or CRUD.
+session. The member directory uses the tenant-authorized
+`GET /organizations/:organizationId/members` API and requires the
+organization-scoped `core.organization.user.read` permission. It lists member
+identity and membership status only. The member roles disclosure reads
+`GET /organizations/:organizationId/members/:membershipId/roles` using
+`core.rbac.role.read`; assignment and removal use the existing
+`POST /auth/membership/roles` and
+`DELETE /auth/membership/roles/:membershipId/:roleId` APIs, requiring
+`core.rbac.membership_role.assign` and
+`core.rbac.membership_role.remove`. The UI is not an authorization boundary:
+the API enforces organization scope, protects owner capability and self-role
+changes, and audits role mutations. Organization lifecycle editing and branch
+management are not available. Likewise, there is no tenant-authorized
+audit-log read API or active-session/device revocation API. These unavailable
+capabilities are identified in the UI rather than represented with fake data
+or CRUD.
 
 Module and capability navigation is filtered by successful protected API
 reads as a usability feature; direct URLs and frontend checks do not grant

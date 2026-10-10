@@ -68,6 +68,7 @@ describe("authenticated business shell", () => {
       "/communications/deliveries",
       "/features",
       "/workflow-executions",
+      "/members",
       "/roles/",
       'method: "PATCH"',
       "/configuration",
@@ -78,8 +79,18 @@ describe("authenticated business shell", () => {
       "Branch choices come only from the authenticated session",
     );
     expect(application).toContain("no tenant-authorized audit read API");
+    expect(application).toContain("function loadMembersView");
+    expect(application).toContain("members-nav");
+    expect(application).toContain("function loadMemberRolePanel");
+    expect(application).toContain(
+      "/members/${encodeURIComponent(member.id)}/roles",
+    );
+    expect(application).toContain('method: "POST"');
+    expect(application).toContain('method: "DELETE"');
+    expect(application).toContain("Watumiaji na wanachama");
+    expect(page).toContain('id="members-nav"');
     expect(application).not.toMatch(
-      /\/organizations\/[^`"]+\/(branches|members|audit)/,
+      /\/organizations\/[^`"]+\/(branches|audit)/,
     );
     expect(application).not.toContain("version.body");
     expect(application).not.toContain("secretReference");
