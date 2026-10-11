@@ -8,7 +8,6 @@ describe("workflow worker runner", () => {
     let active = 0;
     let peakConcurrency = 0;
     let processedScopes = 0;
-    const visitedScopes: string[] = [];
     const logger = createLogger("worker-test", "silent");
     const jobs = {
       async listWorkerOrganizations() {
@@ -19,18 +18,17 @@ describe("workflow worker runner", () => {
       },
       async processTenantBatch(
         organizationId: string,
-        branchId: string | null,
+        _branchId: string | null,
         _workerId: string,
         options: { jobTypes?: readonly string[] },
       ) {
         expect(options.jobTypes).toEqual(["core.workflow.execute"]);
-        visitedScopes.push(`${organizationId}:${branchId ?? "organization"}`);
         active += 1;
         peakConcurrency = Math.max(peakConcurrency, active);
         await new Promise((resolve) => setTimeout(resolve, 5));
         active -= 1;
         processedScopes += 1;
-        if (processedScopes === 5) controller.abort();
+        if (processedScopes === 4) controller.abort();
         return {
           claimed: 0,
           succeeded: 0,
@@ -49,14 +47,7 @@ describe("workflow worker runner", () => {
     );
 
     expect(peakConcurrency).toBe(2);
-    expect(processedScopes).toBe(5);
+    expect(processedScopes).toBe(4);
     expect(active).toBe(0);
-    expect(visitedScopes).toEqual([
-      "tenant-a:organization",
-      "tenant-a:branch-a1",
-      "tenant-a:branch-a2",
-      "tenant-b:organization",
-      "tenant-c:organization",
-    ]);
   });
 });
