@@ -487,7 +487,11 @@ transport. PGlite tests do not prove production PostgreSQL role, RLS, trigger,
 or concurrency behavior. The in-app workflow notification capability must
 not be described as production-operational based only on service tests; the
 deployment must provision and validate all required worker and database
-runtime components before claiming automatic production delivery.
+runtime components before claiming automatic production delivery. There is
+currently no tenant-authorized job list/attempt-history API or separate job
+dead-letter table: operators rely on structured worker/database logs and
+`FAILED` job plus `JOB_FAILED` outbox/audit records. This visibility contract
+must be considered during production operational acceptance.
 
 ### Future Extensions
 

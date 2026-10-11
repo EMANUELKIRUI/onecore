@@ -803,5 +803,71 @@ integrationDescribe("PostgreSQL workflow worker integration", () => {
       .from(schema.jobs)
       .where(eq(schema.jobs.id, staleJob.id));
     expect(recovered).toEqual({ status: "SUCCEEDED", attempts: 2 });
+
+    const exhaustedLeaseJob = await insertJob(
+      organization.id,
+      { delayFirstAttempt: true },
+      { maxAttempts: 1 },
+    );
+    const exhaustedLeaseOutcomes: string[] = [];
+    const expiredFinalAttempt = await jobs.processTenantBatch(
+      organization.id,
+      null,
+      "worker-exhausted-lease",
+      {
+        leaseMilliseconds: 1_000,
+        onJobOutcome: ({ jobId, outcome }) => {
+          if (jobId === exhaustedLeaseJob.id) {
+            exhaustedLeaseOutcomes.push(outcome);
+          }
+        },
+      },
+    );
+    expect(expiredFinalAttempt?.claimed).toBe(1);
+    expect(exhaustedLeaseOutcomes).toEqual(["STALE"]);
+
+    const exhaustedLeaseRecovery = await jobs.processTenantBatch(
+      organization.id,
+      null,
+      "worker-exhausted-recovery",
+    );
+    expect(exhaustedLeaseRecovery?.claimed).toBe(0);
+    const [exhaustedJobState] = await admin.db
+      .select({
+        status: schema.jobs.status,
+        lastErrorCode: schema.jobs.lastErrorCode,
+      })
+      .from(schema.jobs)
+      .where(eq(schema.jobs.id, exhaustedLeaseJob.id));
+    expect(exhaustedJobState).toEqual({
+      status: "FAILED",
+      lastErrorCode: "ATTEMPTS_EXHAUSTED",
+    });
+    const [abandonedAttempt] = await admin.db
+      .select({ outcome: schema.jobAttempts.outcome })
+      .from(schema.jobAttempts)
+      .where(
+        and(
+          eq(schema.jobAttempts.organizationId, organization.id),
+          eq(schema.jobAttempts.jobId, exhaustedLeaseJob.id),
+          eq(schema.jobAttempts.attempt, 1),
+        ),
+      );
+    expect(abandonedAttempt?.outcome).toBe("ABANDONED");
+    const [failedEvent] = await admin.db
+      .select({ payload: schema.outboxEvents.payload })
+      .from(schema.outboxEvents)
+      .where(
+        and(
+          eq(schema.outboxEvents.organizationId, organization.id),
+          eq(schema.outboxEvents.eventType, "JOB_FAILED"),
+          eq(schema.outboxEvents.aggregateId, exhaustedLeaseJob.id),
+        ),
+      );
+    expect(failedEvent?.payload).toMatchObject({
+      jobId: exhaustedLeaseJob.id,
+      jobType: "test.worker.execute",
+      failureKind: "RETRIES_EXHAUSTED",
+    });
   });
 });

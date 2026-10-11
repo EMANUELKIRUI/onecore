@@ -124,6 +124,17 @@ then closes the database pool. If externally killed during a handler, the
 transaction rolls back and the persisted lease becomes reclaimable after
 expiry.
 
+For operations, `worker.job.claimed` and `worker.job.outcome` include the job
+ID, tenant/branch scope, attempt, and outcome. Database telemetry also emits
+`job.claim_batch` summaries, including recovered leases and exhausted attempts,
+and `job.attempt` results. Keep `LOG_LEVEL` at `info` or more verbose and
+correlate these events in the central log system. There is currently no
+tenant-authorized HTTP job list/attempt-history endpoint and no separate job
+dead-letter table. Terminal queue failures are stored as `FAILED` jobs with a
+`JOB_FAILED` outbox event and audit entry; event-dispatch dead letters are a
+separate facility. Do not tell operators to use an unregistered job-status API
+or grant global queue access for ad hoc inspection.
+
 Processing is **at-least-once**, not exactly-once: a crash after an external
 side effect but before the transaction commits can cause another attempt.
 Before each workflow notification, the handler revalidates the persisted job

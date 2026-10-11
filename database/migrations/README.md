@@ -121,15 +121,19 @@ The migration owner should provide the following read-only evidence for the
 specific target database and environment before deciding the recovery path:
 
 1. The migration ledger schema and rows for
+   `20261008083900_phase18_workflow_runtime` and
+   `20261010000000_workflow_worker_discovery`,
    `20261010020000_branch_administration_contract`,
    `20261010030000_membership_branch_assignment_contract`, and
    `20261010040000_branch_permission_backfill_repair`, plus
-   `20261010140000_session_revoked_at_insert_grant`, including each available
-   `id`, `name`, `hash`, and `created_at`. The default Drizzle ledger is
-   `drizzle.__drizzle_migrations`; confirm its actual schema and columns
-   before querying, and compare recorded hashes/timestamps with the reviewed
-   migration artifacts. Do not infer success from the presence of a later row
-   or manually add a row.
+   `20261010140000_session_revoked_at_insert_grant` and
+   `20261011000000_worker_notification_id_insert_grants`, including each
+   available `id`, `name`, `hash`, and `created_at`. For a target beyond these
+   versions, reconcile every intervening migration in timestamp order as well.
+   The default Drizzle ledger is `drizzle.__drizzle_migrations`; confirm its
+   actual schema and columns before querying, and compare recorded
+   hashes/timestamps with the reviewed migration artifacts. Do not infer
+   success from the presence of a later row or manually add a row.
 2. For every organization containing a system `Organization Owner` or
    `Organization Admin` role, the role ID/status and the presence or absence
    of each of these six role grants, including `scope_type` and `scope`:
@@ -142,15 +146,20 @@ specific target database and environment before deciding the recovery path:
    organization-scoped with an empty JSON scope. Include missing combinations
    rather than reporting only existing rows.
 3. Catalog evidence for `roles`, `role_permissions`, `permissions`,
-   `branches`, `membership_branches`, and `sessions`: table owner, whether
-   RLS is enabled and forced, and the applicable policy definitions. Also
-   provide the `onecore_app`, `onecore_migrator`, and (if provisioned)
-   `onecore_worker` role flags (`rolsuper` and `rolbypassrls`) and effective
-   relevant grants. Confirm that runtime and migrator roles are not
-   superusers or RLS bypassers, protected tables remain migration-role
-   owned, branch and membership-branch grants remain narrowly scoped, and
-   the session INSERT grant is limited to the generated `id` and default
-   `revoked_at` columns.
+   `branches`, `membership_branches`, `sessions`, `jobs`, `job_attempts`,
+   `workflow_executions`, `workflow_execution_actions`, `notifications`, and
+   `notification_deliveries`: table owner, whether RLS is enabled and forced,
+   and applicable policy definitions. Also provide the `onecore_app`,
+   `onecore_migrator`, `onecore_worker`, and dedicated worker-login role flags
+   (`rolsuper` and `rolbypassrls`), role membership, and effective relevant
+   grants. Confirm that runtime and migrator roles are not superusers or RLS
+   bypassers, protected tables remain migration-role owned, and the worker
+   login is a member only of the non-login worker role. Verify the worker's
+   notification INSERT privileges are column-scoped: the follow-up migration
+   adds `id`, `read_at`, and `created_at` on `notifications`, and `id`,
+   `next_attempt_at`, `last_error_code`, `created_at`, and `updated_at` on
+   `notification_deliveries`; table-level INSERT remains absent. Branch,
+   membership-branch, and session grants must remain narrowly scoped too.
 
 The evidence is for reconciliation only; it does not authorize a migration,
 ledger update, or production change. If the historical migration is absent,

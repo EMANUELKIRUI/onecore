@@ -47,15 +47,27 @@ Before starting the service:
 2. Apply the worker-discovery migration and its ordered forward-only follow-up
    `20261011000000_worker_notification_id_insert_grants` through the approved
    migration process after reviewing the target, backup, and migration diff.
-   Do not apply migrations from the worker or API startup path.
+   The worker runtime migration `20261008083900_phase18_workflow_runtime`
+   precedes discovery migration `20261010000000_workflow_worker_discovery`;
+   the notification-grant migration runs only after every intervening
+   timestamp-ordered migration. In particular, reconcile
+   `20261010020000_branch_administration_contract` with the target ledger before
+   invoking the ordered runner. If that predecessor is absent and its
+   forced-RLS backfill fails, stop and follow the approved recovery procedure
+   in [`database/migrations/README.md`](../../database/migrations/README.md);
+   do not skip it or run the worker grant migration out of order. Do not apply
+   migrations from the worker or API startup path.
 3. Provision a dedicated login and grant it membership only in the
    `onecore_worker` `NOLOGIN NOSUPERUSER NOBYPASSRLS` group role. Do not reuse
    the API or migrator login. Configure the service's secret `DATABASE_URL`
    with that login, and set `LOG_LEVEL` plus optional worker tuning variables.
    Never place credentials in the blueprint or source control.
-4. Start the background worker separately from the API. Verify a
-   `worker.ready` log, successful poll events, and tenant-authorized queue
-   outcomes before considering it operational.
+4. Start the background worker separately from the API. Verify `worker.ready`,
+   `worker.poll.completed`, and matching `worker.job.claimed` /
+   `worker.job.outcome` logs for a controlled run. Verify persisted job,
+   execution, and notification state through the approved read-only,
+   tenant-scoped database reconciliation procedure before considering it
+   operational; no job-status HTTP API is currently available.
 
 `DATABASE_URL` is required. `WORKER_POLL_INTERVAL_MS` defaults to `5000`
 (250–60000), `WORKER_CONCURRENCY` defaults to `4` (1–16), and
@@ -69,8 +81,12 @@ no synthetic HTTP readiness check. The worker logs `worker.ready`,
 `worker.poll.completed`, `worker.job.claimed`, `worker.job.outcome`, and
 failure/shutdown events. Repeated discovery/scope errors, retrying/failing
 outcomes, or a growing eligible tenant queue without recent poll logs require
-operator investigation. Queue status must be inspected through the existing
-authorized tenant-scoped APIs, not by granting workers global queue access.
+operator investigation. Database telemetry reports claim-batch lease recovery
+and exhaustion counts plus per-attempt outcomes. There is no tenant-authorized
+job list/attempt-history HTTP endpoint today, so use the central structured-log
+system for operational observation; do not assume queue state is available from
+an API or grant workers global queue access. Terminal jobs use `FAILED` state
+and `JOB_FAILED` outbox/audit records, not a separate job dead-letter table.
 
 On restart, `SIGTERM`/`SIGINT` stops new polling and allows in-flight database
 transactions to finish during the grace period. If the grace period expires,
