@@ -356,7 +356,7 @@ const boundaryViews = {
   pos: {
     title: "Point of sale",
     description:
-      "Browse active catalog items and prepare a temporary draft. This view is not connected to the unpaid-sale API; stock, tax, and payment are not available.",
+      "Browse active catalog items and create an unpaid OPEN sale from an authorized branch. Server pricing is authoritative; tax, discounts, and payment are not included.",
     eyebrow: "Sales workspace",
   },
   members: {

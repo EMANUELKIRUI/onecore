@@ -254,9 +254,11 @@ form.addEventListener("submit", async (event) => {
   state.submitting = true;
   render();
   try {
+    const applicationInput = { ...state.values, deploymentType: "SAAS" };
+    if (!applicationInput.website) delete applicationInput.website;
     const response = await api.request("/public/organization-applications", {
       method: "POST",
-      body: { ...state.values, deploymentType: "SAAS" },
+      body: applicationInput,
     });
     const application = parseApplicationResponse(response);
     form.replaceChildren();

@@ -24,6 +24,7 @@ import {
   organizations,
   permissions,
   planModules,
+  platformUserRoles,
   plans,
   rolePermissions,
   roles,
@@ -44,6 +45,8 @@ const ownerEmail = "e2e-owner@onecore.test";
 const memberEmail = "e2e-member@onecore.test";
 const viewerEmail = "e2e-viewer@onecore.test";
 const foreignEmail = "e2e-foreign@onecore.test";
+const platformAdminEmail = "e2e-platform-admin@onecore.test";
+const applicationOwnerEmail = "e2e-new-owner@onecore.test";
 const branchPermissionKeys = [
   "core.organization.branch.read",
   "core.organization.branch.create",
@@ -77,6 +80,11 @@ const ownerPermissionKeys = [
   "core.organization.settings.update",
   "core.modules.module.read",
   "core.modules.entitlement.read",
+  "core.sales.sale.create",
+  "core.sales.sale.read",
+  "core.inventory.stock.read",
+  "core.inventory.stock.adjust",
+  "core.inventory.stock.reserve",
 ];
 const viewerPermissionKeys = [
   "core.organization.user.read",
@@ -208,15 +216,27 @@ async function createFixture(database) {
         displayName: "E2E Foreign User",
         passwordHash: userPasswordHash,
       },
+      {
+        email: platformAdminEmail,
+        displayName: "E2E Platform Reviewer",
+        passwordHash: userPasswordHash,
+      },
     ])
     .returning();
   const owner = createdUsers.find((user) => user.email === ownerEmail);
   const member = createdUsers.find((user) => user.email === memberEmail);
   const viewer = createdUsers.find((user) => user.email === viewerEmail);
   const foreign = createdUsers.find((user) => user.email === foreignEmail);
-  if (!owner || !member || !viewer || !foreign) {
+  const platformAdmin = createdUsers.find(
+    (user) => user.email === platformAdminEmail,
+  );
+  if (!owner || !member || !viewer || !foreign || !platformAdmin) {
     throw new Error("Synthetic users were not created");
   }
+  await database.insert(platformUserRoles).values({
+    userId: platformAdmin.id,
+    role: "SUPERADMIN",
+  });
 
   const memberships = await database
     .insert(organizationMemberships)
@@ -259,6 +279,15 @@ async function createFixture(database) {
   if (!ownerMembership || !memberMembership || !viewerMembership) {
     throw new Error("Synthetic organization memberships were not created");
   }
+  const [checkoutBranch] = await database
+    .insert(branches)
+    .values({
+      organizationId: organization.id,
+      name: "E2E Checkout Branch",
+      code: "E2E-SALES",
+    })
+    .returning();
+  if (!checkoutBranch) throw new Error("Checkout branch fixture was not created");
 
   const allModuleRows = await database.select().from(modules);
   const coreModuleRows = await database
@@ -296,6 +325,8 @@ async function createFixture(database) {
     "core.modules",
     "core.rbac",
     "core.business_manager",
+    "core.sales",
+    "core.inventory",
   ];
   for (const key of requiredModuleKeys) {
     if (!moduleByKey.has(key)) {
@@ -312,6 +343,8 @@ async function createFixture(database) {
         "core.modules",
         "core.rbac",
         "core.business_manager",
+        "core.sales",
+        "core.inventory",
       ]),
     );
   for (const key of [...ownerPermissionKeys, ...viewerPermissionKeys]) {
@@ -511,6 +544,7 @@ async function createFixture(database) {
   return {
     organizationId: organization.id,
     foreignOrganizationId: foreignOrganization.id,
+    checkoutBranchId: checkoutBranch.id,
     ownerMembershipId: ownerMembership.id,
     memberMembershipId: memberMembership.id,
     foreignBranchId: foreignBranch.id,
@@ -519,6 +553,8 @@ async function createFixture(database) {
 
 function createFrontendServer(apiPort) {
   const frontendRoot = resolve(root, "apps/business");
+  const registrationRoot = resolve(root, "apps/marketing/register");
+  const superadminRoot = resolve(root, "apps/superadmin");
   const uiModuleRoot = resolve(root, "packages/ui/src");
   const uiModules = new Map(
     ["api-client.js", "elements.js", "localization.js"].map((fileName) => [
@@ -532,6 +568,21 @@ function createFrontendServer(apiPort) {
       resolve(frontendRoot, fileName),
     ]),
   );
+  const auxiliaryFiles = new Map([
+    ["/register/", [resolve(registrationRoot, "index.html"), "text/html; charset=utf-8"]],
+    ["/register/index.html", [resolve(registrationRoot, "index.html"), "text/html; charset=utf-8"]],
+    ["/register/registration.js", [resolve(registrationRoot, "registration.js"), "text/javascript; charset=utf-8"]],
+    [
+      "/register/application-response.js",
+      [
+        resolve(registrationRoot, "application-response.js"),
+        "text/javascript; charset=utf-8",
+      ],
+    ],
+    ["/superadmin/", [resolve(superadminRoot, "index.html"), "text/html; charset=utf-8"]],
+    ["/superadmin/index.html", [resolve(superadminRoot, "index.html"), "text/html; charset=utf-8"]],
+    ["/superadmin/app.js", [resolve(superadminRoot, "app.js"), "text/javascript; charset=utf-8"]],
+  ]);
   const stylesheetPath = resolve(root, "packages/ui/styles.css");
   const frontend = createServer(async (request, response) => {
     const requestPath = request.url ?? "/";
@@ -569,6 +620,20 @@ function createFrontendServer(apiPort) {
       );
       return;
     }
+    const auxiliaryFile = auxiliaryFiles.get(requestPath);
+    if (auxiliaryFile) {
+      const [filePath, contentType] = auxiliaryFile;
+      let body = await readFile(filePath, "utf8");
+      if (contentType.startsWith("text/html")) {
+        body = body.replace(
+          'name="onecore-api-base" content=""',
+          'name="onecore-api-base" content="/api"',
+        );
+      }
+      response.writeHead(200, { "content-type": contentType });
+      response.end(body);
+      return;
+    }
     if (requestPath === "/app.js") {
       response.writeHead(200, {
         "content-type": "text/javascript; charset=utf-8",
@@ -604,7 +669,7 @@ function loginSelectors(page) {
   };
 }
 
-async function login(page, email, webOrigin) {
+async function login(page, email, webOrigin, branchId) {
   const selectors = loginSelectors(page);
   await selectors.email.fill(email);
   await selectors.password.fill(testPassword);
@@ -640,6 +705,12 @@ async function login(page, email, webOrigin) {
   await expect(page.locator("#sidebar-organization")).toHaveText(
     organizationName,
   );
+  if (branchId) {
+    await page.locator("#branch-select").selectOption(branchId);
+    await expect(page.locator("#sidebar-branch")).toHaveText(
+      "E2E Checkout Branch",
+    );
+  }
   assert.equal(new URL(page.url()).origin, webOrigin);
 }
 
@@ -931,6 +1002,160 @@ try {
     "PASS: unauthenticated browser is shown the real sign-in view",
   );
 
+  const registrationPage = await context.newPage();
+  await registrationPage.goto(`${webOrigin}/register/`);
+  await expect(
+    registrationPage.getByRole("heading", {
+      name: "Request a Business Account",
+    }),
+  ).toBeVisible();
+  await registrationPage.getByLabel("Organization name").fill(
+    "E2E Registration Applicant Ltd.",
+  );
+  await registrationPage
+    .getByLabel("Organization reference")
+    .fill("e2e-registration-applicant");
+  await registrationPage.getByLabel("Industry").fill("Retail");
+  await registrationPage
+    .getByLabel("Business email")
+    .fill("e2e-registration-business@onecore.test");
+  await registrationPage
+    .getByLabel("Business phone")
+    .fill("+254700000099");
+  await registrationPage.getByLabel("Country code (e.g. KE)").fill("KE");
+  await registrationPage.getByLabel("County / region").fill("Nairobi");
+  await registrationPage.getByLabel("Town / city").fill("Nairobi");
+  await registrationPage.getByLabel("Business address").fill("E2E Road 1");
+  await registrationPage.getByRole("button", { name: "Continue" }).click();
+  await registrationPage
+    .getByLabel("Owner / administrator name")
+    .fill("E2E Application Owner");
+  await registrationPage
+    .getByLabel("Owner email")
+    .fill(applicationOwnerEmail);
+  await registrationPage.getByRole("button", { name: "Continue" }).click();
+  const requestedBusinessManager = registrationPage.locator(
+    'input[name="requestedModules"][value="core.business_manager"]',
+  );
+  await expect(requestedBusinessManager).toBeVisible();
+  await requestedBusinessManager.check();
+  await registrationPage.getByRole("button", { name: "Continue" }).click();
+  const registrationResponsePromise = registrationPage.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/public/organization-applications") &&
+      response.request().method() === "POST",
+  );
+  await registrationPage
+    .getByRole("button", { name: "Submit Application" })
+    .click();
+  const registrationResponse = await registrationResponsePromise;
+  const registrationResult = await registrationResponse.json();
+  assert.equal(
+    registrationResponse.status(),
+    201,
+    JSON.stringify(registrationResult),
+  );
+  assert.equal(registrationResult.application.status, "PENDING");
+  assert.equal(
+    Object.hasOwn(registrationResult.application, "ownerUserId"),
+    false,
+  );
+  await expect(registrationPage.getByText("Status: PENDING")).toBeVisible();
+  await expect(registrationPage.locator("body")).toContainText(
+    "does not create an owner login",
+  );
+  globalThis.console.info(
+    "PASS: browser registration reaches the real API and returns a pending application without owner credentials",
+  );
+
+  const adminContext = await browser.newContext();
+  const adminPage = await adminContext.newPage();
+  const adminLifecycleRequests = [];
+  adminPage.on("dialog", async (dialog) => {
+    globalThis.console.info(`E2E Superadmin confirmation: ${dialog.message()}`);
+    await dialog.accept();
+  });
+  adminPage.on("pageerror", (error) => {
+    globalThis.console.error(`E2E Superadmin page error: ${error.message}`);
+  });
+  adminPage.on("request", (request) => {
+    if (request.url().includes("/platform/organization-applications")) {
+      adminLifecycleRequests.push({ method: request.method(), url: request.url() });
+    }
+  });
+  adminPage.on("response", (response) => {
+    if (response.url().includes("/platform/organization-applications")) {
+      globalThis.console.info(
+        `E2E platform review response ${response.status()} ${response.request().method()} ${new URL(response.url()).pathname}`,
+      );
+    }
+  });
+  await adminPage.goto(`${webOrigin}/superadmin/`);
+  await adminPage.getByLabel("Email address").fill(platformAdminEmail);
+  await adminPage.locator("#login-password").fill(testPassword);
+  await adminPage
+    .getByRole("button", { name: "Sign in to administration" })
+    .click();
+  await expect(adminPage.locator("#app-view")).toBeVisible();
+  await adminPage.locator('[data-admin-view="requests"]').click();
+  await adminPage
+    .getByRole("button", {
+      name: "Review E2E Registration Applicant Ltd.",
+    })
+    .click();
+  await expect(
+    adminPage.getByRole("button", { name: "Begin review" }),
+  ).toBeVisible();
+  const reviewResponsePromise = adminPage.waitForResponse(
+    (response) =>
+      response.url().includes("/platform/organization-applications/") &&
+      response.url().endsWith("/status") &&
+      response.request().method() === "POST",
+  );
+  await adminPage.getByRole("button", { name: "Begin review" }).click();
+  assert.equal((await reviewResponsePromise).status(), 200);
+  await expect(
+    adminPage.locator("#request-detail").getByRole("button", {
+      name: "Approve",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(adminPage.locator("body")).toContainText(
+    "Approving an application records the review decision. It does not activate an organization or create owner credentials.",
+  );
+  const approveButton = adminPage
+    .locator("#request-detail")
+    .getByRole("button", { name: "Approve", exact: true });
+  globalThis.console.info(
+    `E2E Approve button enabled=${await approveButton.isEnabled()} lifecycleRequests=${adminLifecycleRequests.length}`,
+  );
+  const approvalResponsePromise = adminPage.waitForResponse(
+    (response) =>
+      response.url().includes("/platform/organization-applications/") &&
+      response.url().endsWith("/status") &&
+      response.request().method() === "POST",
+  );
+  await approveButton.click();
+  const approvalResponse = await approvalResponsePromise;
+  assert.equal(approvalResponse.status(), 200);
+  assert.equal((await approvalResponse.json()).application.status, "APPROVED");
+  const applicationOrganization = await admin.db
+    .select({ status: organizations.status })
+    .from(organizations)
+    .where(eq(organizations.slug, "e2e-registration-applicant"))
+    .limit(1);
+  assert.equal(applicationOrganization[0]?.status, "APPROVED");
+  const applicationOwner = await admin.db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, applicationOwnerEmail))
+    .limit(1);
+  assert.deepEqual(applicationOwner, []);
+  globalThis.console.info(
+    "PASS: Superadmin review and approval persist APPROVED without activation or owner-account provisioning",
+  );
+  await adminContext.close();
+
   const loginFields = loginSelectors(page);
   await loginFields.email.fill(ownerEmail);
   await loginFields.password.fill("incorrect synthetic password");
@@ -953,7 +1178,12 @@ try {
     "PASS: invalid sign-in displays the authentication error state",
   );
 
-  await login(page, ownerEmail, webOrigin);
+  await login(page, ownerEmail, webOrigin, fixture.checkoutBranchId);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({
+    path: "/tmp/onecore-business-overview-1440x900.png",
+    fullPage: true,
+  });
   globalThis.console.info(
     "PASS: synthetic owner signs in and selects the authorized organization",
   );
@@ -1015,50 +1245,88 @@ try {
 
   await page.locator("#products-nav").click();
   await page.getByRole("button", { name: "Create catalog item" }).click();
-  await page.getByLabel("Name", { exact: true }).fill("E2E Browser Service");
-  await page.getByLabel("Type").selectOption("SERVICE");
+  await page.getByLabel("Name", { exact: true }).fill("E2E Browser Product");
+  await page.getByLabel("Type").selectOption("PRODUCT");
   await page.getByLabel("Unit").fill("hour");
   await page.getByLabel("Price (decimal)").fill("12.500001");
   await page.getByLabel("Currency (ISO 4217)").fill("KES");
   await page.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByText("Record created.")).toBeVisible();
   await expect(
-    page.getByRole("row", { name: /E2E Browser Service/ }),
+    page.getByRole("row", { name: /E2E Browser Product/ }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Edit E2E Browser Service" }).click();
+  await page.getByRole("button", { name: "Edit E2E Browser Product" }).click();
   await page.getByLabel("Price (decimal)").fill("17.250000");
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Record updated.")).toBeVisible();
   await page.reload();
   await page.locator("#products-nav").click();
   const catalogRow = page.getByRole("row", {
-    name: /E2E Browser Service/,
+    name: /E2E Browser Product/,
   });
   await expect(catalogRow).toBeVisible();
   await expect(catalogRow).toContainText("17.250000 KES");
+  const catalogItemId = await page.evaluate(
+    async ({ organizationId, itemName }) => {
+      const response = await globalThis.fetch(
+        `/api/organizations/${organizationId}/business/catalog?status=ACTIVE&limit=20`,
+      );
+      const result = await response.json();
+      return result.items.find((item) => item.name === itemName)?.id;
+    },
+    {
+      organizationId: fixture.organizationId,
+      itemName: "E2E Browser Product",
+    },
+  );
+  assert.equal(typeof catalogItemId, "string");
+  const receipt = await page.evaluate(
+    async ({ organizationId, catalogItemId }) => {
+      const response = await globalThis.fetch(
+        `/api/organizations/${organizationId}/inventory/stock`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "e2e-pos-stock-receipt-1",
+          },
+          body: JSON.stringify({
+            catalogItemId,
+            movementType: "RECEIPT",
+            delta: 5,
+          }),
+        },
+      );
+      return { status: response.status, body: await response.json() };
+    },
+    { organizationId: fixture.organizationId, catalogItemId },
+  );
+  assert.equal(receipt.status, 201, JSON.stringify(receipt.body));
+
   await page.locator("#pos-nav").click();
-  await page.getByLabel("Search catalog").fill("E2E Browser Service");
+  await page.getByLabel("Search catalog").fill("E2E Browser Product");
   await page.getByRole("button", { name: "Search", exact: true }).click();
   const posProduct = page
     .locator(".oc-pos-product")
-    .filter({ hasText: "E2E Browser Service" });
+    .filter({ hasText: "E2E Browser Product" });
   await expect(posProduct).toContainText("17.250000 KES");
   await posProduct.getByRole("button", { name: "Add to draft" }).click();
   const draftCart = page.locator(".oc-pos-cart");
   const quantity = draftCart.getByLabel("Quantity");
-  await quantity.fill("2");
+  await quantity.fill("3");
   await quantity.press("Tab");
-  await expect(draftCart).toContainText("Line estimate: 34.5 KES");
-  await expect(draftCart).toContainText("Catalog subtotal estimate: 34.5 KES");
+  await expect(draftCart).toContainText("Line estimate: 51.75 KES");
+  await expect(draftCart).toContainText("Catalog subtotal estimate: 51.75 KES");
   await draftCart.getByLabel("Quantity").fill("0");
   await draftCart.getByLabel("Quantity").press("Tab");
-  await expect(draftCart.getByLabel("Quantity")).toHaveValue("2");
+  await expect(draftCart.getByLabel("Quantity")).toHaveValue("3");
   await expect(page.locator("[data-toast-region]")).toContainText(
     "whole-number quantity greater than zero",
   );
-  await draftCart.getByLabel("Quantity").fill("3");
-  await draftCart.getByLabel("Quantity").press("Tab");
-  await expect(draftCart).toContainText("Catalog subtotal estimate: 51.75 KES");
+  await page.screenshot({
+    path: "/tmp/onecore-pos-desktop-1280x900.png",
+    fullPage: true,
+  });
   for (const viewport of [
     { width: 820, height: 900 },
     { width: 390, height: 844 },
@@ -1074,18 +1342,220 @@ try {
       true,
       `POS layout should not overflow at ${viewport.width}px`,
     );
+    await page.screenshot({
+      path: `/tmp/onecore-pos-${viewport.width}x${viewport.height}.png`,
+      fullPage: true,
+    });
   }
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.reload();
-  const reloadedDraftCart = page.locator(".oc-pos-cart");
-  await expect(reloadedDraftCart).toContainText(
-    "No items in your draft cart yet.",
+  const changedServerPrice = await page.evaluate(
+    async ({ organizationId, catalogItemId }) => {
+      const response = await globalThis.fetch(
+        `/api/organizations/${organizationId}/business/catalog/${catalogItemId}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ price: "19.250001" }),
+        },
+      );
+      return { status: response.status, body: await response.json() };
+    },
+    { organizationId: fixture.organizationId, catalogItemId },
   );
-  await expect(reloadedDraftCart).toContainText(
-    "No sale or payment will be submitted.",
+  assert.equal(changedServerPrice.status, 200, JSON.stringify(changedServerPrice.body));
+
+  const checkoutAttempts = [];
+  let firstCheckoutSaleId;
+  await page.route(
+    `**/api/organizations/${fixture.organizationId}/sales`,
+    async (route) => {
+      const request = route.request();
+      const payload = request.postDataJSON();
+      const attempt = {
+        key: request.headers()["idempotency-key"],
+        payload,
+      };
+      checkoutAttempts.push(attempt);
+      assert.equal(request.method(), "POST");
+      assert.deepEqual(payload, {
+        lines: [{ catalogItemId, quantity: 3 }],
+      });
+      assert.equal(typeof attempt.key, "string");
+      assert.ok(attempt.key.length > 0);
+      if (checkoutAttempts.length === 1) {
+        const upstream = await route.fetch();
+        assert.equal(upstream.status(), 201);
+        const firstResponse = await upstream.json();
+        firstCheckoutSaleId = firstResponse.sale.id;
+        await route.abort("failed");
+        return;
+      }
+      assert.equal(attempt.key, checkoutAttempts[0].key);
+      assert.deepEqual(attempt.payload, checkoutAttempts[0].payload);
+      await route.continue();
+    },
   );
+  const checkoutButton = draftCart.getByRole("button", {
+    name: "Create unpaid sale",
+  });
+  await expect(checkoutButton).toBeEnabled();
+  await checkoutButton.click();
+  await expect(draftCart).toContainText(
+    "The sale could not be confirmed because of a connection or server error.",
+  );
+  await expect(draftCart.getByLabel("Quantity")).toHaveValue("3");
+  const retryButton = draftCart.getByRole("button", {
+    name: "Retry same checkout",
+  });
+  await expect(retryButton).toBeEnabled();
+  const checkoutResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/organizations/${fixture.organizationId}/sales`) &&
+      response.request().method() === "POST",
+  );
+  await retryButton.click();
+  const checkoutResponse = await checkoutResponsePromise;
+  assert.equal(checkoutResponse.status(), 201);
+  const checkoutResult = await checkoutResponse.json();
+  assert.equal(checkoutResult.sale.id, firstCheckoutSaleId);
+  assert.equal(checkoutResult.sale.status, "OPEN");
+  assert.equal(checkoutResult.sale.currency, "KES");
+  assert.equal(checkoutResult.sale.subtotal, "57.750003");
+  assert.equal(checkoutResult.sale.total, "57.750003");
+  assert.equal(checkoutResult.sale.lines[0].unitPrice, "19.250001");
+  assert.equal(checkoutResult.sale.lines[0].lineTotal, "57.750003");
+  assert.equal(checkoutResult.sale.lines[0].quantity, 3);
+  assert.equal(checkoutAttempts.length, 2);
+  await expect(draftCart).toContainText("Unpaid — OPEN");
+  await expect(draftCart).toContainText(`Sale ID: ${firstCheckoutSaleId}`);
+  await expect(draftCart).toContainText("Server total: 57.750003 KES");
+  await expect(draftCart).toContainText("No items in your draft cart yet.");
+  assert.equal(
+    await page.evaluate(() =>
+      globalThis.sessionStorage.getItem("onecore.sales.pending-checkout"),
+    ),
+    null,
+  );
+  await page.unroute(`**/api/organizations/${fixture.organizationId}/sales`);
+
+  const insufficientStock = await page.evaluate(
+    async ({ organizationId, catalogItemId }) => {
+      const response = await globalThis.fetch(
+        `/api/organizations/${organizationId}/sales`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "e2e-insufficient-stock-1",
+          },
+          body: JSON.stringify({
+            lines: [{ catalogItemId, quantity: 3 }],
+          }),
+        },
+      );
+      return { status: response.status, body: await response.json() };
+    },
+    { organizationId: fixture.organizationId, catalogItemId },
+  );
+  assert.equal(insufficientStock.status, 409);
+  assert.equal(insufficientStock.body.error.code, "INSUFFICIENT_STOCK");
+  const forgedBranch = await page.evaluate(
+    async ({ organizationId, catalogItemId, branchId }) => {
+      const response = await globalThis.fetch(
+        `/api/organizations/${organizationId}/sales`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "e2e-forged-branch-1",
+          },
+          body: JSON.stringify({
+            branchId,
+            lines: [{ catalogItemId, quantity: 1 }],
+          }),
+        },
+      );
+      return response.status;
+    },
+    {
+      organizationId: fixture.organizationId,
+      catalogItemId,
+      branchId: fixture.foreignBranchId,
+    },
+  );
+  assert.equal(forgedBranch, 400);
+  const foreignTenantSale = await page.evaluate(
+    async ({ organizationId, catalogItemId }) => {
+      const response = await globalThis.fetch(
+        `/api/organizations/${organizationId}/sales`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "e2e-foreign-tenant-sale-1",
+          },
+          body: JSON.stringify({
+            lines: [{ catalogItemId, quantity: 1 }],
+          }),
+        },
+      );
+      return response.status;
+    },
+    {
+      organizationId: fixture.foreignOrganizationId,
+      catalogItemId,
+    },
+  );
+  assert.equal(foreignTenantSale, 404);
+  const persistedSales = await admin.db.execute(sql`
+    SELECT count(*)::int AS count
+    FROM sales
+    WHERE organization_id = ${fixture.organizationId}
+  `);
+  assert.equal(resultRows(persistedSales)[0]?.count, 1);
+  const persistedStock = await admin.db.execute(sql`
+    SELECT on_hand, reserved
+    FROM inventory_stock_balances
+    WHERE organization_id = ${fixture.organizationId}
+      AND branch_id = ${fixture.checkoutBranchId}
+      AND catalog_item_id = ${catalogItemId}
+  `);
+  assert.deepEqual(resultRows(persistedStock)[0], { on_hand: 5, reserved: 3 });
   globalThis.console.info(
-    "PASS: POS searches active catalog items, validates quantities, stays within tablet/mobile widths, and leaves no persisted sale",
+    "PASS: POS checkout posts exact IDs/quantities and idempotency key, recovers the same sale after a lost response, uses server price, reserves stock once, rejects insufficient stock and forged tenant/branch requests, and displays Unpaid — OPEN",
+  );
+
+  const viewerContext = await browser.newContext();
+  const viewerPosPage = await viewerContext.newPage();
+  await viewerPosPage.goto(webOrigin);
+  await login(
+    viewerPosPage,
+    viewerEmail,
+    webOrigin,
+    fixture.checkoutBranchId,
+  );
+  await viewerPosPage.locator("#pos-nav").click();
+  await viewerPosPage.getByLabel("Search catalog").fill("E2E Browser Product");
+  await viewerPosPage.getByRole("button", { name: "Search", exact: true }).click();
+  const viewerProduct = viewerPosPage
+    .locator(".oc-pos-product")
+    .filter({ hasText: "E2E Browser Product" });
+  await expect(viewerProduct.getByRole("button", { name: "Add to draft" })).toBeVisible();
+  await viewerProduct.getByRole("button", { name: "Add to draft" }).click();
+  const viewerCart = viewerPosPage.locator(".oc-pos-cart");
+  await viewerCart.getByRole("button", { name: "Create unpaid sale" }).click();
+  await expect(viewerCart).toContainText(
+    "You are not authorized to create a sale for this organization and branch.",
+  );
+  await expect(viewerCart.getByLabel("Quantity")).toHaveValue("1");
+  await expect(viewerCart).not.toContainText("Unpaid — OPEN");
+  await viewerContext.close();
+  globalThis.console.info(
+    "PASS: read-only browser user is denied sale creation without losing the cart or seeing success",
+  );
+
+  globalThis.console.info(
+    "PASS: responsive viewport checks completed at 1280x720, 820x900, and 390x844 with screenshots in /tmp",
   );
   await page.locator("#products-nav").click();
   page.once("dialog", (dialog) => dialog.accept());
@@ -1094,7 +1564,7 @@ try {
   await page.reload();
   await page.locator("#products-nav").click();
   await expect(
-    page.getByRole("row", { name: /E2E Browser Service.*INACTIVE/ }),
+    page.getByRole("row", { name: /E2E Browser Product.*INACTIVE/ }),
   ).toBeVisible();
   globalThis.console.info(
     "PASS: catalog create, update, and deactivate persist after reload",
@@ -1118,10 +1588,10 @@ try {
   );
 
   await page.locator("#branches-nav").click();
-  const branchName = page.getByLabel("Branch name");
+  const branchName = page.locator("#branch-new-name");
   await expect(branchName).toBeVisible();
   await branchName.fill("Browser E2E Branch");
-  await page.getByLabel("Branch code").fill("E2E-001");
+  await page.locator("#branch-new-code").fill("E2E-001");
   await page.getByRole("button", { name: "Create branch" }).click();
   await expect(page.getByText("Branch created.")).toBeVisible();
   await expect(
@@ -1389,7 +1859,7 @@ try {
   ).toHaveCount(0);
   await viewerPage.locator("#products-nav").click();
   const viewerCatalogRow = viewerPage.getByRole("row", {
-    name: /E2E Browser Service/,
+    name: /E2E Browser Product/,
   });
   await expect(viewerCatalogRow).toBeVisible();
   await expect(

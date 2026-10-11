@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
+import { URL } from "node:url";
 import { parseApplicationResponse } from "../register/application-response.js";
 
+const registration = await readFile(
+  new URL("../register/registration.js", import.meta.url),
+  "utf8",
+);
+
 describe("organization application response", () => {
+  it("omits a blank optional website from the strict API request", () => {
+    expect(registration).toContain(
+      "if (!applicationInput.website) delete applicationInput.website;",
+    );
+  });
+
   it("accepts and returns the actual application status and reference", () => {
     const application = {
       reference: "organization-reference",
