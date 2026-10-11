@@ -81,9 +81,11 @@ the existing tenant job queue in the same transaction as execution creation.
 `services/worker` is a separate executable that registers the existing
 `createWorkflowJobHandler` and invokes the existing job service. It discovers
 active organization IDs under a dedicated worker-only RLS policy, discovers
-branches inside each organization context, and claims jobs through the
-tenant-scoped `FOR UPDATE SKIP LOCKED` path. It does not add a queue, scheduler,
-or webhook/communication delivery transport.
+branches inside each organization context, then polls the
+organization-level queue scope and each active branch inside that organization
+context. This includes jobs without a branch even for organizations that have
+branches. Claims use the tenant-scoped `FOR UPDATE SKIP LOCKED` path. It does
+not add a queue, scheduler, or webhook/communication delivery transport.
 
 Build and run locally from the repository root:
 

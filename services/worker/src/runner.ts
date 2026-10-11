@@ -19,13 +19,8 @@ async function discoverScopes(jobs: WorkerJobService): Promise<WorkerScope[]> {
   const scopes: WorkerScope[] = [];
   for (const organizationId of organizations) {
     const branches = await jobs.listWorkerBranches(organizationId);
-    if (branches.length === 0) {
-      scopes.push({ organizationId, branchId: null });
-    } else {
-      scopes.push(
-        ...branches.map((branchId) => ({ organizationId, branchId })),
-      );
-    }
+    scopes.push({ organizationId, branchId: null });
+    scopes.push(...branches.map((branchId) => ({ organizationId, branchId })));
   }
   return scopes;
 }
