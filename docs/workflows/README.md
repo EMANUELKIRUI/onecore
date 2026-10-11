@@ -109,7 +109,11 @@ granted membership in that role. Do not grant membership in `onecore_app` or
 active-organization discovery and the table/column grants required by workflow
 execution; tenant records remain under forced RLS and transaction-local
 organization/branch context. Store the worker login URL separately from API
-credentials. See the [deployment runbook](../deployment/README.md#workflow-worker).
+credentials. The forward-only
+`20261011000000_worker_notification_id_insert_grants` migration adds only the
+defaulted columns emitted by Drizzle's notification inserts; it does not grant
+table-wide `INSERT`. Apply it through the same ordered migration process. See
+the [deployment runbook](../deployment/README.md#workflow-worker).
 
 The worker logs `worker.ready` only after database connectivity and tenant
 discovery succeed. It emits structured claim/outcome, polling, error, and
@@ -122,12 +126,17 @@ expiry.
 
 Processing is **at-least-once**, not exactly-once: a crash after an external
 side effect but before the transaction commits can cause another attempt.
-Workflow notification effects are transactional with action progress and use
-existing idempotency controls; future handlers must make non-transactional
-effects independently idempotent. Multiple worker instances may share the
-same worker role and safely compete for persisted leases. Increase concurrency
-only after measuring database pool and transaction capacity; each process
-bounds its connections based on its configured concurrency. Monitor
+Before each workflow notification, the handler revalidates the persisted job
+status, worker owner, claim token, and lease expiry using the database clock
+inside the authorization transaction before and after writing an action. If
+the lease expires by the final check, that transaction rolls back; the locked
+job becomes recoverable after its transaction releases. Workflow notification
+effects are transactional with action progress and use existing idempotency
+controls; future handlers must make non-transactional effects independently
+idempotent. Multiple worker instances may share the same worker role and safely
+compete for persisted leases. Increase concurrency only after measuring
+database pool and transaction capacity; each process bounds its connections
+based on its configured concurrency. Monitor
 `worker.poll.completed`, repeated `worker.scope.failed` /
 `worker.discovery.failed` events, retry/failure outcomes, and authorized
 tenant-scoped queue status. A growing eligible queue with no recent

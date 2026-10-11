@@ -44,9 +44,10 @@ Before starting the service:
 
 1. Build and test the worker from the repository root with
    `npm run build:worker` and `npm run test -w @onecore/worker`.
-2. Apply the worker-discovery migration through the approved migration process
-   after reviewing the target, backup, and migration diff. Do not apply it from
-   the worker or API startup path.
+2. Apply the worker-discovery migration and its ordered forward-only follow-up
+   `20261011000000_worker_notification_id_insert_grants` through the approved
+   migration process after reviewing the target, backup, and migration diff.
+   Do not apply migrations from the worker or API startup path.
 3. Provision a dedicated login and grant it membership only in the
    `onecore_worker` `NOLOGIN NOSUPERUSER NOBYPASSRLS` group role. Do not reuse
    the API or migrator login. Configure the service's secret `DATABASE_URL`

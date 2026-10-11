@@ -35,6 +35,7 @@ export interface JobHandlerContext {
   organizationId: string;
   branchId: string | null;
   jobId: string;
+  leaseToken: string;
   workerId: string;
   attempt: number;
   correlationId: string;
@@ -506,6 +507,7 @@ async function handleClaim(
                 organizationId: job.organizationId,
                 branchId: job.branchId,
                 jobId: job.id,
+                leaseToken: claim.leaseToken,
                 workerId: claim.workerId,
                 attempt: job.attempts,
                 correlationId: job.correlationId,

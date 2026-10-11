@@ -477,6 +477,29 @@ describe("workflow execution persistence", () => {
     if (!persistedExecutionId) {
       throw new Error("Workflow execution was not persisted");
     }
+    const leaseToken = crypto.randomUUID();
+    const workerId = "workflow-test";
+    const [persistedJob] = await database
+      .update(schema.jobs)
+      .set({
+        status: "RUNNING",
+        attempts: 1,
+        leaseOwner: workerId,
+        leaseToken,
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+      })
+      .where(
+        and(
+          eq(schema.jobs.organizationId, tenant.organization.id),
+          eq(schema.jobs.jobType, "core.workflow.execute"),
+          eq(
+            schema.jobs.idempotencyKey,
+            `workflow-execution:${persistedExecutionId}`,
+          ),
+        ),
+      )
+      .returning({ id: schema.jobs.id });
+    if (!persistedJob) throw new Error("Workflow job was not persisted");
     const jobPayload = workflowJob.payloadSchema.parse({
       executionId: persistedExecutionId,
       eventId: event.eventId,
@@ -485,8 +508,9 @@ describe("workflow execution persistence", () => {
     const jobContext: JobHandlerContext = {
       organizationId: tenant.organization.id,
       branchId: null,
-      jobId: crypto.randomUUID(),
-      workerId: "workflow-test",
+      jobId: persistedJob.id,
+      leaseToken,
+      workerId,
       attempt: 1,
       correlationId: event.correlationId,
       causationId: event.eventId,
@@ -542,5 +566,137 @@ describe("workflow execution persistence", () => {
     expect(notifications).toHaveLength(1);
     expect(actionStatus?.status).toBe("SUCCEEDED");
     expect(execution?.status).toBe("SUCCEEDED");
+  });
+
+  it("does not apply a notification after the workflow job lease expires", async () => {
+    const tenant = await createTenant("Workflow Expired Lease");
+    const workflow = await createPublishedWorkflow(
+      tenant.organization.id,
+      tenant.user.id,
+    );
+    const event = createDomainEvent({
+      eventType: "USER_CREATED",
+      organizationId: tenant.organization.id,
+      actorUserId: tenant.user.id,
+      aggregateType: "user",
+      aggregateId: tenant.user.id,
+      payload: {
+        userId: tenant.user.id,
+        email: tenant.user.email,
+        displayName: tenant.user.displayName,
+      },
+      metadata: {},
+    });
+    const principal = {
+      userId: tenant.user.id,
+      sessionId: crypto.randomUUID(),
+      organizationId: tenant.organization.id,
+      membershipId: tenant.membership.id,
+      branchId: null,
+    };
+    const eventHandler = createWorkflowEventHandlers().find(
+      (candidate) => candidate.eventType === event.eventType,
+    );
+    if (!eventHandler)
+      throw new Error("USER_CREATED workflow handler is missing");
+    await tenantTransaction(tenant.organization.id, async (transaction) => {
+      await recordOutboxEvent(transaction, event);
+      await eventHandler.handle(transaction, event, {
+        userId: tenant.user.id,
+        sessionId: principal.sessionId,
+        organizationId: tenant.organization.id,
+        membershipId: tenant.membership.id,
+        branchId: null,
+        branch: null,
+        branchAccessMode: "ALL",
+        roles: [],
+        platformRoles: [],
+        permissions: [],
+      });
+    });
+    const [execution] = await database
+      .select({ id: schema.workflowExecutions.id })
+      .from(schema.workflowExecutions)
+      .where(
+        and(
+          eq(schema.workflowExecutions.organizationId, tenant.organization.id),
+          eq(schema.workflowExecutions.workflowVersionId, workflow.version.id),
+          eq(schema.workflowExecutions.sourceEventId, event.eventId),
+        ),
+      );
+    if (!execution) throw new Error("Workflow execution was not created");
+
+    const leaseToken = crypto.randomUUID();
+    const workerId = "expired-workflow-worker";
+    const [job] = await database
+      .update(schema.jobs)
+      .set({
+        status: "RUNNING",
+        attempts: 1,
+        leaseOwner: workerId,
+        leaseToken,
+        leaseExpiresAt: new Date(Date.now() - 1_000),
+      })
+      .where(
+        and(
+          eq(schema.jobs.organizationId, tenant.organization.id),
+          eq(schema.jobs.jobType, "core.workflow.execute"),
+          eq(schema.jobs.idempotencyKey, `workflow-execution:${execution.id}`),
+        ),
+      )
+      .returning();
+    if (!job) throw new Error("Workflow job was not created");
+
+    const activeTransaction: {
+      current: OrganizationTransaction | null;
+    } = { current: null };
+    const workflowJob = createWorkflowJobHandler(
+      database as unknown as Database,
+      testAuthorization(activeTransaction),
+    );
+    const jobPayload = workflowJob.payloadSchema.parse({
+      executionId: execution.id,
+      eventId: event.eventId,
+      principal,
+    });
+    const jobContext = {
+      organizationId: tenant.organization.id,
+      branchId: null,
+      jobId: job.id,
+      workerId,
+      attempt: 1,
+      correlationId: event.correlationId,
+      causationId: event.eventId,
+      leaseToken,
+    } as JobHandlerContext;
+
+    await expect(
+      database.transaction(async (transaction) => {
+        await transaction.execute(sql`SET LOCAL ROLE onecore_app`);
+        await transaction.execute(
+          sql`SELECT set_config('app.current_organization_id', ${tenant.organization.id}, true)`,
+        );
+        await transaction.execute(
+          sql`SELECT set_config('app.current_user_id', ${tenant.user.id}, true)`,
+        );
+        activeTransaction.current =
+          transaction as unknown as OrganizationTransaction;
+        try {
+          await workflowJob.execute(
+            activeTransaction.current,
+            jobPayload,
+            jobContext,
+          );
+        } finally {
+          activeTransaction.current = null;
+        }
+      }),
+    ).rejects.toMatchObject({ code: "WORKFLOW_JOB_LEASE_INVALID" });
+
+    const notifications = await database
+      .select({ id: schema.notifications.id })
+      .from(schema.notifications)
+      .where(eq(schema.notifications.organizationId, tenant.organization.id));
+    expect(notifications).toEqual([]);
   });
 });

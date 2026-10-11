@@ -11,7 +11,7 @@ import {
   workflowTriggerEventTypes,
   workflowTriggerEventTypeSchema,
 } from "@onecore/core-domain";
-import { and, asc, eq, inArray, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import type {
   AuthorizationContext,
@@ -998,6 +998,29 @@ async function markWorkflowSkipped(
   });
 }
 
+async function assertWorkflowJobLease(
+  transaction: OrganizationTransaction,
+  jobContext: JobHandlerContext,
+): Promise<void> {
+  const [activeLease] = await transaction
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.id, jobContext.jobId),
+        eq(jobs.organizationId, jobContext.organizationId),
+        eq(jobs.status, "RUNNING"),
+        eq(jobs.leaseOwner, jobContext.workerId),
+        eq(jobs.leaseToken, jobContext.leaseToken),
+        sql`${jobs.leaseExpiresAt} > clock_timestamp()`,
+      ),
+    )
+    .limit(1);
+  if (!activeLease) {
+    throw new JobExecutionError("WORKFLOW_JOB_LEASE_INVALID", true);
+  }
+}
+
 export function createWorkflowJobHandler(
   database: Database,
   authorization: AuthorizationService,
@@ -1107,6 +1130,7 @@ export function createWorkflowJobHandler(
             [workflowPermission, notificationPermission],
             metadata,
             async (authorizedTransaction, resolved) => {
+              await assertWorkflowJobLease(authorizedTransaction, jobContext);
               const [progress] = await authorizedTransaction
                 .select({ status: workflowExecutionActions.status })
                 .from(workflowExecutionActions)
@@ -1226,6 +1250,7 @@ export function createWorkflowJobHandler(
                   actionType: "NOTIFICATION",
                 },
               });
+              await assertWorkflowJobLease(authorizedTransaction, jobContext);
               return status;
             },
           );
@@ -1292,14 +1317,16 @@ export function createWorkflowJobHandler(
           error instanceof JobExecutionError
             ? error
             : new JobExecutionError("WORKFLOW_ACTION_FAILED", true);
-        await updateExecutionFailure(
-          database,
-          jobContext.organizationId,
-          payload.executionId,
-          currentActionId,
-          failure.code,
-          !failure.retryable || jobContext.attempt >= workflowJobMaxAttempts,
-        );
+        if (failure.code !== "WORKFLOW_JOB_LEASE_INVALID") {
+          await updateExecutionFailure(
+            database,
+            jobContext.organizationId,
+            payload.executionId,
+            currentActionId,
+            failure.code,
+            !failure.retryable || jobContext.attempt >= workflowJobMaxAttempts,
+          );
+        }
         throw failure;
       }
     },

@@ -4,6 +4,11 @@ import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { createDomainEvent, moduleManifestSchema } from "@onecore/core-domain";
 import {
+  type AuthorizationContext,
+  type AuthorizationMetadata,
+  type AuthorizationService,
+  type OrganizationTransaction,
+  type ResolvedAuthorizationContext,
   createAuthorizationService,
   createDatabase,
   createJobHandlerRegistry,
@@ -235,6 +240,31 @@ integrationDescribe("PostgreSQL workflow worker integration", () => {
 
   it("runs actual persisted workflow jobs through registered workflow handlers", async () => {
     await applyMigrations();
+    const notificationInsertPrivileges = await admin.db.execute(sql`
+      SELECT
+        has_column_privilege('onecore_worker', 'notifications', 'id', 'INSERT') AS notification_id_insert,
+        has_column_privilege('onecore_worker', 'notifications', 'read_at', 'INSERT') AS notification_read_at_insert,
+        has_column_privilege('onecore_worker', 'notifications', 'created_at', 'INSERT') AS notification_created_at_insert,
+        has_column_privilege('onecore_worker', 'notification_deliveries', 'id', 'INSERT') AS delivery_id_insert,
+        has_column_privilege('onecore_worker', 'notification_deliveries', 'next_attempt_at', 'INSERT') AS delivery_next_attempt_at_insert,
+        has_column_privilege('onecore_worker', 'notification_deliveries', 'last_error_code', 'INSERT') AS delivery_last_error_code_insert,
+        has_column_privilege('onecore_worker', 'notification_deliveries', 'created_at', 'INSERT') AS delivery_created_at_insert,
+        has_column_privilege('onecore_worker', 'notification_deliveries', 'updated_at', 'INSERT') AS delivery_updated_at_insert,
+        has_table_privilege('onecore_worker', 'notifications', 'INSERT') AS notification_table_insert,
+        has_table_privilege('onecore_worker', 'notification_deliveries', 'INSERT') AS delivery_table_insert
+    `);
+    expect(notificationInsertPrivileges[0]).toEqual({
+      notification_id_insert: true,
+      notification_read_at_insert: true,
+      notification_created_at_insert: true,
+      delivery_id_insert: true,
+      delivery_next_attempt_at_insert: true,
+      delivery_last_error_code_insert: true,
+      delivery_created_at_insert: true,
+      delivery_updated_at_insert: true,
+      notification_table_insert: false,
+      delivery_table_insert: false,
+    });
     const organization = await createOrganization("Workflow Worker");
     await seedModuleEntitlement(organization.id);
     const [workflow] = await admin.db
@@ -379,6 +409,252 @@ integrationDescribe("PostgreSQL workflow worker integration", () => {
       .where(eq(schema.jobs.id, unrelatedJob.id));
     expect(unrelatedJobState?.status).toBe("QUEUED");
   });
+
+  it("does not commit workflow notifications after lease expiry and recovers the job", async () => {
+    const organization = await createOrganization("Workflow Lease Expiry");
+    await seedModuleEntitlement(organization.id);
+    const [user] = await admin.db
+      .insert(schema.users)
+      .values({
+        email: `${crypto.randomUUID()}@example.test`,
+        displayName: "Lease Recipient",
+        status: "ACTIVE",
+      })
+      .returning();
+    if (!user) throw new Error("Workflow recipient was not created");
+    const [membership] = await admin.db
+      .insert(schema.organizationMemberships)
+      .values({
+        organizationId: organization.id,
+        userId: user.id,
+        status: "ACTIVE",
+        branchAccessMode: "ALL",
+      })
+      .returning();
+    if (!membership) throw new Error("Workflow membership was not created");
+    const [workflow] = await admin.db
+      .insert(schema.workflowDefinitions)
+      .values({
+        organizationId: organization.id,
+        key: `lease-${crypto.randomUUID()}`,
+        name: "Lease expiry workflow",
+        status: "ACTIVE",
+      })
+      .returning();
+    if (!workflow) throw new Error("Workflow definition was not created");
+    const [version] = await admin.db
+      .insert(schema.workflowVersions)
+      .values({
+        organizationId: organization.id,
+        workflowId: workflow.id,
+        version: 1,
+        status: "PUBLISHED",
+      })
+      .returning();
+    if (!version) throw new Error("Workflow version was not created");
+    await admin.db.insert(schema.workflowTriggers).values({
+      organizationId: organization.id,
+      workflowVersionId: version.id,
+      triggerType: "USER_CREATED",
+      configuration: {},
+    });
+    const [step] = await admin.db
+      .insert(schema.workflowSteps)
+      .values({
+        organizationId: organization.id,
+        workflowVersionId: version.id,
+        key: "root",
+        name: "Root",
+        position: 0,
+      })
+      .returning();
+    if (!step) throw new Error("Workflow step was not created");
+    const [action] = await admin.db
+      .insert(schema.workflowActions)
+      .values({
+        organizationId: organization.id,
+        workflowStepId: step.id,
+        actionType: "NOTIFICATION",
+        configuration: {
+          recipient: { type: "PAYLOAD_USER_ID", field: "userId" },
+          notificationType: "workflow.lease",
+          title: "Lease recovered",
+          body: "The workflow resumed after lease recovery.",
+        },
+      })
+      .returning();
+    if (!action) throw new Error("Workflow action was not created");
+    const event = createDomainEvent({
+      eventType: "USER_CREATED",
+      organizationId: organization.id,
+      actorUserId: user.id,
+      aggregateType: "user",
+      aggregateId: user.id,
+      payload: {
+        userId: user.id,
+        email: user.email,
+        displayName: user.displayName,
+      },
+      metadata: {},
+    });
+    await admin.db.insert(schema.outboxEvents).values({
+      id: event.eventId,
+      eventType: event.eventType,
+      aggregateType: event.aggregateType,
+      aggregateId: event.aggregateId,
+      organizationId: event.organizationId,
+      actorUserId: event.actorUserId,
+      correlationId: event.correlationId,
+      occurredAt: event.occurredAt,
+      payload: event.payload,
+      metadata: event.metadata,
+      version: event.eventVersion,
+    });
+    const [execution] = await admin.db
+      .insert(schema.workflowExecutions)
+      .values({
+        organizationId: organization.id,
+        workflowVersionId: version.id,
+        sourceEventId: event.eventId,
+        status: "PENDING",
+        resourceType: "user",
+        resourceId: user.id,
+        context: {},
+      })
+      .returning();
+    if (!execution) throw new Error("Workflow execution was not created");
+    await admin.db.insert(schema.workflowExecutionActions).values({
+      organizationId: organization.id,
+      executionId: execution.id,
+      workflowActionId: action.id,
+    });
+
+    const principal = {
+      userId: user.id,
+      sessionId: crypto.randomUUID(),
+      organizationId: organization.id,
+      membershipId: membership.id,
+      branchId: null,
+    };
+    const leaseAuthorization: AuthorizationService = {
+      ...authorization,
+      async withAllPermissions<T>(
+        _context: AuthorizationContext | null,
+        _permissionKeys: readonly string[],
+        _metadata: AuthorizationMetadata,
+        operation: (
+          transaction: OrganizationTransaction,
+          context: ResolvedAuthorizationContext,
+        ) => Promise<T>,
+      ) {
+        const result = await worker.db.transaction(async (transaction) => {
+          await transaction.execute(sql`SET LOCAL ROLE onecore_worker`);
+          await transaction.execute(
+            sql`SELECT set_config('app.current_organization_id', ${organization.id}, true)`,
+          );
+          await transaction.execute(
+            sql`SELECT set_config('app.current_user_id', ${user.id}, true)`,
+          );
+          const context: ResolvedAuthorizationContext = {
+            userId: user.id,
+            sessionId: principal.sessionId,
+            organizationId: organization.id,
+            membershipId: membership.id,
+            branchId: null,
+            branch: null,
+            branchAccessMode: "ALL",
+            roles: [],
+            platformRoles: [],
+            permissions: [],
+          };
+          const value = await operation(
+            transaction as unknown as OrganizationTransaction,
+            context,
+          );
+          return { allowed: true as const, value, context };
+        });
+        return result;
+      },
+    };
+    const workflowHandler = createWorkflowJobHandler(
+      worker.db,
+      leaseAuthorization,
+    );
+    const leaseJobs = createJobService(
+      worker.db,
+      leaseAuthorization,
+      createJobHandlerRegistry([workflowHandler]),
+    );
+    const payload = workflowHandler.payloadSchema.parse({
+      executionId: execution.id,
+      eventId: event.eventId,
+      principal,
+    });
+    await admin.db.insert(schema.jobs).values({
+      organizationId: organization.id,
+      jobType: workflowHandler.jobType,
+      payload,
+      idempotencyKey: `workflow-execution:${execution.id}`,
+      requestHash: "c".repeat(64),
+      correlationId: event.correlationId,
+      causationId: event.eventId,
+    });
+    await admin.db.execute(
+      sql.raw(`
+      CREATE FUNCTION delay_workflow_lease_notification() RETURNS trigger
+      LANGUAGE plpgsql AS $function$
+      BEGIN
+        IF NEW.notification_type = 'workflow.lease' THEN
+          PERFORM pg_sleep(1.1);
+        END IF;
+        RETURN NEW;
+      END;
+      $function$
+    `),
+    );
+    await admin.db.execute(
+      sql.raw(`
+      CREATE TRIGGER delay_workflow_lease_notification
+      BEFORE INSERT ON notifications
+      FOR EACH ROW EXECUTE FUNCTION delay_workflow_lease_notification()
+    `),
+    );
+
+    const staleOutcomes: string[] = [];
+    const firstAttempt = await leaseJobs.processTenantBatch(
+      organization.id,
+      null,
+      "workflow-lease-expiry",
+      {
+        leaseMilliseconds: 1_000,
+        onJobOutcome: ({ jobId, outcome }) => {
+          if (jobId) staleOutcomes.push(outcome);
+        },
+      },
+    );
+    expect(firstAttempt?.claimed).toBe(1);
+    expect(staleOutcomes).toEqual(["STALE"]);
+    expect(
+      await admin.db
+        .select({ id: schema.notifications.id })
+        .from(schema.notifications)
+        .where(eq(schema.notifications.organizationId, organization.id)),
+    ).toEqual([]);
+
+    const recovery = await leaseJobs.processTenantBatch(
+      organization.id,
+      null,
+      "workflow-lease-recovery",
+      { leaseMilliseconds: 5_000 },
+    );
+    expect(recovery?.succeeded).toBe(1);
+    expect(
+      await admin.db
+        .select({ id: schema.notifications.id })
+        .from(schema.notifications)
+        .where(eq(schema.notifications.organizationId, organization.id)),
+    ).toHaveLength(1);
+  }, 20_000);
 
   it("discovers active tenants but fails closed for cross-tenant and missing context reads", async () => {
     const tenantA = await createOrganization("Worker Tenant A");
