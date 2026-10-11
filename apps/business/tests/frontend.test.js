@@ -51,7 +51,7 @@ describe("authenticated business shell", () => {
     }
     expect(application).not.toMatch(/localStorage/);
     expect(application).not.toMatch(
-      /["'`]\/(?:pos|inventory|finance|payroll|crm)(?:\/|["'`?])/i,
+      /["'`]\/(?:finance|payroll|crm|hr)(?:\/|["'`?])/i,
     );
   });
 
@@ -115,7 +115,7 @@ describe("authenticated business shell", () => {
     expect(application).not.toContain("version.body");
     expect(application).not.toContain("secretReference");
     expect(application).not.toMatch(
-      /["'`]\/(?:pos|inventory|finance|payroll|crm|ai)(?:\/|["'`?])/i,
+      /["'`]\/(?:finance|payroll|crm|hr|ai)(?:\/|["'`?])/i,
     );
   });
 
@@ -394,7 +394,9 @@ describe("Business Manager capability boundary", () => {
     expect(application).toContain(
       "Stock availability is not provided by this API.",
     );
-    expect(application).not.toMatch(
+    const checkoutStart = application.indexOf("async function submitPosCheckout");
+    const checkoutEnd = application.indexOf("function renderPosWorkspace", checkoutStart);
+    expect(application.slice(checkoutStart, checkoutEnd)).not.toMatch(
       /\/(payments|transactions|receipts|inventory)\b/i,
     );
     expect(application).not.toMatch(/localStorage/);
@@ -405,5 +407,48 @@ describe("Business Manager capability boundary", () => {
     expect(styles).toContain(".oc-pos-layout");
     expect(styles).toContain("@media (max-width: 720px)");
     expect(styles).toContain(".oc-pos-cart");
+  });
+
+  it("loads branch inventory from authorized catalog and stock APIs without inferring valuation or reorder levels", () => {
+    expect(page).toContain('id="inventory-nav"');
+    expect(page).toContain('href="#inventory" data-view="inventory"');
+    expect(application).toContain("async function loadInventoryView");
+    expect(application).toContain("/business/catalog?${catalogQuery}");
+    expect(application).toContain("/inventory/stock?${stockQuery}");
+    expect(application).toContain('catalogQuery.set("search", inventorySearch)');
+    expect(application).toContain('"OUT_OF_STOCK"');
+    expect(application).toContain("No active products match this search.");
+    expect(application).toContain("Reorder thresholds");
+    expect(application).toContain("price-derived valuation");
+    expect(application).toContain("session?.branch?.branchId");
+  });
+
+  it("reads Sales history and detail without adding payment or receipt behavior", () => {
+    expect(page).toContain('id="sales-nav"');
+    expect(page).toContain('href="#sales" data-view="sales"');
+    expect(application).toContain("async function loadSalesView");
+    expect(application).toContain("/sales?limit=${salesPageSize}&offset=${salesOffset}");
+    expect(application).toContain("/sales/${encodeURIComponent(selectedSaleId)}");
+    expect(application).toContain("This sale is unpaid.");
+    expect(application).toContain("Payment completion and receipt issuance are not supported");
+    expect(application).not.toMatch(/\/(payments|receipts)\b/);
+    expect(application).toContain('"sales-nav"');
+  });
+
+  it("provides explicit unavailable routes without inventing unsupported module records", () => {
+    for (const [view, navigationId] of [
+      ["finance", "finance-nav"],
+      ["companies", "companies-nav"],
+      ["hr", "hr-nav"],
+      ["payroll", "payroll-nav"],
+    ]) {
+      expect(page).toContain(`id="${navigationId}"`);
+      expect(page).toContain(`href="#${view}" data-view="${view}"`);
+      expect(application).toContain(`${view}: {`);
+    }
+    expect(application).toContain("A distinct company CRM model and API are not available");
+    expect(application).toContain("Open supported customer records");
+    expect(application).toContain("Payroll periods, calculations, approvals, and payslips");
+    expect(application).toContain('role", "status"');
   });
 });

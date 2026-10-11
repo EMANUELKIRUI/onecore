@@ -563,7 +563,7 @@ function createFrontendServer(apiPort) {
     ]),
   );
   const appModules = new Map(
-    ["pos.js"].map((fileName) => [
+    ["pos.js", "inventory.js"].map((fileName) => [
       `/${fileName}`,
       resolve(frontendRoot, fileName),
     ]),
@@ -1280,28 +1280,58 @@ try {
     },
   );
   assert.equal(typeof catalogItemId, "string");
-  const receipt = await page.evaluate(
-    async ({ organizationId, catalogItemId }) => {
-      const response = await globalThis.fetch(
-        `/api/organizations/${organizationId}/inventory/stock`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "idempotency-key": "e2e-pos-stock-receipt-1",
-          },
-          body: JSON.stringify({
-            catalogItemId,
-            movementType: "RECEIPT",
-            delta: 5,
-          }),
-        },
-      );
-      return { status: response.status, body: await response.json() };
-    },
-    { organizationId: fixture.organizationId, catalogItemId },
+  await expect(page.locator("#inventory-nav")).toBeVisible();
+  await page.locator("#inventory-nav").click();
+  await page.getByLabel("Product", { exact: true }).selectOption(catalogItemId);
+  await page.getByLabel("Movement type").selectOption("RECEIPT");
+  await page.getByLabel("Quantity change").fill("5");
+  await page.getByRole("button", { name: "Record movement" }).click();
+  await expect(page.getByText(/Stock received\. Available quantity: 5/)).toBeVisible();
+  const inventoryRow = page.getByRole("row", {
+    name: /E2E Browser Product/,
+  });
+  await expect(inventoryRow).toContainText("5");
+  await expect(inventoryRow).toContainText("In stock");
+  await page.reload();
+  await expect(page.locator("#inventory-nav")).toBeVisible();
+  await page.locator("#inventory-nav").click();
+  await expect(
+    page.getByRole("row", { name: /E2E Browser Product/ }),
+  ).toContainText("5");
+  await expect(
+    page.getByText(/Low-stock thresholds, category\/supplier fields/),
+  ).toBeVisible();
+  await page.getByLabel("Filter inventory by stock status").selectOption("OUT_OF_STOCK");
+  await expect(page.getByText("No products on this page match the selected stock status.")).toBeVisible();
+  await page.getByLabel("Filter inventory by stock status").selectOption("ALL");
+  await expect(inventoryRow).toBeVisible();
+  await page.screenshot({
+    path: "/tmp/onecore-inventory-desktop-1440x900.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 320, height: 700 });
+  await expect(page.locator("#app-sidebar")).toHaveAttribute(
+    "data-open",
+    "false",
   );
-  assert.equal(receipt.status, 201, JSON.stringify(receipt.body));
+  await expect(page.locator("#app-sidebar")).toBeHidden();
+  assert.equal(
+    await page.evaluate(
+      () =>
+        globalThis.document.documentElement.scrollWidth <=
+        globalThis.window.innerWidth,
+    ),
+    true,
+    "Inventory layout should not overflow the page at 320px",
+  );
+  await page.screenshot({
+    path: "/tmp/onecore-inventory-mobile-320x700.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  globalThis.console.info(
+    "PASS: inventory reads persisted branch stock, filters current-page status, and renders without page overflow at 1440px and 320px",
+  );
 
   await page.locator("#pos-nav").click();
   await page.getByLabel("Search catalog").fill("E2E Browser Product");
@@ -1521,8 +1551,40 @@ try {
       AND catalog_item_id = ${catalogItemId}
   `);
   assert.deepEqual(resultRows(persistedStock)[0], { on_hand: 5, reserved: 3 });
+  await expect(page.locator("#sales-nav")).toBeVisible();
+  await page.locator("#sales-nav").click();
+  const salesRow = page.getByRole("row", {
+    name: new RegExp(firstCheckoutSaleId),
+  });
+  await expect(salesRow).toContainText("OPEN");
+  await expect(salesRow).toContainText("57.750003 KES");
+  await salesRow.getByRole("button", { name: `View sale ${firstCheckoutSaleId}` }).click();
+  await expect(page.locator("#boundary-content")).toContainText(
+    "This sale is unpaid. Payment completion and receipt issuance are not supported",
+  );
+  await expect(page.locator("#boundary-content")).toContainText(
+    "E2E Browser Product",
+  );
+  for (const [navigationId, title] of [
+    ["finance-nav", "Finance"],
+    ["hr-nav", "Human resources"],
+    ["payroll-nav", "Payroll"],
+  ]) {
+    await page.locator(`#${navigationId}`).click();
+    await expect(page.locator("#boundary-title")).toHaveText(title);
+    await expect(page.locator("#boundary-content")).toContainText(
+      "Unavailable in this workspace",
+    );
+  }
+  await page.locator("#companies-nav").click();
+  await expect(page.locator("#boundary-title")).toHaveText("CRM companies");
+  await expect(page.locator("#boundary-content")).toContainText(
+    "A distinct company CRM model and API are not available",
+  );
+  await page.getByRole("link", { name: "Open supported customer records" }).click();
+  await expect(page.locator("#boundary-title")).toHaveText("Customers");
   globalThis.console.info(
-    "PASS: POS checkout posts exact IDs/quantities and idempotency key, recovers the same sale after a lost response, uses server price, reserves stock once, rejects insufficient stock and forged tenant/branch requests, and displays Unpaid — OPEN",
+    "PASS: inventory and unpaid Sales history use persisted APIs; unsupported Finance, CRM Companies, HR, and Payroll routes are explicit and Companies links to supported customer records",
   );
 
   const viewerContext = await browser.newContext();

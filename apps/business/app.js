@@ -21,6 +21,10 @@ import {
   saleCheckoutMessage,
   setDraftCartQuantity,
 } from "./pos.js";
+import {
+  createInventoryMovementController,
+  inventoryMovementMessage,
+} from "./inventory.js";
 
 const apiBase =
   document
@@ -278,6 +282,15 @@ let branchContext = "";
 const businessResourceOffsets = { customers: 0, products: 0 };
 const businessResourceFilters = { customers: {}, products: {} };
 const resourceOffsets = { notifications: 0, templates: 0, deliveries: 0 };
+let inventoryLoadSequence = 0;
+let inventoryOffset = 0;
+let inventorySearch = "";
+let inventoryStatusFilter = "ALL";
+const inventoryPageSize = 50;
+let salesLoadSequence = 0;
+let salesOffset = 0;
+let selectedSaleId = null;
+const salesPageSize = 50;
 let preferenceLocale = workflowLocale;
 const resourceViews = {
   organization: {
@@ -335,6 +348,42 @@ const resourceViews = {
   },
 };
 const boundaryViews = {
+  finance: {
+    title: "Finance",
+    description:
+      "Financial operations are not available in this workspace yet.",
+    eyebrow: "Business module",
+  },
+  companies: {
+    title: "CRM companies",
+    description:
+      "A distinct company CRM model and API are not available. Existing customer/contact records remain under Business Manager.",
+    eyebrow: "Business module",
+  },
+  hr: {
+    title: "Human resources",
+    description:
+      "Employee and HR operations are not available in this workspace yet.",
+    eyebrow: "Business module",
+  },
+  payroll: {
+    title: "Payroll",
+    description:
+      "Payroll periods, calculations, approvals, and payslips are not available in this workspace yet.",
+    eyebrow: "Business module",
+  },
+  inventory: {
+    title: "Inventory",
+    description:
+      "Review product stock for your verified active branch. Reorder thresholds and inventory valuation are not configured by the current contract.",
+    eyebrow: "Stock control",
+  },
+  sales: {
+    title: "Sales",
+    description:
+      "Review branch sales and their current unpaid/open or cancelled state. Payments and receipts are not available in this workflow.",
+    eyebrow: "Sales history",
+  },
   branches: {
     title: "Branches",
     description:
@@ -509,6 +558,18 @@ const posCheckoutController = createSaleCheckoutController({
   request: (path, options) => authenticatedRequest(path, options),
   createKey: () => globalThis.crypto.randomUUID(),
 });
+let inventoryMovementStorage;
+try {
+  inventoryMovementStorage = globalThis.sessionStorage;
+} catch {
+  inventoryMovementStorage = null;
+}
+const inventoryMovementController = createInventoryMovementController({
+  storage: inventoryMovementStorage,
+  request: (path, options) => authenticatedRequest(path, options),
+  createKey: () => globalThis.crypto.randomUUID(),
+});
+let inventoryMovementNotice = null;
 
 function appendText(container, tagName, text, className) {
   const element = document.createElement(tagName);
@@ -1529,6 +1590,14 @@ function loadBoundaryView(view) {
     void loadPosWorkspace(content);
     return;
   }
+  if (view === "inventory") {
+    void loadInventoryView(content);
+    return;
+  }
+  if (view === "sales") {
+    void loadSalesView(content);
+    return;
+  }
   if (view === "branches") {
     document.querySelector("#boundary-title").textContent =
       branchText("branch.title");
@@ -1545,12 +1614,624 @@ function loadBoundaryView(view) {
     void loadMembersView(content);
     return;
   }
+  if (["finance", "companies", "hr", "payroll"].includes(view)) {
+    const unavailable = document.createElement("section");
+    unavailable.className = "oc-state oc-state--unavailable";
+    unavailable.setAttribute("role", "status");
+    appendText(unavailable, "h2", "Unavailable in this workspace", "oc-section-title");
+    appendText(unavailable, "p", metadata.description);
+    if (view === "companies") {
+      const customersLink = document.createElement("a");
+      customersLink.href = "#customers";
+      customersLink.textContent = "Open supported customer records";
+      customersLink.className = "oc-button oc-button--secondary";
+      unavailable.append(customersLink);
+    }
+    content.append(unavailable);
+    return;
+  }
   appendText(
     content,
     "div",
     "Audit records are written by the platform, but there is no tenant-authorized audit read API available to this workspace. No activity is fabricated or inferred from unrelated data.",
     "oc-state oc-state--empty",
   );
+}
+
+function inventoryMetric(label, value, hint) {
+  const card = document.createElement("article");
+  card.className = "oc-metric-card oc-inventory-metric";
+  appendText(card, "span", label, "oc-metric-card__label");
+  appendText(card, "strong", value, "oc-metric-card__value");
+  appendText(card, "span", hint, "oc-metric-card__hint");
+  return card;
+}
+
+function renderInventoryPagination(container, total, visibleCount) {
+  const pagination = document.createElement("nav");
+  pagination.className = "oc-pagination";
+  pagination.setAttribute("aria-label", "Inventory pages");
+  const first = total === 0 ? 0 : inventoryOffset + 1;
+  const last = Math.min(inventoryOffset + visibleCount, total);
+  appendText(
+    pagination,
+    "span",
+    `Showing ${first}–${last} of ${new Intl.NumberFormat(preferenceLocale).format(total)} products`,
+    "oc-muted",
+  );
+  const controls = document.createElement("div");
+  controls.className = "oc-pagination__controls";
+  const previous = document.createElement("button");
+  previous.className = "oc-button oc-button--secondary";
+  previous.type = "button";
+  previous.textContent = "Previous";
+  previous.disabled = inventoryOffset === 0;
+  previous.addEventListener("click", () => {
+    inventoryOffset = Math.max(0, inventoryOffset - inventoryPageSize);
+    void loadInventoryView(container);
+  });
+  const next = document.createElement("button");
+  next.className = "oc-button oc-button--secondary";
+  next.type = "button";
+  next.textContent = "Next";
+  next.disabled = inventoryOffset + visibleCount >= total;
+  next.addEventListener("click", () => {
+    inventoryOffset += inventoryPageSize;
+    void loadInventoryView(container);
+  });
+  controls.append(previous, next);
+  pagination.append(controls);
+  container.append(pagination);
+}
+
+function renderInventoryMovementForm(container, products, session) {
+  const panel = document.createElement("section");
+  panel.className = "oc-card oc-stack oc-inventory-movement";
+  panel.setAttribute("aria-labelledby", "inventory-movement-title");
+  appendText(panel, "h2", "Receive or adjust stock", "oc-section-title").id =
+    "inventory-movement-title";
+  appendText(
+    panel,
+    "p",
+    "Record a positive receipt or a signed adjustment for the selected product at the verified branch. The server enforces permissions, reservations, and idempotency.",
+    "oc-muted",
+  );
+
+  if (inventoryMovementNotice) {
+    const notice = appendText(
+      panel,
+      "p",
+      inventoryMovementNotice.text,
+      inventoryMovementNotice.success
+        ? "oc-alert oc-alert--success"
+        : "oc-alert oc-alert--error",
+    );
+    notice.setAttribute("role", inventoryMovementNotice.success ? "status" : "alert");
+    inventoryMovementNotice = null;
+  }
+
+  const context = {
+    organizationId: session.organization?.organizationId,
+    userId: session.user?.id,
+    branchId: session.branch?.branchId,
+  };
+  const movementState = inventoryMovementController.getState(context);
+  if (!["NONE", "PENDING", "UNCERTAIN"].includes(movementState.kind)) {
+    const message = appendText(
+      panel,
+      "p",
+      inventoryMovementMessage(movementState),
+      "oc-state oc-state--error",
+    );
+    message.setAttribute("role", "alert");
+    container.append(panel);
+    return;
+  }
+
+  const pendingAttempt = movementState.attempt;
+  const form = document.createElement("form");
+  form.className = "oc-form oc-form-grid oc-inventory-movement-form";
+  if (pendingAttempt) form.setAttribute("aria-busy", "true");
+
+  const productField = document.createElement("div");
+  productField.className = "oc-field";
+  const productLabel = appendText(productField, "label", "Product");
+  const productSelect = document.createElement("select");
+  productSelect.className = "oc-input";
+  productSelect.required = true;
+  productSelect.disabled = Boolean(pendingAttempt) || products.length === 0;
+  productSelect.id = "inventory-movement-product";
+  productLabel.htmlFor = productSelect.id;
+  for (const product of products) {
+    const option = document.createElement("option");
+    option.value = product.id;
+    option.textContent = `${product.name}${product.reference ? ` · ${product.reference}` : ""}`;
+    productSelect.append(option);
+  }
+
+  const movementField = document.createElement("div");
+  movementField.className = "oc-field";
+  const movementLabel = appendText(movementField, "label", "Movement type");
+  const movementSelect = document.createElement("select");
+  movementSelect.className = "oc-input";
+  movementSelect.id = "inventory-movement-type";
+  movementSelect.disabled = Boolean(pendingAttempt);
+  movementLabel.htmlFor = movementSelect.id;
+  for (const [value, label] of [
+    ["RECEIPT", "Receive stock"],
+    ["ADJUSTMENT", "Adjust stock"],
+  ]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    movementSelect.append(option);
+  }
+
+  const deltaField = document.createElement("div");
+  deltaField.className = "oc-field";
+  const deltaLabel = appendText(deltaField, "label", "Quantity change");
+  const deltaInput = document.createElement("input");
+  deltaInput.className = "oc-input";
+  deltaInput.id = "inventory-movement-delta";
+  deltaInput.type = "number";
+  deltaInput.step = "1";
+  deltaInput.min = "1";
+  deltaInput.max = "1000000";
+  deltaInput.required = true;
+  deltaInput.placeholder = "Whole number";
+  deltaInput.disabled = Boolean(pendingAttempt);
+  deltaLabel.htmlFor = deltaInput.id;
+
+  const submit = document.createElement("button");
+  submit.className = "oc-button";
+  submit.type = "submit";
+  submit.disabled = products.length === 0;
+  submit.textContent = pendingAttempt ? "Retry same movement" : "Record movement";
+  productField.append(productSelect);
+  movementField.append(movementSelect);
+  deltaField.append(deltaInput);
+  form.append(productField, movementField, deltaField, submit);
+  if (pendingAttempt) {
+    productSelect.value = pendingAttempt.request.catalogItemId;
+    movementSelect.value = pendingAttempt.request.movementType;
+    deltaInput.value = String(pendingAttempt.request.delta);
+  }
+  const updateDeltaBounds = () => {
+    deltaInput.min = movementSelect.value === "RECEIPT" ? "1" : "-1000000";
+    deltaInput.setAttribute(
+      "aria-describedby",
+      "inventory-movement-guidance",
+    );
+  };
+  updateDeltaBounds();
+  movementSelect.addEventListener("change", updateDeltaBounds);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    deltaInput.setCustomValidity(
+      Number(deltaInput.value) === 0
+        ? "Enter a non-zero whole-number quantity."
+        : "",
+    );
+    if (!form.reportValidity()) return;
+    setBusy(submit, true);
+    const result = await inventoryMovementController.submit(
+      {
+        catalogItemId: productSelect.value,
+        movementType: movementSelect.value,
+        delta: Number(deltaInput.value),
+      },
+      context,
+    );
+    inventoryMovementNotice =
+      result.kind === "SUCCESS"
+        ? {
+            success: true,
+            text: `${movementSelect.value === "RECEIPT" ? "Stock received" : "Stock adjusted"}. Available quantity: ${new Intl.NumberFormat(preferenceLocale).format(result.stock.available)}.`,
+          }
+        : { success: false, text: inventoryMovementMessage(result) };
+    await loadInventoryView(container);
+  });
+  const guidance = appendText(
+    panel,
+    "p",
+    pendingAttempt
+      ? inventoryMovementMessage({ kind: movementState.kind })
+      : "Receipts must be positive. Adjustments may add or remove whole units, but cannot reduce stock below active reservations.",
+    "oc-help",
+  );
+  guidance.id = "inventory-movement-guidance";
+  panel.append(form, guidance);
+  container.append(panel);
+}
+
+async function loadInventoryView(container) {
+  const sequence = ++inventoryLoadSequence;
+  const session = currentSession;
+  const organizationId = session?.organization?.organizationId;
+  container.replaceChildren();
+
+  const toolbar = document.createElement("form");
+  toolbar.className = "oc-inventory-toolbar";
+  const searchField = document.createElement("div");
+  searchField.className = "oc-field oc-inventory-search";
+  const searchLabel = appendText(searchField, "label", "Search products");
+  const searchInput = document.createElement("input");
+  searchInput.className = "oc-input";
+  searchInput.type = "search";
+  searchInput.maxLength = 100;
+  searchInput.placeholder = "Product name or SKU";
+  searchInput.value = inventorySearch;
+  searchInput.autocomplete = "off";
+  searchInput.setAttribute("aria-label", "Search inventory products");
+  searchField.append(searchInput);
+  searchLabel.htmlFor = `inventory-search-${sequence}`;
+  searchInput.id = searchLabel.htmlFor;
+
+  const statusField = document.createElement("div");
+  statusField.className = "oc-field oc-inventory-status-filter";
+  const statusLabel = appendText(statusField, "label", "Stock status");
+  const statusSelect = document.createElement("select");
+  statusSelect.className = "oc-input";
+  statusSelect.id = `inventory-status-${sequence}`;
+  statusSelect.setAttribute("aria-label", "Filter inventory by stock status");
+  for (const [value, label] of [
+    ["ALL", "All products"],
+    ["IN_STOCK", "In stock"],
+    ["OUT_OF_STOCK", "Out of stock"],
+  ]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    statusSelect.append(option);
+  }
+  statusSelect.value = inventoryStatusFilter;
+  statusLabel.htmlFor = statusSelect.id;
+  const searchButton = document.createElement("button");
+  searchButton.className = "oc-button";
+  searchButton.type = "submit";
+  searchButton.textContent = "Search";
+  toolbar.append(searchField, statusField, searchButton);
+  statusField.append(statusSelect);
+  toolbar.addEventListener("submit", (event) => {
+    event.preventDefault();
+    inventorySearch = searchInput.value.trim();
+    inventoryStatusFilter = statusSelect.value;
+    inventoryOffset = 0;
+    void loadInventoryView(container);
+  });
+  statusSelect.addEventListener("change", () => {
+    inventoryStatusFilter = statusSelect.value;
+    inventoryOffset = 0;
+    void loadInventoryView(container);
+  });
+  container.append(toolbar);
+
+  if (!organizationId) {
+    appendText(
+      container,
+      "div",
+      "Select an organization to view inventory.",
+      "oc-state oc-state--empty",
+    ).setAttribute("role", "status");
+    return;
+  }
+  if (!session?.branch?.branchId) {
+    appendText(
+      container,
+      "div",
+      "Choose an active branch in the workspace header to view branch stock.",
+      "oc-state oc-state--empty",
+    ).setAttribute("role", "status");
+    return;
+  }
+
+  const loading = appendText(
+    container,
+    "div",
+    "Loading products and branch stock…",
+    "oc-state oc-state--loading",
+  );
+  loading.setAttribute("role", "status");
+  try {
+    const catalogQuery = new URLSearchParams({
+      type: "PRODUCT",
+      status: "ACTIVE",
+      limit: String(inventoryPageSize),
+      offset: String(inventoryOffset),
+    });
+    if (inventorySearch) catalogQuery.set("search", inventorySearch);
+    const catalog = await authenticatedRequest(
+      `/organizations/${encodeURIComponent(organizationId)}/business/catalog?${catalogQuery}`,
+    );
+    if (sequence !== inventoryLoadSequence || currentSession !== session) return;
+    const products = (catalog.items ?? []).filter(
+      (item) => item.type === "PRODUCT" && item.status === "ACTIVE",
+    );
+    let stockItems = [];
+    if (products.length > 0) {
+      const stockQuery = new URLSearchParams();
+      for (const product of products) {
+        stockQuery.append("catalogItemId", product.id);
+      }
+      const stock = await authenticatedRequest(
+        `/organizations/${encodeURIComponent(organizationId)}/inventory/stock?${stockQuery}`,
+      );
+      stockItems = stock.items ?? [];
+    }
+    if (sequence !== inventoryLoadSequence || currentSession !== session) return;
+    loading.remove();
+
+    const stockByProduct = new Map(
+      stockItems.map((item) => [item.catalogItemId, item]),
+    );
+    const tracked = stockItems.filter((item) => item.tracked);
+    const outOfStock = tracked.filter((item) => item.available === 0).length;
+    const summary = document.createElement("section");
+    summary.className = "oc-grid oc-dashboard-metrics oc-inventory-metrics";
+    summary.setAttribute("aria-label", "Inventory summary for this page");
+    summary.append(
+      inventoryMetric(
+        "Matching products",
+        new Intl.NumberFormat(preferenceLocale).format(catalog.total ?? products.length),
+        "Active products matching the search",
+      ),
+      inventoryMetric(
+        "Tracked on this page",
+        new Intl.NumberFormat(preferenceLocale).format(tracked.length),
+        "Products with branch stock balances",
+      ),
+      inventoryMetric(
+        "Out of stock on this page",
+        new Intl.NumberFormat(preferenceLocale).format(outOfStock),
+        "Available quantity is zero",
+      ),
+    );
+    container.append(summary);
+    renderInventoryMovementForm(container, products, session);
+    appendText(
+      container,
+      "p",
+      "Low-stock thresholds, category/supplier fields, and inventory valuation are not configured by the current data model. Stock values below are the persisted branch balance, not catalog quantity or price-derived valuation.",
+      "oc-help",
+    );
+
+    const visibleProducts = products.filter((product) => {
+      const balance = stockByProduct.get(product.id);
+      if (!balance?.tracked || inventoryStatusFilter === "ALL") return true;
+      if (inventoryStatusFilter === "IN_STOCK") return balance.available > 0;
+      return balance.available === 0;
+    });
+    if (visibleProducts.length > 0) {
+      renderSimpleTable(
+        container,
+        ["Product", "SKU / reference", "On hand", "Reserved", "Available", "Catalog price", "Status"],
+        visibleProducts.map((product) => {
+          const balance = stockByProduct.get(product.id);
+          const status = !balance?.tracked
+            ? "Stock not tracked"
+            : balance.available === 0
+              ? "Out of stock"
+              : "In stock";
+          const quantity = (value) =>
+            typeof value === "number"
+              ? new Intl.NumberFormat(preferenceLocale).format(value)
+              : "—";
+          return [
+            product.name,
+            product.reference ?? "—",
+            quantity(balance?.onHand),
+            quantity(balance?.reserved),
+            quantity(balance?.available),
+            `${product.price} ${product.currency}`,
+            status,
+          ];
+        }),
+      );
+    } else {
+      appendText(
+        container,
+        "div",
+        inventoryStatusFilter === "ALL"
+          ? "No active products match this search."
+          : "No products on this page match the selected stock status.",
+        "oc-state oc-state--empty",
+      ).setAttribute("role", "status");
+    }
+    renderInventoryPagination(container, catalog.total ?? products.length, products.length);
+  } catch (requestError) {
+    if (sequence !== inventoryLoadSequence || currentSession !== session) return;
+    loading.remove();
+    const alert = appendText(
+      container,
+      "div",
+      requestError instanceof ApiError && requestError.status === 403
+        ? "Inventory stock access is not available for this organization and branch."
+        : errorMessage(requestError),
+      "oc-state oc-state--error",
+    );
+    alert.setAttribute("role", "alert");
+    const retry = document.createElement("button");
+    retry.className = "oc-button oc-button--secondary";
+    retry.type = "button";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", () => void loadInventoryView(container));
+    container.append(retry);
+  }
+}
+
+function renderSalesRows(container, sales) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "oc-table-wrap";
+  const table = document.createElement("table");
+  table.className = "oc-table";
+  const head = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  for (const label of ["Sale", "Created", "Status", "Total", ""]) {
+    const header = appendText(headerRow, "th", label);
+    header.scope = "col";
+  }
+  head.append(headerRow);
+  const body = document.createElement("tbody");
+  for (const sale of sales) {
+    const row = document.createElement("tr");
+    appendText(row, "td", sale.id);
+    appendText(
+      row,
+      "td",
+      formatDateTime(new Date(sale.createdAt), { locale: preferenceLocale }),
+    );
+    appendText(row, "td", sale.status, "oc-status");
+    appendText(row, "td", `${sale.total} ${sale.currency}`);
+    const actionCell = document.createElement("td");
+    const details = document.createElement("button");
+    details.className = "oc-button oc-button--secondary";
+    details.type = "button";
+    details.textContent = "View sale";
+    details.setAttribute("aria-label", `View sale ${sale.id}`);
+    details.addEventListener("click", () => {
+      selectedSaleId = sale.id;
+      void loadSalesView(container);
+    });
+    actionCell.append(details);
+    row.append(actionCell);
+    body.append(row);
+  }
+  table.append(head, body);
+  wrapper.append(table);
+  container.append(wrapper);
+}
+
+function renderSaleDetails(container, sale) {
+  const back = document.createElement("button");
+  back.className = "oc-button oc-button--secondary";
+  back.type = "button";
+  back.textContent = "Back to sales";
+  back.addEventListener("click", () => {
+    selectedSaleId = null;
+    void loadSalesView(container);
+  });
+  container.append(back);
+
+  const summary = document.createElement("section");
+  summary.className = "oc-state";
+  renderDefinitionList(summary, [
+    ["Sale ID", sale.id],
+    ["Status", sale.status],
+    ["Branch", sale.branchId],
+    ["Created", formatDateTime(new Date(sale.createdAt), { locale: preferenceLocale })],
+    ["Subtotal", `${sale.subtotal} ${sale.currency}`],
+    ["Total", `${sale.total} ${sale.currency}`],
+  ]);
+  container.append(summary);
+  appendText(
+    container,
+    "p",
+    sale.status === "OPEN"
+      ? "This sale is unpaid. Payment completion and receipt issuance are not supported here."
+      : "This sale is cancelled. No payment or receipt state is inferred.",
+    "oc-help",
+  );
+  renderSimpleTable(
+    container,
+    ["Product", "SKU / reference", "Quantity", "Unit price", "Line total"],
+    (sale.lines ?? []).map((line) => [
+      line.itemName,
+      line.reference ?? "—",
+      line.quantity,
+      `${line.unitPrice} ${sale.currency}`,
+      `${line.lineTotal} ${sale.currency}`,
+    ]),
+  );
+}
+
+async function loadSalesView(container) {
+  const sequence = ++salesLoadSequence;
+  const session = currentSession;
+  const organizationId = session?.organization?.organizationId;
+  container.replaceChildren();
+  const branchId = session?.branch?.branchId;
+  if (!organizationId) {
+    appendText(container, "div", "Select an organization to view sales.", "oc-state oc-state--empty").setAttribute("role", "status");
+    return;
+  }
+  if (!branchId) {
+    appendText(container, "div", "Choose an active branch in the workspace header to view branch sales.", "oc-state oc-state--empty").setAttribute("role", "status");
+    return;
+  }
+  const loading = appendText(container, "div", "Loading sales…", "oc-state oc-state--loading");
+  loading.setAttribute("role", "status");
+  try {
+    const result = selectedSaleId
+      ? await authenticatedRequest(
+          `/organizations/${encodeURIComponent(organizationId)}/sales/${encodeURIComponent(selectedSaleId)}`,
+        )
+      : await authenticatedRequest(
+          `/organizations/${encodeURIComponent(organizationId)}/sales?limit=${salesPageSize}&offset=${salesOffset}`,
+        );
+    if (sequence !== salesLoadSequence || currentSession !== session) return;
+    loading.remove();
+    if (selectedSaleId) {
+      if (!result.sale) throw new TypeError("The sale response is incomplete.");
+      renderSaleDetails(container, result.sale);
+      return;
+    }
+    const sales = Array.isArray(result.items) ? result.items : [];
+    if (!sales.length) {
+      appendText(container, "div", "No sales have been created for this branch yet.", "oc-state oc-state--empty").setAttribute("role", "status");
+    } else {
+      renderSalesRows(container, sales);
+    }
+    const pagination = document.createElement("nav");
+    pagination.className = "oc-pagination";
+    pagination.setAttribute("aria-label", "Sales pages");
+    appendText(
+      pagination,
+      "span",
+      `Showing ${sales.length ? salesOffset + 1 : 0}–${salesOffset + sales.length} of ${new Intl.NumberFormat(preferenceLocale).format(result.total ?? 0)} sales`,
+      "oc-muted",
+    );
+    const controls = document.createElement("div");
+    controls.className = "oc-pagination__controls";
+    const previous = document.createElement("button");
+    previous.className = "oc-button oc-button--secondary";
+    previous.type = "button";
+    previous.textContent = "Previous";
+    previous.disabled = salesOffset === 0;
+    previous.addEventListener("click", () => {
+      salesOffset = Math.max(0, salesOffset - salesPageSize);
+      void loadSalesView(container);
+    });
+    const next = document.createElement("button");
+    next.className = "oc-button oc-button--secondary";
+    next.type = "button";
+    next.textContent = "Next";
+    next.disabled = salesOffset + sales.length >= (result.total ?? 0);
+    next.addEventListener("click", () => {
+      salesOffset += salesPageSize;
+      void loadSalesView(container);
+    });
+    controls.append(previous, next);
+    pagination.append(controls);
+    container.append(pagination);
+  } catch (requestError) {
+    if (sequence !== salesLoadSequence || currentSession !== session) return;
+    loading.remove();
+    const alert = appendText(
+      container,
+      "div",
+      requestError instanceof ApiError && requestError.status === 403
+        ? "Sales history is not available for this organization and branch."
+        : errorMessage(requestError),
+      "oc-state oc-state--error",
+    );
+    alert.setAttribute("role", "alert");
+    const retry = document.createElement("button");
+    retry.className = "oc-button oc-button--secondary";
+    retry.type = "button";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", () => void loadSalesView(container));
+    container.append(retry);
+  }
 }
 
 async function loadBranchesView(content, statusMessage) {
@@ -2426,6 +3107,11 @@ function businessResourceEndpoint(view) {
 function clearBusinessManagerContext() {
   businessResourceSequence += 1;
   globalSearchSequence += 1;
+  inventoryLoadSequence += 1;
+  inventoryOffset = 0;
+  salesLoadSequence += 1;
+  salesOffset = 0;
+  selectedSaleId = null;
   resetPosWorkspaceState();
   if (globalSearchDialog.open) globalSearchDialog.close();
   businessResourceContext = "";
@@ -2435,7 +3121,11 @@ function clearBusinessManagerContext() {
   businessResourceFilters.products = {};
   const content = document.querySelector("#boundary-content");
   content.replaceChildren();
-  if (["customers", "products", "pos"].includes(location.hash.slice(1))) {
+  if (
+    ["customers", "products", "pos", "inventory", "sales"].includes(
+      location.hash.slice(1),
+    )
+  ) {
     appendText(
       content,
       "p",
@@ -4022,6 +4712,8 @@ function renderResourcePagination(view, key, rows) {
 async function updateResourceNavigation(session) {
   const organizationId = session.organization?.organizationId;
   const sequence = ++resourceNavigationSequence;
+  const inventoryNav = document.querySelector("#inventory-nav");
+  inventoryNav.hidden = true;
   const probes = [
     [
       "customers-nav",
@@ -4037,6 +4729,12 @@ async function updateResourceNavigation(session) {
       "pos-nav",
       organizationId &&
         `/organizations/${encodeURIComponent(organizationId)}/business/catalog?status=ACTIVE&limit=1`,
+    ],
+    [
+      "sales-nav",
+      organizationId &&
+        session.branch?.branchId &&
+        `/organizations/${encodeURIComponent(organizationId)}/sales?limit=1`,
     ],
     [
       "notifications-nav",
@@ -4099,36 +4797,66 @@ async function updateResourceNavigation(session) {
   document.querySelector("#dashboard-notifications-link").hidden = true;
   if (!organizationId) return;
   await Promise.all(
-    probes.map(async ([id, path]) => {
-      if (!path) return;
-      try {
-        await authenticatedRequest(path);
-        if (
-          sequence === resourceNavigationSequence &&
-          currentSession === session
-        ) {
-          document.querySelector(`#${id}`).hidden = false;
-          if (id === "customers-nav") {
-            document.querySelector("#dashboard-customers-action").hidden =
-              false;
-          } else if (id === "products-nav") {
-            document.querySelector("#dashboard-catalog-action").hidden = false;
-          } else if (id === "notifications-nav") {
-            document.querySelector("#notification-shortcut").hidden = false;
-            document.querySelector("#dashboard-notifications-link").hidden =
-              false;
-          } else if (id === "preferences-nav") {
-            document.querySelector("#language-shortcut").hidden = false;
-          } else if (id === "modules-nav") {
-            document.querySelector("#dashboard-modules-link").hidden = false;
+    [
+      ...probes.map(async ([id, path]) => {
+        if (!path) return;
+        try {
+          await authenticatedRequest(path);
+          if (
+            sequence === resourceNavigationSequence &&
+            currentSession === session
+          ) {
+            document.querySelector(`#${id}`).hidden = false;
+            if (id === "customers-nav") {
+              document.querySelector("#dashboard-customers-action").hidden =
+                false;
+            } else if (id === "products-nav") {
+              document.querySelector("#dashboard-catalog-action").hidden =
+                false;
+            } else if (id === "notifications-nav") {
+              document.querySelector("#notification-shortcut").hidden = false;
+              document.querySelector("#dashboard-notifications-link").hidden =
+                false;
+            } else if (id === "preferences-nav") {
+              document.querySelector("#language-shortcut").hidden = false;
+            } else if (id === "modules-nav") {
+              document.querySelector("#dashboard-modules-link").hidden = false;
+            }
+          }
+        } catch {
+          if (sequence === resourceNavigationSequence) {
+            document.querySelector(`#${id}`).hidden = true;
           }
         }
-      } catch {
-        if (sequence === resourceNavigationSequence) {
-          document.querySelector(`#${id}`).hidden = true;
+      }),
+      (async () => {
+        if (!organizationId || !session.branch?.branchId) return;
+        try {
+          const catalog = await authenticatedRequest(
+            `/organizations/${encodeURIComponent(organizationId)}/business/catalog?type=PRODUCT&status=ACTIVE&limit=1`,
+          );
+          const firstProduct = catalog.items?.[0];
+          if (firstProduct) {
+            const stockQuery = new URLSearchParams({
+              catalogItemId: firstProduct.id,
+            });
+            await authenticatedRequest(
+              `/organizations/${encodeURIComponent(organizationId)}/inventory/stock?${stockQuery}`,
+            );
+          }
+          if (
+            sequence === resourceNavigationSequence &&
+            currentSession === session
+          ) {
+            inventoryNav.hidden = false;
+          }
+        } catch {
+          if (sequence === resourceNavigationSequence) {
+            inventoryNav.hidden = true;
+          }
         }
-      }
-    }),
+      })(),
+    ],
   );
 }
 
@@ -4435,6 +5163,9 @@ function userInitials(displayName, email) {
 
 function selectView(view) {
   businessResourceSequence += 1;
+  inventoryLoadSequence += 1;
+  salesLoadSequence += 1;
+  if (view !== "sales") selectedSaleId = null;
   const validViews = [
     "overview",
     "security",
