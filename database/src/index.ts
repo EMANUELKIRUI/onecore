@@ -71,6 +71,7 @@ export {
   createIdentityRepository,
   type AuthenticationAuditEvent,
   type IdentityBranch,
+  type IdentityMfaCredential,
   type IdentityMembership,
   type IdentityRepository,
   type IdentitySession,

@@ -72,6 +72,27 @@ the generated `id` and `revoked_at` columns. Drizzle includes both as
 cover them even though the API does not set either value during login. This
 grant does not expand the runtime role to table-wide INSERT privileges.
 
+Forward-only migration `20261012110014_owner_credential_setup` adds the
+organization-bound Owner credential-setup token table with forced RLS, a
+single-token/user identity policy, and narrowly scoped update grants. It also
+grants the application role only the user password/email-verification columns
+and membership status column needed to complete setup transactionally. Token
+hashes—not raw invitation tokens—are persisted. Validate its policies and
+privileges against the non-owner runtime role in disposable PostgreSQL before
+any deployment; no production migration state was queried.
+
+Forward-only migrations `20261012092151_orange_proudstar` and
+`20261012092652_safe_iron_lad` add `user_mfa_credentials` and
+`sessions.mfa_verified_at`. MFA credentials are identity-level data protected
+by forced RLS using only `app.current_user_id`; organization or branch context
+does not make another user's encrypted TOTP secret visible. The runtime role
+receives DML only on that table, with the API required to set its verified
+user context. The session-assurance migration grants INSERT only on the added
+`mfa_verified_at` column. Review both generated migrations and their RLS/grant
+statements before applying them. They have been exercised only in disposable
+local PostgreSQL-compatible tests; no production ledger or database was
+queried.
+
 The organization member-directory migration adds a SELECT-only policy on the
 existing `users` table; it does not alter table structure or runtime grants.
 The policy requires both the verified organization GUC and the
@@ -90,32 +111,36 @@ policy, so no Drizzle snapshot change is required. Branch inserts name only
 `organization_id`, `name`, and `code`; forced tenant RLS remains the row
 boundary. Review
 `20261010020000_branch_administration_contract/migration.sql` before applying.
-An isolated PostgreSQL 18.6 replay of its role-permission backfill with
-pre-existing Owner/Admin rows failed as `onecore_migrator` because the
-cross-tenant `role_permissions` insert has no transaction-local organization
-context. The deployment migration ledger must be checked before any repair;
-never edit this migration if it has been applied. A forward-only repair
-migration, `20261010040000_branch_permission_backfill_repair`, sets
-`app.current_organization_id` per tenant and backfills the missing branch and
-membership-branch permissions for every Organization Owner/Admin system role
-without widening tenant scope. The repair is repeatable and safe after the
-earlier backfill, but it does not replace or bypass that migration. The normal
-ordered runner cannot reach it while the predecessor is absent from the ledger
-and failing.
+An isolated PostgreSQL-compatible regression test reproduced a failure in the
+original unscoped role-permission backfill when pre-existing Owner/Admin rows
+were protected by forced RLS. The migration source now sets
+`app.current_organization_id` for each tenant before inserting that tenant's
+branch grants. Do not apply this changed migration file to an existing target
+until its recorded history and effects have been reconciled: the source change
+changes its content hash, and a missing ledger entry does not establish that
+the prior version had no partial effects.
+
+A forward-only repair migration,
+`20261010040000_branch_permission_backfill_repair`, also sets
+`app.current_organization_id` per tenant and backfills missing branch and
+membership-branch permissions. It is repeatable, but does not replace or
+bypass the predecessor. The migration regression test covers the corrected
+predecessor with existing Owner/Admin roles, forced RLS, two-tenant isolation,
+repeatability, and rollback after a later transaction failure.
 
 Before migration or recovery in any environment, inspect that environment's
 ledger and verify the resulting permission rows using an authorized
 read-only connection. If `20261010020000_branch_administration_contract` is
-recorded, verify its effects and continue with the normal runner; the later
-repair will fill any missing branch or membership-branch grants. If it is not
-recorded, stop normal migration retries. Do not insert a ledger row by itself,
-skip the predecessor, or assume the later repair will execute. The migration
-owner must approve a controlled recovery that applies and verifies all effects
-of the predecessor, using tenant-scoped role-permission writes and preserving
-its grants, before truthfully recording successful completion in the ledger.
-Alternatively, restore a verified backup and follow the approved recovery
-procedure. A new later migration alone is not a recovery for this ordering
-failure. No deployment ledger was inspected as part of this change.
+recorded, verify its hash, effects, and security properties; do not rerun it
+or edit its ledger entry. Continue with the ordered runner only after
+migration-owner approval. If it is absent from the ledger, stop normal
+migration retries until an authorized operator determines whether the old SQL
+partially applied. Recovery requires migration-owner approval and a controlled
+plan that reconciles all effects under tenant-scoped writes before recording
+successful completion, or a verified backup restore followed by the approved
+recovery procedure. Never insert a ledger row by itself, skip the predecessor,
+bypass RLS, or assume the later repair will execute. No deployment ledger was
+inspected as part of this change.
 
 The migration owner should provide the following read-only evidence for the
 specific target database and environment before deciding the recovery path:

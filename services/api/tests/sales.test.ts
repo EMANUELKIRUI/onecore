@@ -222,7 +222,11 @@ describe("Sales API", () => {
     if (!organization || !user) throw new Error("Sales API fixture missing");
     const [branch] = await database
       .insert(schema.branches)
-      .values({ organizationId: organization.id, name: "Sales branch", code: "SALES" })
+      .values({
+        organizationId: organization.id,
+        name: "Sales branch",
+        code: "SALES",
+      })
       .returning();
     if (!branch) throw new Error("Sales branch fixture missing");
     const [item] = await database
@@ -410,9 +414,7 @@ describe("Sales API", () => {
     const eventsBeforeFailure = await database
       .select({ id: schema.outboxEvents.id })
       .from(schema.outboxEvents)
-      .where(
-        eq(schema.outboxEvents.eventType, "SALE_CREATED"),
-      );
+      .where(eq(schema.outboxEvents.eventType, "SALE_CREATED"));
     expect(eventsBeforeFailure).toHaveLength(1);
     const mutationAudit = await database
       .select({ id: schema.auditLogs.id })

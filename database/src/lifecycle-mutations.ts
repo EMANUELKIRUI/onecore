@@ -5,7 +5,7 @@ import {
   defaultOrganizationRoleTemplates,
   organizationStatusSchema,
 } from "@onecore/core-domain";
-import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Database, OrganizationTransaction } from "./index.js";
 import { recordOutboxEvent } from "./outbox.js";
@@ -13,7 +13,9 @@ import {
   auditLogs,
   membershipRoles,
   modules,
+  moduleDependencies,
   organizationMemberships,
+  organizationModules,
   organizations,
   platformUserRoles,
   permissions,
@@ -67,6 +69,18 @@ const organizationApplicationSchema = z
     requestedModules: z.array(z.string().trim().min(1).max(100)).max(50),
   })
   .strict();
+const organizationApplicationProfileSchema = z
+  .object({
+    application: organizationApplicationSchema
+      .omit({
+        name: true,
+        slug: true,
+        industry: true,
+        deploymentType: true,
+      })
+      .strict(),
+  })
+  .strict();
 const userInputSchema = z.object({
   email: z.email().trim().toLowerCase().max(320),
   displayName: z.string().trim().min(1).max(200),
@@ -82,6 +96,7 @@ type BootstrapOwnerResult = {
   membershipId: string;
   email: string;
   displayName: string;
+  status: LifecycleUser["status"];
 };
 type InvitationResult = BootstrapOwnerResult;
 type LifecycleUser = Pick<
@@ -111,7 +126,14 @@ export class LifecycleMutationError extends Error {
       | "USER_NOT_ACTIVE"
       | "USER_ALREADY_EXISTS"
       | "MEMBERSHIP_ALREADY_EXISTS"
-      | "APPLICATION_ALREADY_EXISTS",
+      | "APPLICATION_ALREADY_EXISTS"
+      | "APPLICATION_NOT_APPROVED"
+      | "APPLICATION_PROVISIONING_REQUIRED"
+      | "APPLICATION_NOT_FOUND"
+      | "APPLICATION_PROVISIONING_INCOMPLETE"
+      | "APPLICATION_MODULE_UNAVAILABLE"
+      | "APPLICATION_MODULE_DEPENDENCY_UNSATISFIED"
+      | "APPLICATION_OWNER_CANNOT_BE_SUPERADMIN",
   ) {
     super(code);
     this.name = "LifecycleMutationError";
@@ -148,6 +170,22 @@ export interface LifecycleMutationService {
     actor: PlatformLifecycleActor,
     metadata: LifecycleRequestMetadata,
   ): Promise<typeof organizations.$inferSelect>;
+  provisionApprovedOrganizationApplication(
+    organizationId: string,
+    actor: PlatformLifecycleActor,
+    metadata: LifecycleRequestMetadata,
+  ): Promise<{
+    organization: typeof organizations.$inferSelect;
+    owner: {
+      id: string;
+      membershipId: string;
+      email: string;
+      displayName: string;
+      accountStatus: (typeof users.$inferSelect)["status"];
+      membershipStatus: (typeof organizationMemberships.$inferSelect)["status"];
+    };
+    enabledModules: string[];
+  }>;
   createUser(
     transaction: OrganizationTransaction,
     organizationId: string,
@@ -772,12 +810,18 @@ export function createLifecycleMutationService(
             .select()
             .from(organizations)
             .where(
-              inArray(organizations.status, [
-                "PENDING",
-                "UNDER_REVIEW",
-                "APPROVED",
-                "REJECTED",
-              ]),
+              or(
+                inArray(organizations.status, [
+                  "PENDING",
+                  "UNDER_REVIEW",
+                  "APPROVED",
+                  "REJECTED",
+                ]),
+                and(
+                  eq(organizations.status, "ACTIVE"),
+                  sql`${organizations.profile} ? 'application'`,
+                ),
+              ),
             )
             .orderBy(asc(organizations.createdAt));
           return applications;
@@ -998,6 +1042,15 @@ export function createLifecycleMutationService(
           if (!organization) {
             throw new LifecycleMutationError("ORGANIZATION_NOT_FOUND");
           }
+          if (
+            organization.profile &&
+            typeof organization.profile === "object" &&
+            "application" in organization.profile
+          ) {
+            throw new LifecycleMutationError(
+              "APPLICATION_PROVISIONING_REQUIRED",
+            );
+          }
           if (!canTransitionOrganizationStatus(organization.status, "ACTIVE")) {
             throw new LifecycleMutationError(
               "INVALID_ORGANIZATION_STATE_TRANSITION",
@@ -1046,6 +1099,353 @@ export function createLifecycleMutationService(
             }),
           );
           return activated;
+        },
+      );
+    },
+
+    async provisionApprovedOrganizationApplication(
+      organizationId,
+      actor,
+      metadata,
+    ) {
+      const trustedOrganizationId = uuidSchema.parse(organizationId);
+      return withAuthenticatedUserTransaction(
+        database,
+        actor.userId,
+        async (transaction) => {
+          await verifyPlatformActor(transaction, actor);
+          await setOrganizationContext(transaction, trustedOrganizationId);
+          const [organization] = await transaction
+            .select()
+            .from(organizations)
+            .where(eq(organizations.id, trustedOrganizationId))
+            .for("update")
+            .limit(1);
+          if (!organization) {
+            throw new LifecycleMutationError("ORGANIZATION_NOT_FOUND");
+          }
+          if (
+            !organization.profile ||
+            typeof organization.profile !== "object" ||
+            !("application" in organization.profile)
+          ) {
+            throw new LifecycleMutationError("APPLICATION_NOT_FOUND");
+          }
+          const { application } = organizationApplicationProfileSchema.parse(
+            organization.profile,
+          );
+
+          if (organization.status === "ACTIVE") {
+            await transaction.execute(
+              sql`select set_config('app.current_login_email', ${application.ownerEmail}, true)`,
+            );
+            const [existingOwner] = await transaction
+              .select({
+                id: users.id,
+                email: users.email,
+                displayName: users.displayName,
+                accountStatus: users.status,
+                membershipId: organizationMemberships.id,
+                membershipStatus: organizationMemberships.status,
+              })
+              .from(users)
+              .innerJoin(
+                organizationMemberships,
+                and(
+                  eq(organizationMemberships.userId, users.id),
+                  eq(
+                    organizationMemberships.organizationId,
+                    trustedOrganizationId,
+                  ),
+                ),
+              )
+              .innerJoin(
+                membershipRoles,
+                and(
+                  eq(membershipRoles.organizationId, trustedOrganizationId),
+                  eq(membershipRoles.membershipId, organizationMemberships.id),
+                ),
+              )
+              .innerJoin(
+                roles,
+                and(
+                  eq(roles.organizationId, trustedOrganizationId),
+                  eq(roles.id, membershipRoles.roleId),
+                  eq(roles.name, "Organization Owner"),
+                ),
+              )
+              .where(eq(users.email, application.ownerEmail))
+              .limit(1);
+            const enabledModules = await transaction
+              .select({ key: modules.key })
+              .from(organizationModules)
+              .innerJoin(modules, eq(modules.id, organizationModules.moduleId))
+              .where(
+                and(
+                  eq(organizationModules.organizationId, trustedOrganizationId),
+                  eq(organizationModules.status, "ENABLED"),
+                ),
+              );
+            const enabledModuleKeys = enabledModules
+              .map(({ key }) => key)
+              .sort();
+            if (
+              !existingOwner ||
+              application.requestedModules.some(
+                (moduleKey) => !enabledModuleKeys.includes(moduleKey),
+              )
+            ) {
+              throw new LifecycleMutationError(
+                "APPLICATION_PROVISIONING_INCOMPLETE",
+              );
+            }
+            return {
+              organization,
+              owner: existingOwner,
+              enabledModules: enabledModuleKeys,
+            };
+          }
+          if (organization.status !== "APPROVED") {
+            throw new LifecycleMutationError("APPLICATION_NOT_APPROVED");
+          }
+
+          const requestedModuleKeys = new Set(application.requestedModules);
+          const requestedModules = requestedModuleKeys.size
+            ? await transaction
+                .select({
+                  id: modules.id,
+                  key: modules.key,
+                  lifecycle: modules.lifecycle,
+                  isAvailable: modules.isAvailable,
+                })
+                .from(modules)
+                .where(inArray(modules.key, [...requestedModuleKeys]))
+            : [];
+          if (
+            requestedModules.length !== requestedModuleKeys.size ||
+            requestedModules.some(
+              (module) =>
+                module.lifecycle !== "AVAILABLE" || !module.isAvailable,
+            )
+          ) {
+            throw new LifecycleMutationError("APPLICATION_MODULE_UNAVAILABLE");
+          }
+          if (requestedModules.length > 0) {
+            const requestedModuleIds = requestedModules.map(({ id }) => id);
+            const dependencies = await transaction
+              .select({
+                moduleId: moduleDependencies.moduleId,
+                dependencyModuleId: moduleDependencies.dependencyModuleId,
+              })
+              .from(moduleDependencies)
+              .where(inArray(moduleDependencies.moduleId, requestedModuleIds));
+            const allDependencies = await transaction
+              .select({ id: modules.id, key: modules.key })
+              .from(modules)
+              .where(
+                inArray(
+                  modules.id,
+                  dependencies.map(
+                    ({ dependencyModuleId }) => dependencyModuleId,
+                  ),
+                ),
+              );
+            const dependencyKeysById = new Map(
+              allDependencies.map(({ id, key }) => [id, key]),
+            );
+            if (
+              dependencies.some(({ dependencyModuleId }) => {
+                const dependencyKey =
+                  dependencyKeysById.get(dependencyModuleId);
+                return (
+                  !dependencyKey || !requestedModuleKeys.has(dependencyKey)
+                );
+              })
+            ) {
+              throw new LifecycleMutationError(
+                "APPLICATION_MODULE_DEPENDENCY_UNSATISFIED",
+              );
+            }
+          }
+
+          await setOrganizationContext(transaction, trustedOrganizationId);
+          const ownerRole = await createOrganizationRoles(
+            transaction,
+            trustedOrganizationId,
+            actor.userId,
+            metadata,
+          );
+          const owner = await persistInvitation(
+            transaction,
+            trustedOrganizationId,
+            actor.userId,
+            metadata,
+            {
+              email: application.ownerEmail,
+              displayName: application.ownerName,
+            },
+          );
+          await transaction.execute(
+            sql`select set_config('app.current_user_id', ${owner.id}, true)`,
+          );
+          const [platformOwner] = await transaction
+            .select({ userId: platformUserRoles.userId })
+            .from(platformUserRoles)
+            .where(
+              and(
+                eq(platformUserRoles.userId, owner.id),
+                eq(platformUserRoles.role, "SUPERADMIN"),
+              ),
+            )
+            .limit(1);
+          await transaction.execute(
+            sql`select set_config('app.current_user_id', ${actor.userId}, true)`,
+          );
+          if (platformOwner) {
+            throw new LifecycleMutationError(
+              "APPLICATION_OWNER_CANNOT_BE_SUPERADMIN",
+            );
+          }
+
+          await transaction.insert(membershipRoles).values({
+            organizationId: trustedOrganizationId,
+            membershipId: owner.membershipId,
+            roleId: ownerRole.id,
+          });
+          await writeLifecycleAudit(
+            transaction,
+            trustedOrganizationId,
+            actor.userId,
+            metadata,
+            "MEMBERSHIP_ROLE_ASSIGNED",
+            "membership_role",
+            `${owner.membershipId}:${ownerRole.id}`,
+            null,
+            {
+              membershipId: owner.membershipId,
+              roleId: ownerRole.id,
+              roleName: ownerRole.name,
+            },
+          );
+          await recordOutboxEvent(
+            transaction,
+            createDomainEvent({
+              eventType: "USER_ROLE_CHANGED",
+              organizationId: trustedOrganizationId,
+              actorUserId: actor.userId,
+              correlationId: metadata.correlationId,
+              aggregateType: "membership_role",
+              aggregateId: owner.membershipId,
+              payload: {
+                userId: owner.id,
+                membershipId: owner.membershipId,
+                roleId: ownerRole.id,
+                change: "ASSIGNED",
+              },
+              metadata: { requestId: metadata.requestId },
+            }),
+          );
+
+          for (const module of requestedModules) {
+            const [enabled] = await transaction
+              .insert(organizationModules)
+              .values({
+                organizationId: trustedOrganizationId,
+                moduleId: module.id,
+                status: "ENABLED",
+                source: "MANUAL",
+                enabledAt: new Date(),
+              })
+              .returning({ id: organizationModules.id });
+            if (!enabled) {
+              throw new LifecycleMutationError(
+                "APPLICATION_PROVISIONING_INCOMPLETE",
+              );
+            }
+            await writeLifecycleAudit(
+              transaction,
+              trustedOrganizationId,
+              actor.userId,
+              metadata,
+              "MODULE_ENABLED",
+              "module_entitlement",
+              enabled.id,
+              null,
+              { moduleKey: module.key, source: "MANUAL" },
+            );
+            await recordOutboxEvent(
+              transaction,
+              createDomainEvent({
+                eventType: "MODULE_ENABLED",
+                organizationId: trustedOrganizationId,
+                actorUserId: actor.userId,
+                correlationId: metadata.correlationId,
+                aggregateType: "module_entitlement",
+                aggregateId: enabled.id,
+                payload: { moduleKey: module.key, source: "MANUAL" },
+                metadata: { requestId: metadata.requestId },
+              }),
+            );
+          }
+
+          const now = new Date();
+          const [activated] = await transaction
+            .update(organizations)
+            .set({ status: "ACTIVE", updatedAt: now })
+            .where(
+              and(
+                eq(organizations.id, trustedOrganizationId),
+                eq(organizations.status, "APPROVED"),
+              ),
+            )
+            .returning();
+          if (!activated) {
+            throw new LifecycleMutationError("APPLICATION_NOT_APPROVED");
+          }
+          await writeLifecycleAudit(
+            transaction,
+            trustedOrganizationId,
+            actor.userId,
+            metadata,
+            "ORGANIZATION_ACTIVATED",
+            "organization",
+            trustedOrganizationId,
+            { status: organization.status },
+            {
+              status: activated.status,
+              ownerMembershipId: owner.membershipId,
+              enabledModules: application.requestedModules,
+            },
+          );
+          await recordOutboxEvent(
+            transaction,
+            createDomainEvent({
+              eventType: "ORGANIZATION_ACTIVATED",
+              organizationId: trustedOrganizationId,
+              actorUserId: actor.userId,
+              correlationId: metadata.correlationId,
+              aggregateType: "organization",
+              aggregateId: trustedOrganizationId,
+              payload: {
+                previousStatus: organization.status,
+                status: "ACTIVE",
+              },
+              metadata: { requestId: metadata.requestId },
+            }),
+          );
+
+          return {
+            organization: activated,
+            owner: {
+              id: owner.id,
+              membershipId: owner.membershipId,
+              email: owner.email,
+              displayName: owner.displayName,
+              accountStatus: owner.status,
+              membershipStatus: "INVITED" as const,
+            },
+            enabledModules: [...requestedModuleKeys].sort(),
+          };
         },
       );
     },

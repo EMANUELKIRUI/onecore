@@ -286,6 +286,18 @@
               </button>
               <button
                 class="oc-metric-card"
+                data-overview-filter="ACTIVE"
+                type="button"
+              >
+                <span class="oc-metric-card__label">Active</span
+                ><strong id="count-active" class="oc-metric-card__value"
+                  >—</strong
+                ><span class="oc-metric-card__hint"
+                  >Owner setup may still be pending</span
+                >
+              </button>
+              <button
+                class="oc-metric-card"
                 data-overview-filter="REJECTED"
                 type="button"
               >
@@ -304,7 +316,9 @@
               </h2>
               <p class="oc-muted">
                 Approving an application records the review decision. It does
-                not activate an organization or create owner credentials.
+                not activate an organization. Provisioning creates an invited
+                Owner; a Superadmin can issue a one-hour setup email when Resend
+                and mandatory MFA configuration are available.
               </p>
               <button class="oc-button" data-open-requests type="button">
                 Review organization requests
@@ -368,6 +382,13 @@
                 aria-pressed="false"
               >
                 Approved <span id="filter-count-approved"></span>
+              </button>
+              <button
+                type="button"
+                data-status-filter="ACTIVE"
+                aria-pressed="false"
+              >
+                Active <span id="filter-count-active"></span>
               </button>
               <button
                 type="button"

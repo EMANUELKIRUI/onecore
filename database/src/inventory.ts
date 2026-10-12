@@ -26,7 +26,13 @@ const stockReleasePermission = "core.inventory.stock.release";
 
 export type InventoryAdjustmentOutcome =
   | { outcome: "CREATED" | "EXISTING"; movementId: string; stock: StockBalance }
-  | { outcome: "IDEMPOTENCY_CONFLICT" | "CATALOG_ITEM_UNAVAILABLE" | "INSUFFICIENT_STOCK" | "FORBIDDEN" };
+  | {
+      outcome:
+        | "IDEMPOTENCY_CONFLICT"
+        | "CATALOG_ITEM_UNAVAILABLE"
+        | "INSUFFICIENT_STOCK"
+        | "FORBIDDEN";
+    };
 
 export interface StockBalance {
   catalogItemId: string;
@@ -70,7 +76,8 @@ async function recordMovementEvent(
   movement: {
     id: string;
     catalogItemId: string;
-    movementType: "RECEIPT" | "ADJUSTMENT" | "RESERVATION" | "RESERVATION_RELEASE";
+    movementType:
+      "RECEIPT" | "ADJUSTMENT" | "RESERVATION" | "RESERVATION_RELEASE";
   },
 ): Promise<void> {
   await recordOutboxEvent(
@@ -202,11 +209,14 @@ export async function createSaleReservations(
   requestId: string,
 ): Promise<void> {
   const branchId = context.branchId;
-  if (!branchId) throw new Error("Verified branch is required for reservations");
+  if (!branchId)
+    throw new Error("Verified branch is required for reservations");
   await setActorContext(transaction, context);
   const products = lines
     .filter((line) => line.itemType === "PRODUCT")
-    .sort((left, right) => left.catalogItemId.localeCompare(right.catalogItemId));
+    .sort((left, right) =>
+      left.catalogItemId.localeCompare(right.catalogItemId),
+    );
   for (const line of products) {
     const reservationId = randomUUID();
     try {
@@ -261,7 +271,10 @@ export async function releaseSaleReservations(
   }
   await setActorContext(transaction, context);
   const active = await transaction
-    .select({ id: inventoryReservations.id, catalogItemId: inventoryReservations.catalogItemId })
+    .select({
+      id: inventoryReservations.id,
+      catalogItemId: inventoryReservations.catalogItemId,
+    })
     .from(inventoryReservations)
     .where(
       and(
@@ -304,7 +317,8 @@ export async function releaseSaleReservations(
         ),
       )
       .limit(1);
-    if (!movement) throw new Error("Reservation release movement was not recorded");
+    if (!movement)
+      throw new Error("Reservation release movement was not recorded");
     await recordMovementEvent(transaction, context, requestId, movement);
   }
   return active.length;
@@ -329,7 +343,12 @@ export async function adjustBranchStock(
     return { outcome: "FORBIDDEN" };
   }
   const [item] = await transaction
-    .select({ id: catalogItems.id, type: catalogItems.type, status: catalogItems.status, branchId: catalogItems.branchId })
+    .select({
+      id: catalogItems.id,
+      type: catalogItems.type,
+      status: catalogItems.status,
+      branchId: catalogItems.branchId,
+    })
     .from(catalogItems)
     .where(
       and(
@@ -379,7 +398,10 @@ export async function adjustBranchStock(
     delta: input.delta,
   });
   const [existing] = await transaction
-    .select({ id: inventoryMovements.id, requestHash: inventoryMovements.requestHash })
+    .select({
+      id: inventoryMovements.id,
+      requestHash: inventoryMovements.requestHash,
+    })
     .from(inventoryMovements)
     .where(
       and(
@@ -389,7 +411,8 @@ export async function adjustBranchStock(
     )
     .limit(1);
   if (existing) {
-    if (existing.requestHash !== requestHash) return { outcome: "IDEMPOTENCY_CONFLICT" };
+    if (existing.requestHash !== requestHash)
+      return { outcome: "IDEMPOTENCY_CONFLICT" };
     return {
       outcome: "EXISTING",
       movementId: existing.id,
@@ -420,12 +443,18 @@ export async function adjustBranchStock(
       actorUserId: context.userId,
     })
     .onConflictDoNothing({
-      target: [inventoryMovements.organizationId, inventoryMovements.idempotencyKey],
+      target: [
+        inventoryMovements.organizationId,
+        inventoryMovements.idempotencyKey,
+      ],
     })
     .returning({ id: inventoryMovements.id });
   if (!movement) {
     const [raceWinner] = await transaction
-      .select({ id: inventoryMovements.id, requestHash: inventoryMovements.requestHash })
+      .select({
+        id: inventoryMovements.id,
+        requestHash: inventoryMovements.requestHash,
+      })
       .from(inventoryMovements)
       .where(
         and(

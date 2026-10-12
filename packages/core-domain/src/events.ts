@@ -243,7 +243,10 @@ const eventDefinitions = {
     description: "An unpaid sale was cancelled and its reservation released.",
     compatibilityPolicy: "ADDITIVE_ONLY",
     payloadSchema: z
-      .object({ saleId: z.uuid(), releasedLineCount: z.number().int().nonnegative().max(100) })
+      .object({
+        saleId: z.uuid(),
+        releasedLineCount: z.number().int().nonnegative().max(100),
+      })
       .strict(),
   },
   INVENTORY_STOCK_CHANGED: {

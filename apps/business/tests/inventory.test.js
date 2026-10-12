@@ -130,7 +130,10 @@ describe("inventory movement controller", () => {
     const controller = createInventoryMovementController({ storage, request });
 
     expect(
-      await controller.submit({ ...receipt, movementType: "ADJUSTMENT", delta: 0 }, context),
+      await controller.submit(
+        { ...receipt, movementType: "ADJUSTMENT", delta: 0 },
+        context,
+      ),
     ).toMatchObject({ kind: "INVALID_MOVEMENT" });
     const first = controller.submit(receipt, context);
     await expect(controller.submit(receipt, context)).resolves.toMatchObject({

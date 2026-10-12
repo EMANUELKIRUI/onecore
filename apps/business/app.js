@@ -1,4 +1,5 @@
 import { ApiError, createApiClient } from "../../packages/ui/src/api-client.js";
+import { createMfaLoginFlow } from "../../packages/ui/src/mfa-login.js";
 import {
   announce,
   createStatusBadge,
@@ -38,6 +39,12 @@ const appView = document.querySelector("#app-view");
 const authMessage = document.querySelector("#auth-message");
 const appError = document.querySelector("#app-error");
 const loginForm = document.querySelector("#login-form");
+const mfaLogin = createMfaLoginFlow({
+  api,
+  loginForm,
+  message: authMessage,
+  onAuthenticated: refreshSession,
+});
 const passwordForm = document.querySelector("#password-form");
 const organizationSelect = document.querySelector("#organization-select");
 const branchSelect = document.querySelector("#branch-select");
@@ -1618,7 +1625,12 @@ function loadBoundaryView(view) {
     const unavailable = document.createElement("section");
     unavailable.className = "oc-state oc-state--unavailable";
     unavailable.setAttribute("role", "status");
-    appendText(unavailable, "h2", "Unavailable in this workspace", "oc-section-title");
+    appendText(
+      unavailable,
+      "h2",
+      "Unavailable in this workspace",
+      "oc-section-title",
+    );
     appendText(unavailable, "p", metadata.description);
     if (view === "companies") {
       const customersLink = document.createElement("a");
@@ -1706,7 +1718,10 @@ function renderInventoryMovementForm(container, products, session) {
         ? "oc-alert oc-alert--success"
         : "oc-alert oc-alert--error",
     );
-    notice.setAttribute("role", inventoryMovementNotice.success ? "status" : "alert");
+    notice.setAttribute(
+      "role",
+      inventoryMovementNotice.success ? "status" : "alert",
+    );
     inventoryMovementNotice = null;
   }
 
@@ -1786,7 +1801,9 @@ function renderInventoryMovementForm(container, products, session) {
   submit.className = "oc-button";
   submit.type = "submit";
   submit.disabled = products.length === 0;
-  submit.textContent = pendingAttempt ? "Retry same movement" : "Record movement";
+  submit.textContent = pendingAttempt
+    ? "Retry same movement"
+    : "Record movement";
   productField.append(productSelect);
   movementField.append(movementSelect);
   deltaField.append(deltaInput);
@@ -1798,10 +1815,7 @@ function renderInventoryMovementForm(container, products, session) {
   }
   const updateDeltaBounds = () => {
     deltaInput.min = movementSelect.value === "RECEIPT" ? "1" : "-1000000";
-    deltaInput.setAttribute(
-      "aria-describedby",
-      "inventory-movement-guidance",
-    );
+    deltaInput.setAttribute("aria-describedby", "inventory-movement-guidance");
   };
   updateDeltaBounds();
   movementSelect.addEventListener("change", updateDeltaBounds);
@@ -1943,7 +1957,8 @@ async function loadInventoryView(container) {
     const catalog = await authenticatedRequest(
       `/organizations/${encodeURIComponent(organizationId)}/business/catalog?${catalogQuery}`,
     );
-    if (sequence !== inventoryLoadSequence || currentSession !== session) return;
+    if (sequence !== inventoryLoadSequence || currentSession !== session)
+      return;
     const products = (catalog.items ?? []).filter(
       (item) => item.type === "PRODUCT" && item.status === "ACTIVE",
     );
@@ -1958,7 +1973,8 @@ async function loadInventoryView(container) {
       );
       stockItems = stock.items ?? [];
     }
-    if (sequence !== inventoryLoadSequence || currentSession !== session) return;
+    if (sequence !== inventoryLoadSequence || currentSession !== session)
+      return;
     loading.remove();
 
     const stockByProduct = new Map(
@@ -1972,7 +1988,9 @@ async function loadInventoryView(container) {
     summary.append(
       inventoryMetric(
         "Matching products",
-        new Intl.NumberFormat(preferenceLocale).format(catalog.total ?? products.length),
+        new Intl.NumberFormat(preferenceLocale).format(
+          catalog.total ?? products.length,
+        ),
         "Active products matching the search",
       ),
       inventoryMetric(
@@ -2004,7 +2022,15 @@ async function loadInventoryView(container) {
     if (visibleProducts.length > 0) {
       renderSimpleTable(
         container,
-        ["Product", "SKU / reference", "On hand", "Reserved", "Available", "Catalog price", "Status"],
+        [
+          "Product",
+          "SKU / reference",
+          "On hand",
+          "Reserved",
+          "Available",
+          "Catalog price",
+          "Status",
+        ],
         visibleProducts.map((product) => {
           const balance = stockByProduct.get(product.id);
           const status = !balance?.tracked
@@ -2037,9 +2063,14 @@ async function loadInventoryView(container) {
         "oc-state oc-state--empty",
       ).setAttribute("role", "status");
     }
-    renderInventoryPagination(container, catalog.total ?? products.length, products.length);
+    renderInventoryPagination(
+      container,
+      catalog.total ?? products.length,
+      products.length,
+    );
   } catch (requestError) {
-    if (sequence !== inventoryLoadSequence || currentSession !== session) return;
+    if (sequence !== inventoryLoadSequence || currentSession !== session)
+      return;
     loading.remove();
     const alert = appendText(
       container,
@@ -2118,7 +2149,10 @@ function renderSaleDetails(container, sale) {
     ["Sale ID", sale.id],
     ["Status", sale.status],
     ["Branch", sale.branchId],
-    ["Created", formatDateTime(new Date(sale.createdAt), { locale: preferenceLocale })],
+    [
+      "Created",
+      formatDateTime(new Date(sale.createdAt), { locale: preferenceLocale }),
+    ],
     ["Subtotal", `${sale.subtotal} ${sale.currency}`],
     ["Total", `${sale.total} ${sale.currency}`],
   ]);
@@ -2151,14 +2185,29 @@ async function loadSalesView(container) {
   container.replaceChildren();
   const branchId = session?.branch?.branchId;
   if (!organizationId) {
-    appendText(container, "div", "Select an organization to view sales.", "oc-state oc-state--empty").setAttribute("role", "status");
+    appendText(
+      container,
+      "div",
+      "Select an organization to view sales.",
+      "oc-state oc-state--empty",
+    ).setAttribute("role", "status");
     return;
   }
   if (!branchId) {
-    appendText(container, "div", "Choose an active branch in the workspace header to view branch sales.", "oc-state oc-state--empty").setAttribute("role", "status");
+    appendText(
+      container,
+      "div",
+      "Choose an active branch in the workspace header to view branch sales.",
+      "oc-state oc-state--empty",
+    ).setAttribute("role", "status");
     return;
   }
-  const loading = appendText(container, "div", "Loading sales…", "oc-state oc-state--loading");
+  const loading = appendText(
+    container,
+    "div",
+    "Loading sales…",
+    "oc-state oc-state--loading",
+  );
   loading.setAttribute("role", "status");
   try {
     const result = selectedSaleId
@@ -2177,7 +2226,12 @@ async function loadSalesView(container) {
     }
     const sales = Array.isArray(result.items) ? result.items : [];
     if (!sales.length) {
-      appendText(container, "div", "No sales have been created for this branch yet.", "oc-state oc-state--empty").setAttribute("role", "status");
+      appendText(
+        container,
+        "div",
+        "No sales have been created for this branch yet.",
+        "oc-state oc-state--empty",
+      ).setAttribute("role", "status");
     } else {
       renderSalesRows(container, sales);
     }
@@ -2255,7 +2309,12 @@ async function loadBranchesView(content, statusMessage) {
   }
 
   const choices = session?.availableBranches ?? [];
-  appendText(content, "h2", "Your available branch context", "oc-section-title");
+  appendText(
+    content,
+    "h2",
+    "Your available branch context",
+    "oc-section-title",
+  );
   if (choices.length > 0) {
     renderSimpleTable(
       content,
@@ -2338,57 +2397,57 @@ async function loadBranchAdministration(
         "oc-section-title",
       );
       formHeading.id = "branch-create-heading";
-    const grid = document.createElement("div");
-    grid.className = "oc-form-grid";
-    const nameField = createBranchInput(
-      "branch-new-name",
-      "name",
-      branchText("branch.name"),
-      200,
-    );
-    const codeField = createBranchInput(
-      "branch-new-code",
-      "code",
-      branchText("branch.code"),
-      50,
-      "[A-Za-z0-9][A-Za-z0-9_-]*",
-    );
-    grid.append(nameField.wrapper, codeField.wrapper);
-    const error = document.createElement("p");
-    error.className = "oc-alert oc-alert--error";
-    error.setAttribute("role", "alert");
-    error.hidden = true;
-    const create = document.createElement("button");
-    create.type = "submit";
-    create.className = "oc-button";
-    create.textContent = branchText("branch.created");
-    form.append(grid, error, create);
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
+      const grid = document.createElement("div");
+      grid.className = "oc-form-grid";
+      const nameField = createBranchInput(
+        "branch-new-name",
+        "name",
+        branchText("branch.name"),
+        200,
+      );
+      const codeField = createBranchInput(
+        "branch-new-code",
+        "code",
+        branchText("branch.code"),
+        50,
+        "[A-Za-z0-9][A-Za-z0-9_-]*",
+      );
+      grid.append(nameField.wrapper, codeField.wrapper);
+      const error = document.createElement("p");
+      error.className = "oc-alert oc-alert--error";
+      error.setAttribute("role", "alert");
       error.hidden = true;
-      create.disabled = true;
-      try {
-        await authenticatedRequest(
-          `/organizations/${encodeURIComponent(organizationId)}/branches`,
-          {
-            method: "POST",
-            body: {
-              name: nameField.input.value,
-              code: codeField.input.value,
+      const create = document.createElement("button");
+      create.type = "submit";
+      create.className = "oc-button";
+      create.textContent = branchText("branch.created");
+      form.append(grid, error, create);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        error.hidden = true;
+        create.disabled = true;
+        try {
+          await authenticatedRequest(
+            `/organizations/${encodeURIComponent(organizationId)}/branches`,
+            {
+              method: "POST",
+              body: {
+                name: nameField.input.value,
+                code: codeField.input.value,
+              },
             },
-          },
-        );
-        branchOffset = 0;
-        await loadBranchesView(
-          document.querySelector("#boundary-content"),
-          branchText("branch.createdSuccess"),
-        );
-      } catch (requestError) {
-        error.textContent = errorMessage(requestError);
-        error.hidden = false;
-        create.disabled = false;
-      }
-    });
+          );
+          branchOffset = 0;
+          await loadBranchesView(
+            document.querySelector("#boundary-content"),
+            branchText("branch.createdSuccess"),
+          );
+        } catch (requestError) {
+          error.textContent = errorMessage(requestError);
+          error.hidden = false;
+          create.disabled = false;
+        }
+      });
       container.append(form);
     }
 
@@ -2408,82 +2467,84 @@ async function loadBranchAdministration(
         appendText(card, "p", `${branch.code} · ${branch.status}`, "oc-muted");
         if (result.capabilities?.canUpdate === true) {
           const updateForm = document.createElement("form");
-        updateForm.className = "oc-stack";
-        const updateGrid = document.createElement("div");
-        updateGrid.className = "oc-form-grid";
-        const branchName = createBranchInput(
-          `branch-${branch.id}-name`,
-          "name",
-          branchText("branch.name"),
-          200,
-        );
-        branchName.input.value = branch.name;
-        const branchCode = createBranchInput(
-          `branch-${branch.id}-code`,
-          "code",
-          branchText("branch.code"),
-          50,
-          "[A-Za-z0-9][A-Za-z0-9_-]*",
-        );
-        branchCode.input.value = branch.code;
-        const statusWrapper = document.createElement("div");
-        statusWrapper.className = "oc-field";
-        const statusLabel = document.createElement("label");
-        statusLabel.htmlFor = `branch-${branch.id}-status`;
-        statusLabel.textContent = branchText("branch.status");
-        const statusSelect = document.createElement("select");
-        statusSelect.id = statusLabel.htmlFor;
-        statusSelect.name = "status";
-        statusSelect.className = "oc-input";
-        const unchanged = document.createElement("option");
-        unchanged.value = "";
-        unchanged.textContent = `${branchText("branch.status")}: ${branch.status}`;
-        statusSelect.append(unchanged);
-        for (const statusValue of ["ACTIVE", "INACTIVE"]) {
-          const option = document.createElement("option");
-          option.value = statusValue;
-          option.textContent = branchText(`branch.status.${statusValue.toLowerCase()}`);
-          statusSelect.append(option);
-        }
-        updateGrid.append(
-          branchName.wrapper,
-          branchCode.wrapper,
-          statusWrapper,
-        );
-        statusWrapper.append(statusLabel, statusSelect);
-        const updateError = document.createElement("p");
-        updateError.className = "oc-alert oc-alert--error";
-        updateError.setAttribute("role", "alert");
-        updateError.hidden = true;
-        const save = document.createElement("button");
-        save.type = "submit";
-        save.className = "oc-button oc-button--secondary";
-        save.textContent = branchText("branch.save");
-        updateForm.append(updateGrid, updateError, save);
-        updateForm.addEventListener("submit", async (event) => {
-          event.preventDefault();
-          updateError.hidden = true;
-          save.disabled = true;
-          const body = {
-            name: branchName.input.value,
-            code: branchCode.input.value,
-            ...(statusSelect.value ? { status: statusSelect.value } : {}),
-          };
-          try {
-            await authenticatedRequest(
-              `/organizations/${encodeURIComponent(organizationId)}/branches/${encodeURIComponent(branch.id)}`,
-              { method: "PATCH", body },
+          updateForm.className = "oc-stack";
+          const updateGrid = document.createElement("div");
+          updateGrid.className = "oc-form-grid";
+          const branchName = createBranchInput(
+            `branch-${branch.id}-name`,
+            "name",
+            branchText("branch.name"),
+            200,
+          );
+          branchName.input.value = branch.name;
+          const branchCode = createBranchInput(
+            `branch-${branch.id}-code`,
+            "code",
+            branchText("branch.code"),
+            50,
+            "[A-Za-z0-9][A-Za-z0-9_-]*",
+          );
+          branchCode.input.value = branch.code;
+          const statusWrapper = document.createElement("div");
+          statusWrapper.className = "oc-field";
+          const statusLabel = document.createElement("label");
+          statusLabel.htmlFor = `branch-${branch.id}-status`;
+          statusLabel.textContent = branchText("branch.status");
+          const statusSelect = document.createElement("select");
+          statusSelect.id = statusLabel.htmlFor;
+          statusSelect.name = "status";
+          statusSelect.className = "oc-input";
+          const unchanged = document.createElement("option");
+          unchanged.value = "";
+          unchanged.textContent = `${branchText("branch.status")}: ${branch.status}`;
+          statusSelect.append(unchanged);
+          for (const statusValue of ["ACTIVE", "INACTIVE"]) {
+            const option = document.createElement("option");
+            option.value = statusValue;
+            option.textContent = branchText(
+              `branch.status.${statusValue.toLowerCase()}`,
             );
-            await loadBranchesView(
-              document.querySelector("#boundary-content"),
-              branchText("branch.updatedSuccess"),
-            );
-          } catch (requestError) {
-            updateError.textContent = errorMessage(requestError);
-            updateError.hidden = false;
-            save.disabled = false;
+            statusSelect.append(option);
           }
-        });
+          updateGrid.append(
+            branchName.wrapper,
+            branchCode.wrapper,
+            statusWrapper,
+          );
+          statusWrapper.append(statusLabel, statusSelect);
+          const updateError = document.createElement("p");
+          updateError.className = "oc-alert oc-alert--error";
+          updateError.setAttribute("role", "alert");
+          updateError.hidden = true;
+          const save = document.createElement("button");
+          save.type = "submit";
+          save.className = "oc-button oc-button--secondary";
+          save.textContent = branchText("branch.save");
+          updateForm.append(updateGrid, updateError, save);
+          updateForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            updateError.hidden = true;
+            save.disabled = true;
+            const body = {
+              name: branchName.input.value,
+              code: branchCode.input.value,
+              ...(statusSelect.value ? { status: statusSelect.value } : {}),
+            };
+            try {
+              await authenticatedRequest(
+                `/organizations/${encodeURIComponent(organizationId)}/branches/${encodeURIComponent(branch.id)}`,
+                { method: "PATCH", body },
+              );
+              await loadBranchesView(
+                document.querySelector("#boundary-content"),
+                branchText("branch.updatedSuccess"),
+              );
+            } catch (requestError) {
+              updateError.textContent = errorMessage(requestError);
+              updateError.hidden = false;
+              save.disabled = false;
+            }
+          });
           card.append(updateForm);
         }
         container.append(card);
@@ -2783,7 +2844,8 @@ async function loadMemberRolePanel(
           remove.className = "oc-button oc-button--secondary";
           remove.textContent = memberText("member.removeRole");
           remove.addEventListener("click", async () => {
-            if (!window.confirm(memberText("member.confirmRoleRemoval"))) return;
+            if (!window.confirm(memberText("member.confirmRoleRemoval")))
+              return;
             remove.disabled = true;
             try {
               await authenticatedRequest(
@@ -4387,46 +4449,52 @@ async function loadBusinessManagerView(view, options = {}) {
         "oc-state oc-state--empty",
       ).setAttribute("role", "status");
     } else {
-      renderBusinessTable(view, response.items, content, {
-        view: (id) =>
-          void loadBusinessManagerView(view, {
-            mode: "view",
-            id,
-            filters: filterState,
-          }),
-        edit: (id) =>
-          void loadBusinessManagerView(view, {
-            mode: "edit",
-            id,
-            filters: filterState,
-          }),
-        delete: async (item, button) => {
-          if (
-            !window.confirm(
-              `Deactivate ${item.name}? This keeps its record for future references.`,
+      renderBusinessTable(
+        view,
+        response.items,
+        content,
+        {
+          view: (id) =>
+            void loadBusinessManagerView(view, {
+              mode: "view",
+              id,
+              filters: filterState,
+            }),
+          edit: (id) =>
+            void loadBusinessManagerView(view, {
+              mode: "edit",
+              id,
+              filters: filterState,
+            }),
+          delete: async (item, button) => {
+            if (
+              !window.confirm(
+                `Deactivate ${item.name}? This keeps its record for future references.`,
+              )
             )
-          )
-            return;
-          button.disabled = true;
-          try {
-            await authenticatedRequest(
-              `${endpoint}/${encodeURIComponent(item.id)}`,
-              { method: "DELETE" },
-            );
-            announce("Record deactivated.", "success");
-            await loadBusinessManagerView(view, { filters: filterState });
-          } catch (requestError) {
-            appendBusinessError(
-              content,
-              requestError,
-              () =>
-                void loadBusinessManagerView(view, { filters: filterState }),
-            );
-          } finally {
-            button.disabled = false;
-          }
+              return;
+            button.disabled = true;
+            try {
+              await authenticatedRequest(
+                `${endpoint}/${encodeURIComponent(item.id)}`,
+                { method: "DELETE" },
+              );
+              announce("Record deactivated.", "success");
+              await loadBusinessManagerView(view, { filters: filterState });
+            } catch (requestError) {
+              appendBusinessError(
+                content,
+                requestError,
+                () =>
+                  void loadBusinessManagerView(view, { filters: filterState }),
+              );
+            } finally {
+              button.disabled = false;
+            }
+          },
         },
-      }, capabilities);
+        capabilities,
+      );
     }
     const pagination = document.createElement("nav");
     pagination.className = "oc-pagination";
@@ -4796,68 +4864,65 @@ async function updateResourceNavigation(session) {
   document.querySelector("#dashboard-modules-link").hidden = true;
   document.querySelector("#dashboard-notifications-link").hidden = true;
   if (!organizationId) return;
-  await Promise.all(
-    [
-      ...probes.map(async ([id, path]) => {
-        if (!path) return;
-        try {
-          await authenticatedRequest(path);
-          if (
-            sequence === resourceNavigationSequence &&
-            currentSession === session
-          ) {
-            document.querySelector(`#${id}`).hidden = false;
-            if (id === "customers-nav") {
-              document.querySelector("#dashboard-customers-action").hidden =
-                false;
-            } else if (id === "products-nav") {
-              document.querySelector("#dashboard-catalog-action").hidden =
-                false;
-            } else if (id === "notifications-nav") {
-              document.querySelector("#notification-shortcut").hidden = false;
-              document.querySelector("#dashboard-notifications-link").hidden =
-                false;
-            } else if (id === "preferences-nav") {
-              document.querySelector("#language-shortcut").hidden = false;
-            } else if (id === "modules-nav") {
-              document.querySelector("#dashboard-modules-link").hidden = false;
-            }
-          }
-        } catch {
-          if (sequence === resourceNavigationSequence) {
-            document.querySelector(`#${id}`).hidden = true;
+  await Promise.all([
+    ...probes.map(async ([id, path]) => {
+      if (!path) return;
+      try {
+        await authenticatedRequest(path);
+        if (
+          sequence === resourceNavigationSequence &&
+          currentSession === session
+        ) {
+          document.querySelector(`#${id}`).hidden = false;
+          if (id === "customers-nav") {
+            document.querySelector("#dashboard-customers-action").hidden =
+              false;
+          } else if (id === "products-nav") {
+            document.querySelector("#dashboard-catalog-action").hidden = false;
+          } else if (id === "notifications-nav") {
+            document.querySelector("#notification-shortcut").hidden = false;
+            document.querySelector("#dashboard-notifications-link").hidden =
+              false;
+          } else if (id === "preferences-nav") {
+            document.querySelector("#language-shortcut").hidden = false;
+          } else if (id === "modules-nav") {
+            document.querySelector("#dashboard-modules-link").hidden = false;
           }
         }
-      }),
-      (async () => {
-        if (!organizationId || !session.branch?.branchId) return;
-        try {
-          const catalog = await authenticatedRequest(
-            `/organizations/${encodeURIComponent(organizationId)}/business/catalog?type=PRODUCT&status=ACTIVE&limit=1`,
+      } catch {
+        if (sequence === resourceNavigationSequence) {
+          document.querySelector(`#${id}`).hidden = true;
+        }
+      }
+    }),
+    (async () => {
+      if (!organizationId || !session.branch?.branchId) return;
+      try {
+        const catalog = await authenticatedRequest(
+          `/organizations/${encodeURIComponent(organizationId)}/business/catalog?type=PRODUCT&status=ACTIVE&limit=1`,
+        );
+        const firstProduct = catalog.items?.[0];
+        if (firstProduct) {
+          const stockQuery = new URLSearchParams({
+            catalogItemId: firstProduct.id,
+          });
+          await authenticatedRequest(
+            `/organizations/${encodeURIComponent(organizationId)}/inventory/stock?${stockQuery}`,
           );
-          const firstProduct = catalog.items?.[0];
-          if (firstProduct) {
-            const stockQuery = new URLSearchParams({
-              catalogItemId: firstProduct.id,
-            });
-            await authenticatedRequest(
-              `/organizations/${encodeURIComponent(organizationId)}/inventory/stock?${stockQuery}`,
-            );
-          }
-          if (
-            sequence === resourceNavigationSequence &&
-            currentSession === session
-          ) {
-            inventoryNav.hidden = false;
-          }
-        } catch {
-          if (sequence === resourceNavigationSequence) {
-            inventoryNav.hidden = true;
-          }
         }
-      })(),
-    ],
-  );
+        if (
+          sequence === resourceNavigationSequence &&
+          currentSession === session
+        ) {
+          inventoryNav.hidden = false;
+        }
+      } catch {
+        if (sequence === resourceNavigationSequence) {
+          inventoryNav.hidden = true;
+        }
+      }
+    })(),
+  ]);
 }
 
 async function runGlobalSearch(event) {
@@ -5359,17 +5424,28 @@ loginForm.addEventListener("submit", async (event) => {
   if (!loginForm.reportValidity()) return;
   setFormPending(loginForm, true, "Sign in", "Signing in…");
   const values = new FormData(loginForm);
+  const email = String(values.get("email") ?? "").trim();
+  const password = String(values.get("password") ?? "");
   try {
     await api.request("/auth/login", {
       method: "POST",
-      body: {
-        email: values.get("email"),
-        password: values.get("password"),
-      },
+      body: { email, password },
     });
     loginForm.reset();
     await refreshSession();
   } catch (error) {
+    if (error instanceof ApiError && error.code === "MFA_REQUIRED") {
+      try {
+        if (await mfaLogin.begin(error, email, password)) return;
+      } catch (mfaError) {
+        authMessage.textContent =
+          mfaError instanceof ApiError
+            ? mfaError.message
+            : "Authenticator setup could not be completed. Try again.";
+        show(authMessage);
+        return;
+      }
+    }
     authMessage.textContent =
       error instanceof ApiError && error.status === 401
         ? "Email or password is incorrect."

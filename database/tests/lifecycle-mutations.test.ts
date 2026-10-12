@@ -91,12 +91,52 @@ async function createOrganization(
   return organization;
 }
 
+async function createApprovedApplication(
+  lifecycle = createLifecycleMutationService(applicationDatabase),
+  requestedModules: string[] = [],
+) {
+  const ownerEmail = `application-owner-${crypto.randomUUID()}@example.test`;
+  const submitted = await lifecycle.submitOrganizationApplication(
+    {
+      name: "Application Organization",
+      slug: `application-${crypto.randomUUID()}`,
+      industry: "Retail",
+      deploymentType: "SAAS",
+      contactEmail: `contact-${crypto.randomUUID()}@example.test`,
+      contactPhone: "+254700000000",
+      ownerName: "Application Owner",
+      ownerEmail,
+      countryCode: "KE",
+      region: "Nairobi",
+      city: "Nairobi",
+      address: "Central Nairobi",
+      requestedModules,
+    },
+    metadata(),
+  );
+  const actor = await createActor();
+  await lifecycle.transitionOrganizationApplication(
+    submitted.organization.id,
+    "UNDER_REVIEW",
+    actor,
+    metadata(),
+  );
+  await lifecycle.transitionOrganizationApplication(
+    submitted.organization.id,
+    "APPROVED",
+    actor,
+    metadata(),
+  );
+  return { actor, organization: submitted.organization, ownerEmail, lifecycle };
+}
+
 async function lifecycleRecordCounts() {
   const [
     organizations,
     users,
     memberships,
     roles,
+    organizationModules,
     rolePermissions,
     membershipRoles,
     auditLogs,
@@ -108,6 +148,9 @@ async function lifecycleRecordCounts() {
       .select({ id: schema.organizationMemberships.id })
       .from(schema.organizationMemberships),
     database.select({ id: schema.roles.id }).from(schema.roles),
+    database
+      .select({ id: schema.organizationModules.id })
+      .from(schema.organizationModules),
     database
       .select({ roleId: schema.rolePermissions.roleId })
       .from(schema.rolePermissions),
@@ -122,6 +165,7 @@ async function lifecycleRecordCounts() {
     users: users.length,
     memberships: memberships.length,
     roles: roles.length,
+    organizationModules: organizationModules.length,
     rolePermissions: rolePermissions.length,
     membershipRoles: membershipRoles.length,
     auditLogs: auditLogs.length,
@@ -154,6 +198,7 @@ async function withFailingInsert<T>(
     | "roles"
     | "role_permissions"
     | "membership_roles"
+    | "organization_modules"
     | "audit_logs"
     | "outbox_events",
   operation: () => Promise<T>,
@@ -749,6 +794,245 @@ describe("production lifecycle mutations", () => {
     expect(reviewing.status).toBe("UNDER_REVIEW");
     expect(approved.status).toBe("APPROVED");
     expect(stillNoOwner).toEqual([]);
+  });
+
+  it("provisions an approved application with one invited Owner and its requested modules", async () => {
+    const { actor, organization, ownerEmail, lifecycle } =
+      await createApprovedApplication(undefined, ["core.business_manager"]);
+
+    await expect(
+      lifecycle.activateOrganization(organization.id, actor, metadata()),
+    ).rejects.toMatchObject({
+      code: "APPLICATION_PROVISIONING_REQUIRED",
+    });
+
+    const result = await lifecycle.provisionApprovedOrganizationApplication(
+      organization.id,
+      actor,
+      metadata(),
+    );
+    expect(result.organization.status).toBe("ACTIVE");
+    expect(result.owner).toMatchObject({
+      email: ownerEmail,
+      displayName: "Application Owner",
+      accountStatus: "PENDING",
+      membershipStatus: "INVITED",
+    });
+    expect(result.enabledModules).toEqual(["core.business_manager"]);
+
+    const [owner] = await database
+      .select({
+        status: schema.users.status,
+        passwordHash: schema.users.passwordHash,
+        emailVerifiedAt: schema.users.emailVerifiedAt,
+      })
+      .from(schema.users)
+      .where(eq(schema.users.id, result.owner.id));
+    expect(owner).toEqual({
+      status: "PENDING",
+      passwordHash: null,
+      emailVerifiedAt: null,
+    });
+    const membershipRoles = await database
+      .select({ roleName: schema.roles.name })
+      .from(schema.membershipRoles)
+      .innerJoin(
+        schema.roles,
+        and(
+          eq(
+            schema.roles.organizationId,
+            schema.membershipRoles.organizationId,
+          ),
+          eq(schema.roles.id, schema.membershipRoles.roleId),
+        ),
+      )
+      .where(
+        eq(schema.membershipRoles.membershipId, result.owner.membershipId),
+      );
+    expect(membershipRoles).toEqual([{ roleName: "Organization Owner" }]);
+    const entitlements = await database
+      .select({
+        moduleKey: schema.modules.key,
+        status: schema.organizationModules.status,
+        source: schema.organizationModules.source,
+      })
+      .from(schema.organizationModules)
+      .innerJoin(
+        schema.modules,
+        eq(schema.modules.id, schema.organizationModules.moduleId),
+      )
+      .where(eq(schema.organizationModules.organizationId, organization.id));
+    expect(entitlements).toEqual([
+      {
+        moduleKey: "core.business_manager",
+        status: "ENABLED",
+        source: "MANUAL",
+      },
+    ]);
+    await expect(
+      withActiveOrganizationTransaction(
+        applicationDatabase,
+        result.owner.id,
+        organization.id,
+        async (_transaction, membership) => membership,
+      ),
+    ).resolves.toBeUndefined();
+
+    const repeated = await lifecycle.provisionApprovedOrganizationApplication(
+      organization.id,
+      actor,
+      metadata(),
+    );
+    expect(repeated.owner.id).toBe(result.owner.id);
+    expect(repeated.owner.membershipId).toBe(result.owner.membershipId);
+    expect(
+      await database
+        .select({ id: schema.organizationMemberships.id })
+        .from(schema.organizationMemberships)
+        .where(
+          eq(schema.organizationMemberships.organizationId, organization.id),
+        ),
+    ).toHaveLength(1);
+    expect(
+      await database
+        .select({ action: schema.auditLogs.action })
+        .from(schema.auditLogs)
+        .where(
+          and(
+            eq(schema.auditLogs.organizationId, organization.id),
+            eq(schema.auditLogs.action, "ORGANIZATION_ACTIVATED"),
+          ),
+        ),
+    ).toHaveLength(1);
+    const unrelatedActiveOrganization = await createOrganization("ACTIVE");
+    const listedApplications =
+      await lifecycle.listOrganizationApplications(actor);
+    expect(listedApplications.some(({ id }) => id === organization.id)).toBe(
+      true,
+    );
+    expect(
+      listedApplications.some(
+        ({ id }) => id === unrelatedActiveOrganization.id,
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects unapproved applications, non-superadmin actors, and spoofed direct activation", async () => {
+    const lifecycle = createLifecycleMutationService(applicationDatabase);
+    const ownerEmail = `not-approved-${crypto.randomUUID()}@example.test`;
+    const submitted = await lifecycle.submitOrganizationApplication(
+      {
+        name: "Not Approved",
+        slug: `not-approved-${crypto.randomUUID()}`,
+        industry: "Retail",
+        deploymentType: "SAAS",
+        contactEmail: `contact-${crypto.randomUUID()}@example.test`,
+        contactPhone: "+254700000000",
+        ownerName: "Pending Owner",
+        ownerEmail,
+        countryCode: "KE",
+        region: "Nairobi",
+        city: "Nairobi",
+        address: "Central Nairobi",
+        requestedModules: [],
+      },
+      metadata(),
+    );
+    const superadmin = await createActor();
+    await expect(
+      lifecycle.provisionApprovedOrganizationApplication(
+        submitted.organization.id,
+        superadmin,
+        metadata(),
+      ),
+    ).rejects.toMatchObject({ code: "APPLICATION_NOT_APPROVED" });
+    const spoofedActor = {
+      ...(await createActor(false)),
+      platformRoles: ["SUPERADMIN"],
+    };
+    await expect(
+      lifecycle.provisionApprovedOrganizationApplication(
+        submitted.organization.id,
+        spoofedActor,
+        metadata(),
+      ),
+    ).rejects.toMatchObject({ code: "LIFECYCLE_UNAUTHORIZED" });
+    await expect(
+      lifecycle.activateOrganization(
+        submitted.organization.id,
+        superadmin,
+        metadata(),
+      ),
+    ).rejects.toMatchObject({
+      code: "APPLICATION_PROVISIONING_REQUIRED",
+    });
+    expect(
+      await database
+        .select({ id: schema.users.id })
+        .from(schema.users)
+        .where(eq(schema.users.email, ownerEmail)),
+    ).toEqual([]);
+  });
+
+  it("serializes concurrent application provisioning retries", async () => {
+    const { actor, organization, lifecycle } =
+      await createApprovedApplication();
+    const results = await Promise.all([
+      lifecycle.provisionApprovedOrganizationApplication(
+        organization.id,
+        actor,
+        metadata(),
+      ),
+      lifecycle.provisionApprovedOrganizationApplication(
+        organization.id,
+        actor,
+        metadata(),
+      ),
+    ]);
+    expect(results[0]?.owner.id).toBe(results[1]?.owner.id);
+    expect(results[0]?.owner.membershipId).toBe(results[1]?.owner.membershipId);
+    expect(
+      await database
+        .select({ id: schema.organizationMemberships.id })
+        .from(schema.organizationMemberships)
+        .where(
+          eq(schema.organizationMemberships.organizationId, organization.id),
+        ),
+    ).toHaveLength(1);
+    expect(
+      await database
+        .select({ id: schema.roles.id })
+        .from(schema.roles)
+        .where(eq(schema.roles.organizationId, organization.id)),
+    ).toHaveLength(5);
+  });
+
+  it("rolls back all application provisioning writes when entitlement persistence fails", async () => {
+    const { actor, organization, ownerEmail, lifecycle } =
+      await createApprovedApplication(undefined, ["core.business_manager"]);
+    const countsBefore = await lifecycleRecordCounts();
+    await expect(
+      withFailingInsert("organization_modules", () =>
+        lifecycle.provisionApprovedOrganizationApplication(
+          organization.id,
+          actor,
+          metadata(),
+        ),
+      ),
+    ).rejects.toThrow();
+    expect(await lifecycleRecordCounts()).toEqual(countsBefore);
+    expect(
+      await database
+        .select({ status: schema.organizations.status })
+        .from(schema.organizations)
+        .where(eq(schema.organizations.id, organization.id)),
+    ).toEqual([{ status: "APPROVED" }]);
+    expect(
+      await database
+        .select({ id: schema.users.id })
+        .from(schema.users)
+        .where(eq(schema.users.email, ownerEmail)),
+    ).toEqual([]);
   });
 
   it("resolves an existing active identity as bootstrap owner without changing credentials", async () => {

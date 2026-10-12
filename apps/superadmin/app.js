@@ -1,5 +1,6 @@
 import { ApiError, createApiClient } from "../../packages/ui/src/api-client.js";
 import { createStatusBadge } from "../../packages/ui/src/elements.js";
+import { createMfaLoginFlow } from "../../packages/ui/src/mfa-login.js";
 
 const apiBase =
   document
@@ -17,6 +18,12 @@ const requestList = document.querySelector("#request-list");
 const requestDetail = document.querySelector("#request-detail");
 const appMessage = document.querySelector("#app-message");
 const requests = [];
+const mfaLogin = createMfaLoginFlow({
+  api,
+  loginForm,
+  message: loginMessage,
+  onAuthenticated: loadApplications,
+});
 let selectedReference = null;
 let activeFilter = "ALL";
 let requestSequence = 0;
@@ -41,7 +48,7 @@ function showOnly(view) {
 }
 
 function statusVariant(status) {
-  if (status === "APPROVED") return "success";
+  if (status === "APPROVED" || status === "ACTIVE") return "success";
   if (status === "REJECTED") return "danger";
   if (status === "UNDER_REVIEW") return "info";
   return "warning";
@@ -62,6 +69,7 @@ function updateCounts() {
     PENDING: 0,
     UNDER_REVIEW: 0,
     APPROVED: 0,
+    ACTIVE: 0,
     REJECTED: 0,
   };
   for (const application of requests) {
@@ -178,7 +186,25 @@ function showDetail(reference) {
     detailField(information, label, value);
   }
   requestDetail.append(information);
-  if (application.status === "PENDING") {
+  if (application.status === "ACTIVE") {
+    requestDetail.append(
+      element(
+        "p",
+        "Organization is active. The Owner must set a password and complete authenticator setup before accessing the tenant.",
+        "oc-muted",
+      ),
+    );
+    const invite = element(
+      "button",
+      "Send or resend Owner setup email",
+      "oc-button",
+    );
+    invite.type = "button";
+    invite.addEventListener("click", () =>
+      sendOwnerSetupInvitation(application, invite),
+    );
+    requestDetail.append(invite);
+  } else if (application.status === "PENDING") {
     requestDetail.append(
       actionButton("Begin review", "UNDER_REVIEW", application),
     );
@@ -194,6 +220,24 @@ function showDetail(reference) {
       ),
     );
     requestDetail.append(actions);
+  } else if (application.status === "APPROVED") {
+    requestDetail.append(
+      element(
+        "p",
+        "Provisioning activates the organization and creates an invited Owner. A setup email is sent afterward; the Owner must set a password and complete authenticator setup.",
+        "oc-muted",
+      ),
+    );
+    const provision = element(
+      "button",
+      "Activate & provision Owner",
+      "oc-button",
+    );
+    provision.type = "button";
+    provision.addEventListener("click", () =>
+      provisionApplication(application, provision),
+    );
+    requestDetail.append(provision);
   }
 }
 
@@ -237,6 +281,86 @@ async function transitionApplication(application, status, button) {
           : error instanceof ApiError
             ? error.message
             : "The review decision could not be saved. Try again.";
+    setAlert(requestsMessage, message, "error");
+  }
+}
+
+async function provisionApplication(application, button) {
+  if (
+    !window.confirm(
+      `Activate ${application.organization.name}, provision its Owner, and send the Owner a secure setup email?`,
+    )
+  ) {
+    return;
+  }
+  button.disabled = true;
+  setAlert(requestsMessage, "Activating organization and provisioning Owner…");
+  try {
+    await api.request(
+      `/platform/organization-applications/${encodeURIComponent(application.reference)}/provision`,
+      { method: "POST", body: {} },
+    );
+    const invitation = await requestOwnerInvitation(application.reference);
+    await loadApplications();
+    setAlert(requestsMessage, invitation.message);
+  } catch (error) {
+    button.disabled = false;
+    const message =
+      error instanceof ApiError && error.status === 403
+        ? "Your account is not authorized to provision organizations."
+        : error instanceof ApiError && error.status === 409
+          ? "The application is not ready to provision. Refresh and review its current state."
+          : error instanceof ApiError &&
+              error.code === "OWNER_SETUP_NOT_CONFIGURED"
+            ? "The organization and Owner are provisioned, but email or mandatory MFA configuration is unavailable. Configure it, refresh, and send the setup invitation."
+            : error instanceof ApiError &&
+                error.code === "OWNER_SETUP_EMAIL_UNAVAILABLE"
+              ? "The organization and Owner are provisioned, but the provider did not accept the setup email. Refresh and retry with a fresh link."
+              : error instanceof ApiError
+                ? error.message
+                : "Organization provisioning could not be confirmed. Refresh before retrying.";
+    setAlert(requestsMessage, message, "error");
+  }
+}
+
+async function requestOwnerInvitation(reference) {
+  const result = await api.request(
+    `/platform/organization-applications/${encodeURIComponent(reference)}/owner-invitation`,
+    { method: "POST", body: {} },
+  );
+  return {
+    message:
+      result.invitation?.status === "QUEUED"
+        ? "The email provider accepted the Owner setup invitation. Delivery is not confirmed; the Owner must still set a password and complete MFA."
+        : "Owner setup email was not accepted by the provider.",
+  };
+}
+
+async function sendOwnerSetupInvitation(application, button) {
+  if (
+    !window.confirm(
+      "Issue a fresh one-hour Owner setup link? Any previously issued setup link will stop working.",
+    )
+  ) {
+    return;
+  }
+  button.disabled = true;
+  setAlert(requestsMessage, "Issuing and sending a fresh Owner setup email…");
+  try {
+    const result = await requestOwnerInvitation(application.reference);
+    setAlert(requestsMessage, result.message);
+    button.disabled = false;
+  } catch (error) {
+    button.disabled = false;
+    const message =
+      error instanceof ApiError && error.code === "OWNER_SETUP_NOT_CONFIGURED"
+        ? "Email delivery or mandatory MFA configuration is unavailable. No setup email was sent."
+        : error instanceof ApiError &&
+            error.code === "OWNER_SETUP_EMAIL_UNAVAILABLE"
+          ? "The email provider did not accept the setup email. Retry to issue a fresh link."
+          : error instanceof ApiError && error.status === 403
+            ? "This organization is not eligible for Owner setup, or your account is not authorized."
+            : "The invitation result could not be confirmed. Refresh before retrying.";
     setAlert(requestsMessage, message, "error");
   }
 }
@@ -323,16 +447,37 @@ loginForm.addEventListener("submit", async (event) => {
   setAlert(loginMessage, "Signing in…");
   const form = new FormData(loginForm);
   try {
+    const email = String(form.get("email") ?? "").trim();
+    const password = String(form.get("password") ?? "");
     await api.request("/auth/login", {
       method: "POST",
-      body: {
-        email: String(form.get("email") ?? "").trim(),
-        password: String(form.get("password") ?? ""),
-      },
+      body: { email, password },
     });
     loginForm.reset();
     await loadApplications();
   } catch (error) {
+    if (error instanceof ApiError && error.code === "MFA_REQUIRED") {
+      try {
+        if (
+          await mfaLogin.begin(
+            error,
+            String(form.get("email") ?? "").trim(),
+            String(form.get("password") ?? ""),
+          )
+        ) {
+          return;
+        }
+      } catch (mfaError) {
+        setAlert(
+          loginMessage,
+          mfaError instanceof ApiError
+            ? mfaError.message
+            : "Authenticator setup could not be completed. Try again.",
+          "error",
+        );
+        return;
+      }
+    }
     setAlert(
       loginMessage,
       error instanceof ApiError

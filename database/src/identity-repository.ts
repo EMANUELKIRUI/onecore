@@ -3,10 +3,15 @@ import {
   auditLogs,
   branches,
   membershipBranches,
+  membershipRoles,
   organizations,
   organizationMemberships,
+  ownerCredentialSetupTokens,
+  platformUserRoles,
+  roles,
   sessions,
   users,
+  userMfaCredentials,
   type Database,
 } from "./index.js";
 import {
@@ -29,6 +34,14 @@ export interface IdentityUser {
   failedLoginWindowStartedAt: Date | null;
   lockedUntil: Date | null;
   lastLoginAt: Date | null;
+  platformRoles?: string[];
+}
+
+export interface IdentityMfaCredential {
+  secretEncrypted: string;
+  enabledAt: Date | null;
+  enrollmentExpiresAt: Date;
+  lastTotpStep: number | null;
 }
 
 export interface IdentitySession {
@@ -38,6 +51,7 @@ export interface IdentitySession {
   organizationId: string | null;
   branchId: string | null;
   expiresAt: Date;
+  mfaVerifiedAt?: Date | null;
   lastUsedAt: Date;
   revokedAt: Date | null;
   ipAddress: string | null;
@@ -73,6 +87,35 @@ export interface AuthenticationAuditEvent {
 }
 
 export interface IdentityRepository {
+  issueOwnerCredentialSetup(
+    organizationId: string,
+    actorUserId: string,
+    tokenHash: string,
+    expiresAt: Date,
+    event: AuthenticationAuditEvent,
+  ): Promise<Pick<IdentityUser, "id" | "email" | "displayName"> | undefined>;
+  completeOwnerCredentialSetup(
+    tokenHash: string,
+    passwordHash: string,
+    event: AuthenticationAuditEvent,
+  ): Promise<boolean>;
+  userRequiresMfa(userId: string): Promise<boolean>;
+  getMfaCredential(userId: string): Promise<IdentityMfaCredential | null>;
+  storeMfaSecret(
+    userId: string,
+    secretEncrypted: string,
+    enrollmentExpiresAt: Date,
+  ): Promise<void>;
+  completeMfaEnrollment(
+    userId: string,
+    acceptedTotpStep: number,
+    event: AuthenticationAuditEvent,
+  ): Promise<boolean>;
+  consumeMfaTotpStep(
+    userId: string,
+    acceptedTotpStep: number,
+    event: AuthenticationAuditEvent,
+  ): Promise<boolean>;
   findUserByEmail(email: string): Promise<IdentityUser | undefined>;
   findUserById(userId: string): Promise<IdentityUser | undefined>;
   activateExpiredLock(
@@ -99,6 +142,7 @@ export interface IdentityRepository {
     requestId: string,
     now: Date,
     correlationId?: string,
+    mfaVerified?: boolean,
   ): Promise<IdentitySession>;
   findActiveSession(
     secretHash: string,
@@ -187,6 +231,7 @@ function toIdentitySession(
     organizationId: session.organizationId,
     branchId: session.branchId,
     expiresAt: session.expiresAt,
+    mfaVerifiedAt: session.mfaVerifiedAt,
     lastUsedAt: session.lastUsedAt,
     revokedAt: session.revokedAt,
     ipAddress: session.ipAddress,
@@ -216,10 +261,523 @@ function writeAuthenticationEvent(
   });
 }
 
+async function requiresMfaInTransaction(
+  transaction: OrganizationTransaction,
+  userId: string,
+): Promise<boolean> {
+  const [platformRole] = await transaction
+    .select({ role: platformUserRoles.role })
+    .from(platformUserRoles)
+    .where(
+      and(
+        eq(platformUserRoles.userId, userId),
+        eq(platformUserRoles.role, "SUPERADMIN"),
+      ),
+    )
+    .limit(1);
+  if (platformRole) return true;
+
+  const memberships = await transaction
+    .select({
+      membershipId: organizationMemberships.id,
+      organizationId: organizationMemberships.organizationId,
+    })
+    .from(organizationMemberships)
+    .innerJoin(
+      organizations,
+      eq(organizations.id, organizationMemberships.organizationId),
+    )
+    .where(
+      and(
+        eq(organizationMemberships.userId, userId),
+        eq(organizationMemberships.status, "ACTIVE"),
+        eq(organizations.status, "ACTIVE"),
+      ),
+    );
+
+  for (const membership of memberships) {
+    await transaction.execute(
+      sql`select set_config('app.current_organization_id', ${membership.organizationId}, true)`,
+    );
+    const [privilegedRole] = await transaction
+      .select({ roleId: membershipRoles.roleId })
+      .from(membershipRoles)
+      .innerJoin(
+        roles,
+        and(
+          eq(roles.organizationId, membershipRoles.organizationId),
+          eq(roles.id, membershipRoles.roleId),
+        ),
+      )
+      .where(
+        and(
+          eq(membershipRoles.organizationId, membership.organizationId),
+          eq(membershipRoles.membershipId, membership.membershipId),
+          eq(roles.status, "ACTIVE"),
+          eq(roles.isSystem, true),
+          sql`${roles.name} IN ('Organization Owner', 'Organization Admin')`,
+        ),
+      )
+      .limit(1);
+    if (privilegedRole) return true;
+  }
+  return false;
+}
+
+function toIdentityMfaCredential(
+  credential: typeof userMfaCredentials.$inferSelect,
+): IdentityMfaCredential {
+  return {
+    secretEncrypted: credential.secretEncrypted,
+    enabledAt: credential.enabledAt,
+    enrollmentExpiresAt: credential.enrollmentExpiresAt,
+    lastTotpStep: credential.lastTotpStep,
+  };
+}
+
 export function createIdentityRepository(
   database: Database,
 ): IdentityRepository {
   return {
+    async issueOwnerCredentialSetup(
+      organizationId,
+      actorUserId,
+      tokenHash,
+      expiresAt,
+      event,
+    ) {
+      const trustedOrganizationId = z.uuid().parse(organizationId);
+      const trustedActorUserId = z.uuid().parse(actorUserId);
+      const trustedTokenHash = z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .parse(tokenHash);
+      return database.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select set_config('app.current_user_id', ${trustedActorUserId}, true)`,
+        );
+        const [superadmin] = await transaction
+          .select({ userId: platformUserRoles.userId })
+          .from(platformUserRoles)
+          .where(
+            and(
+              eq(platformUserRoles.userId, trustedActorUserId),
+              eq(platformUserRoles.role, "SUPERADMIN"),
+            ),
+          )
+          .limit(1);
+        if (!superadmin) return undefined;
+
+        await transaction.execute(
+          sql`select set_config('app.current_organization_id', ${trustedOrganizationId}, true)`,
+        );
+        const [ownerMembership] = await transaction
+          .select({ userId: organizationMemberships.userId })
+          .from(organizationMemberships)
+          .innerJoin(
+            organizations,
+            eq(organizations.id, organizationMemberships.organizationId),
+          )
+          .innerJoin(
+            membershipRoles,
+            and(
+              eq(
+                membershipRoles.organizationId,
+                organizationMemberships.organizationId,
+              ),
+              eq(membershipRoles.membershipId, organizationMemberships.id),
+            ),
+          )
+          .innerJoin(
+            roles,
+            and(
+              eq(roles.organizationId, membershipRoles.organizationId),
+              eq(roles.id, membershipRoles.roleId),
+            ),
+          )
+          .where(
+            and(
+              eq(organizationMemberships.organizationId, trustedOrganizationId),
+              eq(organizationMemberships.status, "INVITED"),
+              eq(organizations.status, "ACTIVE"),
+              sql`${organizations.profile}->'application' IS NOT NULL`,
+              eq(roles.name, "Organization Owner"),
+              eq(roles.status, "ACTIVE"),
+              eq(roles.isSystem, true),
+            ),
+          )
+          .limit(1);
+        if (!ownerMembership) return undefined;
+
+        await transaction.execute(
+          sql`select set_config('app.current_user_id', ${ownerMembership.userId}, true)`,
+        );
+        const [owner] = await transaction
+          .select({
+            id: users.id,
+            email: users.email,
+            displayName: users.displayName,
+          })
+          .from(users)
+          .where(
+            and(
+              eq(users.id, ownerMembership.userId),
+              eq(users.status, "PENDING"),
+              isNull(users.passwordHash),
+            ),
+          )
+          .for("update")
+          .limit(1);
+        if (!owner) return undefined;
+
+        const [stillInvited] = await transaction
+          .select({ membershipId: organizationMemberships.id })
+          .from(organizationMemberships)
+          .innerJoin(
+            membershipRoles,
+            and(
+              eq(
+                membershipRoles.organizationId,
+                organizationMemberships.organizationId,
+              ),
+              eq(membershipRoles.membershipId, organizationMemberships.id),
+            ),
+          )
+          .innerJoin(
+            roles,
+            and(
+              eq(roles.organizationId, membershipRoles.organizationId),
+              eq(roles.id, membershipRoles.roleId),
+            ),
+          )
+          .where(
+            and(
+              eq(organizationMemberships.organizationId, trustedOrganizationId),
+              eq(organizationMemberships.userId, owner.id),
+              eq(organizationMemberships.status, "INVITED"),
+              eq(roles.name, "Organization Owner"),
+              eq(roles.status, "ACTIVE"),
+              eq(roles.isSystem, true),
+            ),
+          )
+          .limit(1);
+        if (!stillInvited) return undefined;
+
+        await transaction
+          .update(ownerCredentialSetupTokens)
+          .set({ revokedAt: event.occurredAt })
+          .where(
+            and(
+              eq(ownerCredentialSetupTokens.userId, owner.id),
+              eq(
+                ownerCredentialSetupTokens.organizationId,
+                trustedOrganizationId,
+              ),
+              isNull(ownerCredentialSetupTokens.consumedAt),
+              isNull(ownerCredentialSetupTokens.revokedAt),
+            ),
+          );
+        await transaction.insert(ownerCredentialSetupTokens).values({
+          userId: owner.id,
+          organizationId: trustedOrganizationId,
+          tokenHash: trustedTokenHash,
+          createdByUserId: trustedActorUserId,
+          expiresAt,
+        });
+        await writeAuthenticationEvent(transaction, {
+          ...event,
+          action: "AUTH_OWNER_SETUP_INVITATION_ISSUED",
+          actorUserId: trustedActorUserId,
+          organizationId: trustedOrganizationId,
+          resourceId: owner.id,
+          result: "SUCCESS",
+        });
+        return owner;
+      });
+    },
+    async completeOwnerCredentialSetup(tokenHash, passwordHash, event) {
+      const trustedTokenHash = z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .parse(tokenHash);
+      return database.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select set_config('app.owner_setup_token_hash', ${trustedTokenHash}, true)`,
+        );
+        const [candidate] = await transaction
+          .select({
+            userId: ownerCredentialSetupTokens.userId,
+            organizationId: ownerCredentialSetupTokens.organizationId,
+          })
+          .from(ownerCredentialSetupTokens)
+          .where(eq(ownerCredentialSetupTokens.tokenHash, trustedTokenHash))
+          .limit(1);
+        if (!candidate) return false;
+
+        await transaction.execute(
+          sql`select set_config('app.current_user_id', ${candidate.userId}, true)`,
+        );
+        await transaction.execute(
+          sql`select set_config('app.current_organization_id', ${candidate.organizationId}, true)`,
+        );
+        const [owner] = await transaction
+          .select({ id: users.id })
+          .from(users)
+          .where(
+            and(
+              eq(users.id, candidate.userId),
+              eq(users.status, "PENDING"),
+              isNull(users.passwordHash),
+            ),
+          )
+          .for("update")
+          .limit(1);
+        if (!owner) return false;
+
+        const [token] = await transaction
+          .select({ id: ownerCredentialSetupTokens.id })
+          .from(ownerCredentialSetupTokens)
+          .where(
+            and(
+              eq(ownerCredentialSetupTokens.tokenHash, trustedTokenHash),
+              eq(ownerCredentialSetupTokens.userId, candidate.userId),
+              eq(
+                ownerCredentialSetupTokens.organizationId,
+                candidate.organizationId,
+              ),
+              gt(ownerCredentialSetupTokens.expiresAt, event.occurredAt),
+              isNull(ownerCredentialSetupTokens.consumedAt),
+              isNull(ownerCredentialSetupTokens.revokedAt),
+            ),
+          )
+          .for("update")
+          .limit(1);
+        if (!token) return false;
+
+        const [ownerMembership] = await transaction
+          .select({ membershipId: organizationMemberships.id })
+          .from(organizationMemberships)
+          .innerJoin(
+            organizations,
+            eq(organizations.id, organizationMemberships.organizationId),
+          )
+          .innerJoin(
+            membershipRoles,
+            and(
+              eq(
+                membershipRoles.organizationId,
+                organizationMemberships.organizationId,
+              ),
+              eq(membershipRoles.membershipId, organizationMemberships.id),
+            ),
+          )
+          .innerJoin(
+            roles,
+            and(
+              eq(roles.organizationId, membershipRoles.organizationId),
+              eq(roles.id, membershipRoles.roleId),
+            ),
+          )
+          .where(
+            and(
+              eq(
+                organizationMemberships.organizationId,
+                candidate.organizationId,
+              ),
+              eq(organizationMemberships.userId, candidate.userId),
+              eq(organizationMemberships.status, "INVITED"),
+              eq(organizations.status, "ACTIVE"),
+              sql`${organizations.profile}->'application' IS NOT NULL`,
+              eq(roles.name, "Organization Owner"),
+              eq(roles.status, "ACTIVE"),
+              eq(roles.isSystem, true),
+            ),
+          )
+          .for("update", { of: organizationMemberships })
+          .limit(1);
+        if (!ownerMembership) return false;
+
+        const [consumed] = await transaction
+          .update(ownerCredentialSetupTokens)
+          .set({ consumedAt: event.occurredAt })
+          .where(
+            and(
+              eq(ownerCredentialSetupTokens.id, token.id),
+              isNull(ownerCredentialSetupTokens.consumedAt),
+              isNull(ownerCredentialSetupTokens.revokedAt),
+              gt(ownerCredentialSetupTokens.expiresAt, event.occurredAt),
+            ),
+          )
+          .returning({ id: ownerCredentialSetupTokens.id });
+        if (!consumed) return false;
+
+        const [activatedOwner] = await transaction
+          .update(users)
+          .set({
+            passwordHash,
+            status: "ACTIVE",
+            emailVerifiedAt: event.occurredAt,
+            failedLoginAttempts: 0,
+            failedLoginWindowStartedAt: null,
+            lockedUntil: null,
+            updatedAt: event.occurredAt,
+          })
+          .where(
+            and(
+              eq(users.id, candidate.userId),
+              eq(users.status, "PENDING"),
+              isNull(users.passwordHash),
+            ),
+          )
+          .returning({ id: users.id });
+        if (!activatedOwner) return false;
+
+        await transaction
+          .update(organizationMemberships)
+          .set({ status: "ACTIVE", updatedAt: event.occurredAt })
+          .where(
+            and(
+              eq(organizationMemberships.id, ownerMembership.membershipId),
+              eq(
+                organizationMemberships.organizationId,
+                candidate.organizationId,
+              ),
+              eq(organizationMemberships.userId, candidate.userId),
+              eq(organizationMemberships.status, "INVITED"),
+            ),
+          );
+        await transaction
+          .update(ownerCredentialSetupTokens)
+          .set({ revokedAt: event.occurredAt })
+          .where(
+            and(
+              eq(ownerCredentialSetupTokens.userId, candidate.userId),
+              isNull(ownerCredentialSetupTokens.consumedAt),
+              isNull(ownerCredentialSetupTokens.revokedAt),
+            ),
+          );
+        await transaction
+          .update(sessions)
+          .set({ revokedAt: event.occurredAt })
+          .where(
+            and(
+              eq(sessions.userId, candidate.userId),
+              isNull(sessions.revokedAt),
+            ),
+          );
+        await writeAuthenticationEvent(transaction, {
+          ...event,
+          action: "AUTH_OWNER_CREDENTIAL_SETUP_COMPLETED",
+          actorUserId: candidate.userId,
+          organizationId: candidate.organizationId,
+          resourceId: candidate.userId,
+          result: "SUCCESS",
+        });
+        return true;
+      });
+    },
+    async userRequiresMfa(userId) {
+      return withAuthenticatedUserTransaction(database, userId, (transaction) =>
+        requiresMfaInTransaction(transaction, userId),
+      );
+    },
+    async getMfaCredential(userId) {
+      return withAuthenticatedUserTransaction(
+        database,
+        userId,
+        async (transaction) => {
+          const [credential] = await transaction
+            .select()
+            .from(userMfaCredentials)
+            .where(eq(userMfaCredentials.userId, userId))
+            .limit(1);
+          return credential ? toIdentityMfaCredential(credential) : null;
+        },
+      );
+    },
+    async storeMfaSecret(userId, secretEncrypted, enrollmentExpiresAt) {
+      await withAuthenticatedUserTransaction(
+        database,
+        userId,
+        async (transaction) => {
+          const [credential] = await transaction
+            .insert(userMfaCredentials)
+            .values({
+              userId,
+              secretEncrypted,
+              enrollmentExpiresAt,
+              enabledAt: null,
+              lastTotpStep: null,
+            })
+            .onConflictDoUpdate({
+              target: userMfaCredentials.userId,
+              set: {
+                secretEncrypted,
+                enrollmentExpiresAt,
+                lastTotpStep: null,
+                updatedAt: new Date(),
+              },
+              setWhere: isNull(userMfaCredentials.enabledAt),
+            })
+            .returning({ userId: userMfaCredentials.userId });
+          if (!credential) {
+            throw new Error("MFA is already enabled for this user");
+          }
+        },
+      );
+    },
+    async completeMfaEnrollment(userId, acceptedTotpStep, event) {
+      return withAuthenticatedUserTransaction(
+        database,
+        userId,
+        async (transaction) => {
+          const [credential] = await transaction
+            .update(userMfaCredentials)
+            .set({
+              enabledAt: event.occurredAt,
+              enrollmentExpiresAt: event.occurredAt,
+              lastTotpStep: acceptedTotpStep,
+              updatedAt: event.occurredAt,
+            })
+            .where(
+              and(
+                eq(userMfaCredentials.userId, userId),
+                isNull(userMfaCredentials.enabledAt),
+                gt(userMfaCredentials.enrollmentExpiresAt, event.occurredAt),
+              ),
+            )
+            .returning({ userId: userMfaCredentials.userId });
+          if (!credential) return false;
+          await writeAuthenticationEvent(transaction, event);
+          return true;
+        },
+      );
+    },
+    async consumeMfaTotpStep(userId, acceptedTotpStep, event) {
+      return withAuthenticatedUserTransaction(
+        database,
+        userId,
+        async (transaction) => {
+          const [credential] = await transaction
+            .update(userMfaCredentials)
+            .set({
+              lastTotpStep: acceptedTotpStep,
+              updatedAt: event.occurredAt,
+            })
+            .where(
+              and(
+                eq(userMfaCredentials.userId, userId),
+                sql`${userMfaCredentials.enabledAt} IS NOT NULL`,
+                sql`(${userMfaCredentials.lastTotpStep} IS NULL OR ${userMfaCredentials.lastTotpStep} < ${acceptedTotpStep})`,
+              ),
+            )
+            .returning({ userId: userMfaCredentials.userId });
+          if (!credential) return false;
+          await writeAuthenticationEvent(transaction, event);
+          return true;
+        },
+      );
+    },
     async findUserByEmail(email) {
       const user = await withLoginTransaction(database, email, (transaction) =>
         transaction
@@ -375,11 +933,25 @@ export function createIdentityRepository(
       );
       return failedLogin;
     },
-    async createSession(session, requestId, now, correlationId) {
+    async createSession(
+      session,
+      requestId,
+      now,
+      correlationId,
+      mfaVerified = false,
+    ) {
       return withAuthenticatedUserTransaction(
         database,
         session.userId,
         async (transaction) => {
+          if (
+            !mfaVerified &&
+            (await requiresMfaInTransaction(transaction, session.userId))
+          ) {
+            throw new Error(
+              "Mandatory MFA was not completed before session creation",
+            );
+          }
           const [updatedUser] = await transaction
             .update(users)
             .set({
@@ -402,6 +974,7 @@ export function createIdentityRepository(
               organizationId: session.organizationId,
               branchId: session.branchId,
               expiresAt: session.expiresAt,
+              mfaVerifiedAt: mfaVerified ? now : null,
               ipAddress: session.ipAddress,
               userAgent: session.userAgent,
               createdAt: now,
@@ -454,6 +1027,12 @@ export function createIdentityRepository(
           await transaction.execute(
             sql`select set_config('app.current_user_id', ${session.userId}, true)`,
           );
+          if (
+            (await requiresMfaInTransaction(transaction, session.userId)) &&
+            !session.mfaVerifiedAt
+          ) {
+            return undefined;
+          }
           const [user] = await transaction
             .select()
             .from(users)

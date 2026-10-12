@@ -68,9 +68,12 @@ function captureForm() {
     if (name === "requestedModules") continue;
     if (name in state.values) state.values[name] = String(value).trim();
   }
-  state.values.requestedModules = [
-    ...form.querySelectorAll('input[name="requestedModules"]:checked'),
-  ].map((input) => input.value);
+  const moduleInputs = form.querySelectorAll('input[name="requestedModules"]');
+  if (moduleInputs.length > 0) {
+    state.values.requestedModules = [
+      ...form.querySelectorAll('input[name="requestedModules"]:checked'),
+    ].map((input) => input.value);
+  }
 }
 
 function showMessage(text, kind = "error") {

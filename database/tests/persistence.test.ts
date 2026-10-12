@@ -1497,6 +1497,411 @@ describe("PostgreSQL persistence foundation", () => {
     ).rejects.toThrow();
   });
 
+  it("isolates MFA credentials by user and enforces authoritative privilege roles", async () => {
+    const organization = await createOrganization("MFA Policy Organization");
+    const users = await database
+      .insert(schema.users)
+      .values([
+        {
+          email: `mfa-owner-${crypto.randomUUID()}@example.test`,
+          displayName: "MFA Owner",
+        },
+        {
+          email: `mfa-superadmin-${crypto.randomUUID()}@example.test`,
+          displayName: "MFA Superadmin",
+        },
+        {
+          email: `mfa-ordinary-${crypto.randomUUID()}@example.test`,
+          displayName: "MFA Ordinary",
+        },
+      ])
+      .returning();
+    const [owner, superadmin, ordinary] = users;
+    if (!owner || !superadmin || !ordinary) {
+      throw new Error("MFA policy users were not created");
+    }
+    const [membership] = await database
+      .insert(schema.organizationMemberships)
+      .values({
+        organizationId: organization.id,
+        userId: owner.id,
+        status: "ACTIVE",
+      })
+      .returning();
+    if (!membership) throw new Error("MFA owner membership was not created");
+    const [role] = await database
+      .insert(schema.roles)
+      .values({
+        organizationId: organization.id,
+        name: "Organization Owner",
+        isSystem: true,
+      })
+      .returning();
+    if (!role) throw new Error("MFA owner role was not created");
+    await database.insert(schema.membershipRoles).values({
+      organizationId: organization.id,
+      membershipId: membership.id,
+      roleId: role.id,
+    });
+    await database.insert(schema.platformUserRoles).values({
+      userId: superadmin.id,
+      role: "SUPERADMIN",
+    });
+
+    const identity = createIdentityRepository(database as unknown as Database);
+    expect(await identity.userRequiresMfa(owner.id)).toBe(true);
+    expect(await identity.userRequiresMfa(superadmin.id)).toBe(true);
+    expect(await identity.userRequiresMfa(ordinary.id)).toBe(false);
+
+    const session = {
+      secretHash: createHash("sha256")
+        .update(crypto.randomUUID())
+        .digest("hex"),
+      userId: superadmin.id,
+      organizationId: null,
+      branchId: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      ipAddress: "127.0.0.1",
+      userAgent: "mfa-persistence-test",
+    };
+    await expect(
+      identity.createSession(session, crypto.randomUUID(), new Date()),
+    ).rejects.toThrow("Mandatory MFA was not completed");
+
+    const verifiedSession = await identity.createSession(
+      {
+        ...session,
+        secretHash: createHash("sha256")
+          .update(crypto.randomUUID())
+          .digest("hex"),
+      },
+      crypto.randomUUID(),
+      new Date(),
+      undefined,
+      true,
+    );
+    expect(verifiedSession.mfaVerifiedAt).toBeInstanceOf(Date);
+
+    const ordinarySession = await identity.createSession(
+      {
+        secretHash: createHash("sha256")
+          .update(crypto.randomUUID())
+          .digest("hex"),
+        userId: ordinary.id,
+        organizationId: null,
+        branchId: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        ipAddress: "127.0.0.1",
+        userAgent: "mfa-persistence-test",
+      },
+      crypto.randomUUID(),
+      new Date(),
+    );
+    await database.insert(schema.platformUserRoles).values({
+      userId: ordinary.id,
+      role: "SUPERADMIN",
+    });
+    expect(
+      await identity.findActiveSession(ordinarySession.secretHash, new Date()),
+    ).toBeUndefined();
+
+    const now = new Date();
+    const encryptedSecret = "authenticated-encryption-ciphertext";
+    await identity.storeMfaSecret(
+      superadmin.id,
+      encryptedSecret,
+      new Date(now.getTime() + 10 * 60_000),
+    );
+    expect(await identity.getMfaCredential(superadmin.id)).toMatchObject({
+      secretEncrypted: encryptedSecret,
+      enabledAt: null,
+    });
+    const enrollment = {
+      action: "AUTH_MFA_ENROLLED",
+      actorUserId: superadmin.id,
+      result: "SUCCESS" as const,
+      requestId: crypto.randomUUID(),
+      ipAddress: "127.0.0.1",
+      userAgent: "mfa-persistence-test",
+      occurredAt: now,
+    };
+    expect(
+      await identity.completeMfaEnrollment(
+        superadmin.id,
+        Math.floor(now.getTime() / 30_000) - 1,
+        enrollment,
+      ),
+    ).toBe(true);
+
+    const acceptedStep = Math.floor(Date.now() / 30_000);
+    const consumedEvent = {
+      ...enrollment,
+      action: "AUTH_MFA_CHALLENGE_SUCCESS",
+      requestId: crypto.randomUUID(),
+      occurredAt: new Date(),
+    };
+    const consumed = await Promise.all([
+      identity.consumeMfaTotpStep(superadmin.id, acceptedStep, consumedEvent),
+      identity.consumeMfaTotpStep(superadmin.id, acceptedStep, {
+        ...consumedEvent,
+        requestId: crypto.randomUUID(),
+      }),
+    ]);
+    expect(consumed.filter(Boolean)).toHaveLength(1);
+
+    const [otherUserCredential] = await database
+      .insert(schema.userMfaCredentials)
+      .values({
+        userId: owner.id,
+        secretEncrypted: "another-users-encrypted-secret",
+        enrollmentExpiresAt: new Date(Date.now() + 10 * 60_000),
+      })
+      .returning();
+    if (!otherUserCredential) {
+      throw new Error("Second user MFA credential was not created");
+    }
+    const invisibleInTenantContext = await client.transaction(
+      async (transaction) => {
+        await transaction.exec("SET LOCAL ROLE onecore_app");
+        await transaction.query(
+          "SELECT set_config('app.current_organization_id', $1, true)",
+          [organization.id],
+        );
+        return transaction.query<{ user_id: string }>(
+          "SELECT user_id FROM user_mfa_credentials ORDER BY user_id",
+        );
+      },
+    );
+    expect(invisibleInTenantContext.rows).toEqual([]);
+
+    const ownCredentialOnly = await client.transaction(async (transaction) => {
+      await transaction.exec("SET LOCAL ROLE onecore_app");
+      await transaction.query(
+        "SELECT set_config('app.current_user_id', $1, true)",
+        [superadmin.id],
+      );
+      await transaction.query(
+        "SELECT set_config('app.current_organization_id', $1, true)",
+        [organization.id],
+      );
+      return transaction.query<{ user_id: string }>(
+        "SELECT user_id FROM user_mfa_credentials ORDER BY user_id",
+      );
+    });
+    expect(ownCredentialOnly.rows).toEqual([{ user_id: superadmin.id }]);
+  });
+
+  it("issues organization-bound Owner setup tokens and consumes them once under concurrency", async () => {
+    const [admin, owner, expiredOwner] = await database
+      .insert(schema.users)
+      .values([
+        {
+          email: `setup-admin-${crypto.randomUUID()}@example.test`,
+          displayName: "Setup Superadmin",
+        },
+        {
+          email: `setup-owner-${crypto.randomUUID()}@example.test`,
+          displayName: "Setup Owner",
+          status: "PENDING",
+        },
+        {
+          email: `setup-expired-${crypto.randomUUID()}@example.test`,
+          displayName: "Expired Setup Owner",
+          status: "PENDING",
+        },
+      ])
+      .returning();
+    if (!admin || !owner || !expiredOwner) {
+      throw new Error("Credential setup identities were not created");
+    }
+    await database.insert(schema.platformUserRoles).values({
+      userId: admin.id,
+      role: "SUPERADMIN",
+    });
+
+    async function addInvitedOwner(name: string, userId: string) {
+      const organization = await createOrganization(name);
+      await database
+        .update(schema.organizations)
+        .set({ profile: { application: { ownerEmail: userId } } })
+        .where(eq(schema.organizations.id, organization.id));
+      const [membership] = await database
+        .insert(schema.organizationMemberships)
+        .values({
+          organizationId: organization.id,
+          userId,
+          status: "INVITED",
+        })
+        .returning();
+      const [role] = await database
+        .insert(schema.roles)
+        .values({
+          organizationId: organization.id,
+          name: "Organization Owner",
+          isSystem: true,
+        })
+        .returning();
+      if (!membership || !role) {
+        throw new Error("Credential setup Owner membership was not created");
+      }
+      await database.insert(schema.membershipRoles).values({
+        organizationId: organization.id,
+        membershipId: membership.id,
+        roleId: role.id,
+      });
+      return { organization, membership };
+    }
+
+    const primary = await addInvitedOwner("Setup Token Organization", owner.id);
+    const expired = await addInvitedOwner(
+      "Expired Setup Token Organization",
+      expiredOwner.id,
+    );
+    const identity = createIdentityRepository(database as unknown as Database);
+    const occurredAt = new Date();
+    const auditEvent = {
+      action: "AUTH_OWNER_SETUP_INVITATION_ISSUED",
+      actorUserId: admin.id,
+      organizationId: primary.organization.id,
+      result: "SUCCESS" as const,
+      requestId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      ipAddress: "127.0.0.1",
+      userAgent: "credential-setup-persistence-test",
+      occurredAt,
+    };
+    const digest = (value: string) =>
+      createHash("sha256").update(value).digest("hex");
+    const oldTokenHash = digest(crypto.randomUUID());
+    const activeTokenHash = digest(crypto.randomUUID());
+    const ownerInput = {
+      organizationId: primary.organization.id,
+      actorUserId: admin.id,
+      expiresAt: new Date(occurredAt.getTime() + 60_000),
+      event: auditEvent,
+    };
+    expect(
+      await identity.issueOwnerCredentialSetup(
+        ownerInput.organizationId,
+        ownerInput.actorUserId,
+        oldTokenHash,
+        ownerInput.expiresAt,
+        ownerInput.event,
+      ),
+    ).toMatchObject({ id: owner.id });
+    expect(
+      await identity.issueOwnerCredentialSetup(
+        primary.organization.id,
+        admin.id,
+        activeTokenHash,
+        new Date(occurredAt.getTime() + 60_000),
+        auditEvent,
+      ),
+    ).toMatchObject({ id: owner.id });
+    const storedTokens = await database
+      .select({
+        tokenHash: schema.ownerCredentialSetupTokens.tokenHash,
+        consumedAt: schema.ownerCredentialSetupTokens.consumedAt,
+        revokedAt: schema.ownerCredentialSetupTokens.revokedAt,
+      })
+      .from(schema.ownerCredentialSetupTokens)
+      .where(eq(schema.ownerCredentialSetupTokens.userId, owner.id));
+    expect(storedTokens).toHaveLength(2);
+    expect(storedTokens.map((token) => token.tokenHash)).toContain(
+      oldTokenHash,
+    );
+    expect(storedTokens.map((token) => token.tokenHash)).toContain(
+      activeTokenHash,
+    );
+    expect(
+      storedTokens.find((token) => token.tokenHash === oldTokenHash)?.revokedAt,
+    ).toBeInstanceOf(Date);
+
+    const staleToken = await identity.completeOwnerCredentialSetup(
+      oldTokenHash,
+      "argon2id-stale-test-hash",
+      {
+        ...auditEvent,
+        action: "AUTH_OWNER_CREDENTIAL_SETUP_COMPLETED",
+        occurredAt: new Date(),
+      },
+    );
+    expect(staleToken).toBe(false);
+    const concurrentResults = await Promise.all([
+      identity.completeOwnerCredentialSetup(
+        activeTokenHash,
+        "argon2id-active-test-hash",
+        {
+          ...auditEvent,
+          action: "AUTH_OWNER_CREDENTIAL_SETUP_COMPLETED",
+          occurredAt: new Date(),
+        },
+      ),
+      identity.completeOwnerCredentialSetup(
+        activeTokenHash,
+        "argon2id-racing-test-hash",
+        {
+          ...auditEvent,
+          action: "AUTH_OWNER_CREDENTIAL_SETUP_COMPLETED",
+          occurredAt: new Date(),
+        },
+      ),
+    ]);
+    expect(concurrentResults.filter(Boolean)).toHaveLength(1);
+    const activatedUser = await database
+      .select({
+        status: schema.users.status,
+        passwordHash: schema.users.passwordHash,
+        emailVerifiedAt: schema.users.emailVerifiedAt,
+      })
+      .from(schema.users)
+      .where(eq(schema.users.id, owner.id))
+      .limit(1);
+    expect(activatedUser[0]?.status).toBe("ACTIVE");
+    expect(activatedUser[0]?.passwordHash).toMatch(/^argon2id-/);
+    expect(activatedUser[0]?.emailVerifiedAt).toBeInstanceOf(Date);
+    const activeMembership = await database
+      .select({ status: schema.organizationMemberships.status })
+      .from(schema.organizationMemberships)
+      .where(eq(schema.organizationMemberships.id, primary.membership.id));
+    expect(activeMembership).toEqual([{ status: "ACTIVE" }]);
+
+    const expiredHash = digest(crypto.randomUUID());
+    const expiredIssuedAt = new Date();
+    expect(
+      await identity.issueOwnerCredentialSetup(
+        expired.organization.id,
+        admin.id,
+        expiredHash,
+        new Date(expiredIssuedAt.getTime() + 1_000),
+        { ...auditEvent, organizationId: expired.organization.id },
+      ),
+    ).toMatchObject({ id: expiredOwner.id });
+    expect(
+      await identity.completeOwnerCredentialSetup(
+        expiredHash,
+        "argon2id-expired-test-hash",
+        {
+          ...auditEvent,
+          action: "AUTH_OWNER_CREDENTIAL_SETUP_COMPLETED",
+          organizationId: expired.organization.id,
+          occurredAt: new Date(expiredIssuedAt.getTime() + 2_000),
+        },
+      ),
+    ).toBe(false);
+    const unchangedExpiredOwner = await database
+      .select({
+        status: schema.users.status,
+        passwordHash: schema.users.passwordHash,
+      })
+      .from(schema.users)
+      .where(eq(schema.users.id, expiredOwner.id))
+      .limit(1);
+    expect(unchangedExpiredOwner).toEqual([
+      { status: "PENDING", passwordHash: null },
+    ]);
+  });
+
   it("changes a credential and revokes every session atomically", async () => {
     const [user] = await database
       .insert(schema.users)

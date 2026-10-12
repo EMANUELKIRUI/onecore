@@ -59,14 +59,25 @@ describe("platform domain values", () => {
     expect(() => saleCreateRequestSchema.parse({ lines: [] })).toThrow();
     expect(() =>
       saleCreateRequestSchema.parse({
-        lines: [{ catalogItemId: "00000000-0000-4000-8000-000000000001", quantity: 0 }],
+        lines: [
+          {
+            catalogItemId: "00000000-0000-4000-8000-000000000001",
+            quantity: 0,
+          },
+        ],
       }),
     ).toThrow();
     expect(() =>
       saleCreateRequestSchema.parse({
         lines: [
-          { catalogItemId: "00000000-0000-4000-8000-000000000001", quantity: 1 },
-          { catalogItemId: "00000000-0000-4000-8000-000000000001", quantity: 2 },
+          {
+            catalogItemId: "00000000-0000-4000-8000-000000000001",
+            quantity: 1,
+          },
+          {
+            catalogItemId: "00000000-0000-4000-8000-000000000001",
+            quantity: 2,
+          },
         ],
       }),
     ).toThrow();
@@ -87,13 +98,15 @@ describe("platform domain values", () => {
       subtotal: "4.300021",
       total: "4.300021",
     });
-    expect(() => calculateSaleTotals([{ unitPrice: "1e2", quantity: 1 }])).toThrow();
-    expect(() => calculateSaleTotals([{ unitPrice: "1", quantity: 0 }])).toThrow(
-      "Sale quantities must be positive whole numbers.",
-    );
-    expect(() => calculateSaleTotals([{ unitPrice: "1", quantity: 1.5 }])).toThrow(
-      "Sale quantities must be positive whole numbers.",
-    );
+    expect(() =>
+      calculateSaleTotals([{ unitPrice: "1e2", quantity: 1 }]),
+    ).toThrow();
+    expect(() =>
+      calculateSaleTotals([{ unitPrice: "1", quantity: 0 }]),
+    ).toThrow("Sale quantities must be positive whole numbers.");
+    expect(() =>
+      calculateSaleTotals([{ unitPrice: "1", quantity: 1.5 }]),
+    ).toThrow("Sale quantities must be positive whole numbers.");
   });
 
   it("validates explicit stock movements and bounded branch stock queries", () => {
@@ -132,7 +145,9 @@ describe("platform domain values", () => {
     expect(
       inventoryStockQuerySchema.parse({ catalogItemId: [itemId, itemId] }),
     ).toEqual({ catalogItemIds: [itemId] });
-    expect(() => inventoryStockQuerySchema.parse({ catalogItemId: [] })).toThrow();
+    expect(() =>
+      inventoryStockQuerySchema.parse({ catalogItemId: [] }),
+    ).toThrow();
   });
 
   it("bounds sale line and subtotal amounts to PostgreSQL numeric(26,6)", () => {
@@ -140,10 +155,12 @@ describe("platform domain values", () => {
     const maximumLineAmount =
       salePriceToScaledAmount(maximumPrice) * 1_000_000n;
     expect(maximumLineAmount).toBeLessThan(MAX_SALE_AMOUNT_SCALED);
-    expect(() => assertSaleAmountRepresentable(MAX_SALE_AMOUNT_SCALED)).not.toThrow();
-    expect(() => assertSaleAmountRepresentable(MAX_SALE_AMOUNT_SCALED + 1n)).toThrow(
-      "Sale amount must fit PostgreSQL numeric(26,6) precision.",
-    );
+    expect(() =>
+      assertSaleAmountRepresentable(MAX_SALE_AMOUNT_SCALED),
+    ).not.toThrow();
+    expect(() =>
+      assertSaleAmountRepresentable(MAX_SALE_AMOUNT_SCALED + 1n),
+    ).toThrow("Sale amount must fit PostgreSQL numeric(26,6) precision.");
 
     const nearMaximum = calculateSaleTotals(
       Array.from({ length: 100 }, () => ({

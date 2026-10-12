@@ -21,6 +21,17 @@ import type {
 } from "fastify";
 import Fastify from "fastify";
 import { z } from "zod";
+import {
+  buildTotpProvisioningUri,
+  decryptSecret,
+  encryptSecret,
+  generateRandomToken,
+  generateTotpSecret,
+  hashVerifier,
+  sendTransactionalEmail,
+  type TransactionalEmailSender,
+  verifyTotpStep,
+} from "./identity-security.js";
 
 const SESSION_COOKIE = "onecore_session";
 const FAILURE_WINDOW_MS = 15 * 60_000;
@@ -55,8 +66,40 @@ const passwordChangeSchema = z
   .refine(
     ({ currentPassword, newPassword }) => currentPassword !== newPassword,
   );
+const mfaChallengeSchema = z.object({
+  email: z
+    .email()
+    .max(320)
+    .transform((email) => email.trim().toLowerCase()),
+  password: z.string().min(1).max(1_024),
+  code: z.string().min(6).max(8),
+});
+const mfaEnrollmentSchema = z.object({
+  email: z
+    .email()
+    .max(320)
+    .transform((email) => email.trim().toLowerCase())
+    .optional(),
+  password: z.string().min(1).max(1_024).optional(),
+  code: z.string().min(6).max(8).optional(),
+});
+const credentialSetupSchema = z
+  .object({
+    token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+    password: z.string().min(12).max(1_024),
+  })
+  .strict();
+const ownerInvitationPathSchema = z.object({ organizationId: z.uuid() });
+const ownerInvitationBodySchema = z.object({}).strict();
 
 const dummyPasswordHash = hashPassword(randomBytes(32), ARGON2_OPTIONS);
+const credentialSetupPasswordOptions = {
+  algorithm: Algorithm.Argon2id,
+  memoryCost: 19_456,
+  timeCost: 2,
+  parallelism: 1,
+  outputLen: 32,
+};
 
 export interface AuthenticatedRequestContext {
   userId: string;
@@ -89,7 +132,7 @@ function requestMetadata(request: FastifyRequest) {
 function sendError(
   reply: FastifyReply,
   statusCode: number,
-  code: "UNAUTHORIZED" | "FORBIDDEN" | "BAD_REQUEST",
+  code: "UNAUTHORIZED" | "FORBIDDEN" | "BAD_REQUEST" | "SERVICE_UNAVAILABLE",
   message: string,
 ) {
   return reply.status(statusCode).send({ error: { code, message } });
@@ -108,17 +151,11 @@ function clearSessionCookie(reply: FastifyReply, config: RuntimeConfig) {
   reply.clearCookie(SESSION_COOKIE, cookieOptions(config));
 }
 
-export function validateMutationOrigin(
+export function validateRequestOrigin(
   request: FastifyRequest,
   reply: FastifyReply,
   config: RuntimeConfig,
 ): boolean {
-  const contentType = request.headers["content-type"]?.split(";")[0];
-  if (contentType !== "application/json") {
-    sendError(reply, 400, "BAD_REQUEST", "A JSON request body is required.");
-    return false;
-  }
-
   if (request.headers["sec-fetch-site"] === "cross-site") {
     sendError(reply, 403, "FORBIDDEN", "The request origin is not allowed.");
     return false;
@@ -138,6 +175,20 @@ export function validateMutationOrigin(
   }
 
   return true;
+}
+
+export function validateMutationOrigin(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  config: RuntimeConfig,
+): boolean {
+  const contentType = request.headers["content-type"]?.split(";")[0];
+  if (contentType !== "application/json") {
+    sendError(reply, 400, "BAD_REQUEST", "A JSON request body is required.");
+    return false;
+  }
+
+  return validateRequestOrigin(request, reply, config);
 }
 
 function authenticationAudit(
@@ -184,12 +235,98 @@ export function registerAuthentication(
   config: RuntimeConfig,
   identity: IdentityRepository,
   rateLimiter?: RateLimiter,
+  emailSender: TransactionalEmailSender = sendTransactionalEmail,
 ): void {
   app.register(cookie);
   app.register(rateLimit, { global: false });
   app.decorateRequest("auth", null);
   let loginRateLimit: preHandlerAsyncHookHandler | undefined;
   let passwordChangeRateLimit: preHandlerAsyncHookHandler | undefined;
+  let mfaChallengeRateLimit: preHandlerAsyncHookHandler | undefined;
+  let mfaEnrollmentRateLimit: preHandlerAsyncHookHandler | undefined;
+  let ownerInvitationRateLimit: preHandlerAsyncHookHandler | undefined;
+  let credentialSetupRateLimit: preHandlerAsyncHookHandler | undefined;
+
+  async function enforceIdentityRateLimit(
+    scope: string,
+    request: FastifyRequest,
+    reply: FastifyReply,
+    additionalSubjects: string[] = [],
+  ): Promise<boolean> {
+    if (rateLimiter) {
+      for (const subject of [request.ip, ...additionalSubjects]) {
+        const decision = await rateLimiter.consume({
+          scope,
+          subject,
+          requestId: request.id,
+          correlationId:
+            request.observabilityContext?.correlationId ?? request.id,
+          limit: config.AUTH_LOGIN_RATE_LIMIT_MAX,
+          windowMs: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
+        });
+        if (decision.allowed) continue;
+        request.log.warn(
+          {
+            ...request.observabilityContext,
+            eventType: "rate_limit_triggered",
+            scope,
+            subjectHash: hashRateLimitIdentity(subject),
+            resetAt: decision.resetAt.toISOString(),
+          },
+          "Identity operation rate limit exceeded",
+        );
+        reply.header(
+          "retry-after",
+          Math.max(
+            1,
+            Math.ceil((decision.resetAt.getTime() - Date.now()) / 1_000),
+          ),
+        );
+        reply.status(429).send({
+          error: {
+            code: "TOO_MANY_REQUESTS",
+            message: "Too many requests. Try again later.",
+          },
+        });
+        return false;
+      }
+      return true;
+    }
+    if (config.NODE_ENV === "production") {
+      request.log.error(
+        {
+          ...request.observabilityContext,
+          eventType: "rate_limit_unavailable",
+          scope,
+        },
+        "Shared identity rate limiter is not configured",
+      );
+      reply.status(503).send({
+        error: {
+          code: "SERVICE_UNAVAILABLE",
+          message: "The service is temporarily unavailable.",
+        },
+      });
+      return false;
+    }
+    const limiter =
+      scope === "authentication.owner_invitation"
+        ? (ownerInvitationRateLimit ??= app.rateLimit({
+            max: config.AUTH_LOGIN_RATE_LIMIT_MAX,
+            timeWindow: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
+          }))
+        : scope === "authentication.mfa_enrollment"
+          ? (mfaEnrollmentRateLimit ??= app.rateLimit({
+              max: config.AUTH_LOGIN_RATE_LIMIT_MAX,
+              timeWindow: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
+            }))
+          : (credentialSetupRateLimit ??= app.rateLimit({
+              max: config.AUTH_LOGIN_RATE_LIMIT_MAX,
+              timeWindow: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
+            }));
+    await limiter(request, reply);
+    return !reply.sent;
+  }
 
   app.addHook(
     "onRequest",
@@ -310,6 +447,182 @@ export function registerAuthentication(
     return payload;
   };
   app.addHook("onSend", avoidAuthResponseCaching);
+
+  app.post(
+    "/platform/organization-applications/:organizationId/owner-invitation",
+    {
+      preHandler: [
+        requireAuthenticated(),
+        async (request: FastifyRequest, reply: FastifyReply) => {
+          if (!validateMutationOrigin(request, reply, config)) return reply;
+          if (
+            !(await enforceIdentityRateLimit(
+              "authentication.owner_invitation",
+              request,
+              reply,
+            ))
+          ) {
+            return reply;
+          }
+        },
+      ],
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const path = ownerInvitationPathSchema.safeParse(request.params);
+      const body = ownerInvitationBodySchema.safeParse(request.body ?? {});
+      if (!path.success || !body.success || !request.auth) {
+        return sendError(
+          reply,
+          400,
+          "BAD_REQUEST",
+          "Invalid owner invitation request.",
+        );
+      }
+      if (
+        !config.MFA_ENCRYPTION_KEY ||
+        !config.BUSINESS_APP_ORIGIN ||
+        !config.RESEND_API_KEY ||
+        !config.RESEND_FROM_EMAIL
+      ) {
+        return reply.status(503).send({
+          error: {
+            code: "OWNER_SETUP_NOT_CONFIGURED",
+            message:
+              "Owner setup email or mandatory MFA configuration is unavailable.",
+          },
+          invitation: { status: "DEFERRED" },
+        });
+      }
+
+      const token = generateRandomToken();
+      const now = new Date();
+      const event = authenticationAudit(request, {
+        action: "AUTH_OWNER_SETUP_INVITATION_ISSUED",
+        actorUserId: request.auth.userId,
+        organizationId: path.data.organizationId,
+        result: "SUCCESS",
+      });
+      const owner = await identity.issueOwnerCredentialSetup(
+        path.data.organizationId,
+        request.auth.userId,
+        hashVerifier(token),
+        new Date(now.getTime() + 60 * 60_000),
+        event,
+      );
+      if (!owner) {
+        return sendError(
+          reply,
+          403,
+          "FORBIDDEN",
+          "The organization is not eligible for an Owner setup invitation.",
+        );
+      }
+
+      const setupUrl = new URL("/setup.html", config.BUSINESS_APP_ORIGIN);
+      setupUrl.hash = `token=${encodeURIComponent(token)}`;
+      const delivery = await emailSender({
+        apiKey: config.RESEND_API_KEY,
+        fromEmail: config.RESEND_FROM_EMAIL,
+        toEmail: owner.email,
+        subject: "Set up your OneCore Owner account",
+        text: [
+          `Hello ${owner.displayName},`,
+          "",
+          "An administrator has invited you to set up the Owner account for your OneCore organization.",
+          "Use this one-time link within 60 minutes to choose your password:",
+          setupUrl.toString(),
+          "",
+          "After setup, sign in and complete the required authenticator-app MFA enrollment.",
+          "If you did not expect this invitation, contact OneCore support.",
+        ].join("\n"),
+        ...(config.RESEND_BASE_URL ? { baseUrl: config.RESEND_BASE_URL } : {}),
+      });
+      if (!delivery.accepted || delivery.status !== "QUEUED") {
+        request.log.warn(
+          {
+            ...request.observabilityContext,
+            eventType: "owner_setup_email_not_accepted",
+            organizationId: path.data.organizationId,
+            userId: owner.id,
+            providerStatus: delivery.status,
+          },
+          "Owner setup invitation was not accepted by the email provider",
+        );
+        return reply.status(503).send({
+          error: {
+            code: "OWNER_SETUP_EMAIL_UNAVAILABLE",
+            message:
+              delivery.status === "DEFERRED"
+                ? "Email delivery is not configured. The invitation was not sent."
+                : "The email provider did not accept the invitation. Retry to issue a fresh link.",
+          },
+          invitation: { status: delivery.status },
+        });
+      }
+      return reply.status(202).send({
+        invitation: {
+          status: "QUEUED",
+          message:
+            "The email provider accepted the setup invitation; delivery is not confirmed.",
+        },
+      });
+    },
+  );
+
+  app.post(
+    "/auth/owner-credential-setup",
+    {
+      preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
+        if (!validateMutationOrigin(request, reply, config)) return reply;
+        if (
+          !(await enforceIdentityRateLimit(
+            "authentication.owner_credential_setup",
+            request,
+            reply,
+          ))
+        ) {
+          return reply;
+        }
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const parsed = credentialSetupSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return sendError(
+          reply,
+          400,
+          "BAD_REQUEST",
+          "Invalid account setup request.",
+        );
+      }
+      const passwordHash = await hashPassword(
+        parsed.data.password,
+        credentialSetupPasswordOptions,
+      );
+      const completed = await identity.completeOwnerCredentialSetup(
+        hashVerifier(parsed.data.token),
+        passwordHash,
+        authenticationAudit(request, {
+          action: "AUTH_OWNER_CREDENTIAL_SETUP_COMPLETED",
+          result: "SUCCESS",
+        }),
+      );
+      if (!completed) {
+        return reply.status(400).send({
+          error: {
+            code: "OWNER_SETUP_LINK_INVALID",
+            message:
+              "This setup link is invalid, expired, revoked, or already used. Ask a platform administrator for a new invitation.",
+          },
+        });
+      }
+      return reply.status(200).send({
+        nextStep: "SIGN_IN_AND_ENROLL_MFA",
+        message:
+          "Your password is set. Sign in to complete required authenticator setup before accessing OneCore.",
+      });
+    },
+  );
 
   app.post(
     "/auth/login",
@@ -459,6 +772,25 @@ export function registerAuthentication(
         );
       }
 
+      if (await identity.userRequiresMfa(authenticatedUser.id)) {
+        const credential = await identity.getMfaCredential(
+          authenticatedUser.id,
+        );
+        return reply.status(403).send({
+          error: {
+            code: "MFA_REQUIRED",
+            message: "Multi-factor authentication is required.",
+          },
+          mfa: {
+            required: true,
+            method: "totp",
+            status: credential?.enabledAt
+              ? "challenge_required"
+              : "enrollment_required",
+          },
+        });
+      }
+
       if (request.cookies[SESSION_COOKIE] && request.auth) {
         await identity.revokeSession(
           sessionDigest(request.cookies[SESSION_COOKIE] ?? ""),
@@ -498,6 +830,465 @@ export function registerAuthentication(
           id: authenticatedUser.id,
           email: authenticatedUser.email,
           displayName: authenticatedUser.displayName,
+        },
+        session: { expiresAt: expiresAt.toISOString() },
+      });
+    },
+  );
+
+  app.post(
+    "/auth/mfa/enroll",
+    {
+      preHandler: [
+        async (request: FastifyRequest, reply: FastifyReply) => {
+          const parsed = mfaEnrollmentSchema.safeParse(request.body ?? {});
+          const accountSubject = parsed.success
+            ? parsed.data.email
+              ? `account:${hashRateLimitIdentity(parsed.data.email)}`
+              : request.auth
+                ? `user:${request.auth.userId}`
+                : undefined
+            : undefined;
+          if (
+            !(await enforceIdentityRateLimit(
+              "authentication.mfa_enrollment",
+              request,
+              reply,
+              accountSubject ? [accountSubject] : [],
+            ))
+          ) {
+            return reply;
+          }
+          if (!validateMutationOrigin(request, reply, config)) return reply;
+        },
+      ],
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!config.MFA_ENCRYPTION_KEY) {
+        return sendError(
+          reply,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "MFA encryption is not configured.",
+        );
+      }
+      const parsed = mfaEnrollmentSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return sendError(
+          reply,
+          400,
+          "BAD_REQUEST",
+          "Invalid MFA enrollment request.",
+        );
+      }
+      let user = request.auth
+        ? await identity.findUserById(request.auth.userId)
+        : undefined;
+      if (!request.auth) {
+        const { email, password: providedPassword } = parsed.data;
+        if (!email || !providedPassword) {
+          return sendError(
+            reply,
+            401,
+            "UNAUTHORIZED",
+            "Email or password is incorrect.",
+          );
+        }
+        user = await identity.findUserByEmail(email);
+        const now = new Date();
+        if (!user || user.status !== "ACTIVE" || !user.passwordHash) {
+          await verifyPassword(await dummyPasswordHash, providedPassword);
+          await identity.recordAuthenticationEvent(
+            authenticationAudit(request, {
+              action: "AUTH_LOGIN_FAILURE",
+              actorUserId: user?.id ?? null,
+              result: "FAILURE",
+              reason: "invalid_credentials",
+            }),
+          );
+          return sendError(
+            reply,
+            401,
+            "UNAUTHORIZED",
+            "Email or password is incorrect.",
+          );
+        }
+        if (!(await verifyPassword(user.passwordHash, providedPassword))) {
+          const failed = await identity.recordFailedLogin(
+            email,
+            now,
+            FAILURE_WINDOW_MS,
+            ACCOUNT_FAILURE_THRESHOLD,
+            ACCOUNT_LOCK_MS,
+            request.id,
+            request.ip.slice(0, 45),
+            (request.headers["user-agent"] ?? "").slice(0, 512),
+            request.observabilityContext?.correlationId ?? request.id,
+          );
+          if (!failed) {
+            await identity.recordAuthenticationEvent(
+              authenticationAudit(request, {
+                action: "AUTH_LOGIN_FAILURE",
+                actorUserId: user.id,
+                result: "FAILURE",
+                reason: "invalid_credentials",
+              }),
+            );
+          }
+          return sendError(
+            reply,
+            401,
+            "UNAUTHORIZED",
+            "Email or password is incorrect.",
+          );
+        }
+      }
+      if (!user) {
+        return sendError(
+          reply,
+          401,
+          "UNAUTHORIZED",
+          "Authentication is required.",
+        );
+      }
+      if (!(await identity.userRequiresMfa(user.id))) {
+        return sendError(
+          reply,
+          403,
+          "FORBIDDEN",
+          "MFA enrollment is not available for this account.",
+        );
+      }
+      if (parsed.data.code) {
+        const credential = await identity.getMfaCredential(user.id);
+        if (
+          !credential ||
+          credential.enabledAt ||
+          credential.enrollmentExpiresAt <= new Date()
+        ) {
+          return sendError(
+            reply,
+            400,
+            "BAD_REQUEST",
+            "MFA enrollment has expired. Start enrollment again.",
+          );
+        }
+        const pendingSecret = decryptSecret(
+          credential.secretEncrypted,
+          config.MFA_ENCRYPTION_KEY,
+        );
+        const acceptedStep = verifyTotpStep(pendingSecret, parsed.data.code);
+        if (acceptedStep === null) {
+          return sendError(
+            reply,
+            401,
+            "UNAUTHORIZED",
+            "The MFA code is invalid.",
+          );
+        }
+        const enabled = await identity.completeMfaEnrollment(
+          user.id,
+          acceptedStep,
+          authenticationAudit(request, {
+            action: "AUTH_MFA_ENROLLED",
+            actorUserId: user.id,
+            result: "SUCCESS",
+            reason: "totp_enrollment_verified",
+          }),
+        );
+        if (!enabled) {
+          return sendError(
+            reply,
+            400,
+            "BAD_REQUEST",
+            "MFA enrollment has expired. Start enrollment again.",
+          );
+        }
+        if (!request.auth) {
+          const now = new Date();
+          const sessionSecret = randomBytes(32).toString("base64url");
+          const expiresAt = new Date(
+            now.getTime() + config.AUTH_SESSION_TTL_SECONDS * 1_000,
+          );
+          await identity.createSession(
+            {
+              secretHash: sessionDigest(sessionSecret),
+              userId: user.id,
+              organizationId: null,
+              branchId: null,
+              expiresAt,
+              ipAddress: request.ip.slice(0, 45),
+              userAgent: (request.headers["user-agent"] ?? "").slice(0, 512),
+            },
+            request.id,
+            now,
+            request.observabilityContext?.correlationId ?? request.id,
+            true,
+          );
+          reply.setCookie(SESSION_COOKIE, sessionSecret, {
+            ...cookieOptions(config),
+            maxAge: config.AUTH_SESSION_TTL_SECONDS,
+            expires: expiresAt,
+          });
+          return reply.send({
+            user: {
+              id: user.id,
+              email: user.email,
+              displayName: user.displayName,
+            },
+            session: { expiresAt: expiresAt.toISOString() },
+            mfa: { enabled: true, method: "totp" },
+          });
+        }
+        return reply.send({
+          mfa: { enabled: true, method: "totp" },
+        });
+      }
+      const existingCredential = await identity.getMfaCredential(user.id);
+      if (existingCredential?.enabledAt) {
+        return reply.status(409).send({
+          error: {
+            code: "CONFLICT",
+            message: "MFA is already enabled.",
+          },
+        });
+      }
+      const secret = generateTotpSecret();
+      const encryptedSecret = encryptSecret(secret, config.MFA_ENCRYPTION_KEY);
+      try {
+        await identity.storeMfaSecret(
+          user.id,
+          encryptedSecret,
+          new Date(Date.now() + 10 * 60_000),
+        );
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "MFA is already enabled for this user"
+        ) {
+          return reply.status(409).send({
+            error: { code: "CONFLICT", message: "MFA is already enabled." },
+          });
+        }
+        throw error;
+      }
+      const uri = buildTotpProvisioningUri(secret, user.email);
+      return reply.send({
+        mfa: { enabled: false, method: "totp", provisioningUri: uri },
+      });
+    },
+  );
+
+  app.post(
+    "/auth/mfa/challenge",
+    {
+      preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
+        const parsed = mfaChallengeSchema.safeParse(request.body);
+        const subjects = [
+          request.ip,
+          ...(parsed.success
+            ? [`account:${hashRateLimitIdentity(parsed.data.email)}`]
+            : []),
+        ];
+        if (rateLimiter) {
+          for (const subject of subjects) {
+            const decision = await rateLimiter.consume({
+              scope: "authentication.mfa_challenge",
+              subject,
+              requestId: request.id,
+              correlationId:
+                request.observabilityContext?.correlationId ?? request.id,
+              limit: config.AUTH_LOGIN_RATE_LIMIT_MAX,
+              windowMs: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
+            });
+            if (!decision.allowed) {
+              reply.header(
+                "retry-after",
+                Math.max(
+                  1,
+                  Math.ceil((decision.resetAt.getTime() - Date.now()) / 1_000),
+                ),
+              );
+              return reply.status(429).send({
+                error: {
+                  code: "TOO_MANY_REQUESTS",
+                  message: "Too many requests. Try again later.",
+                },
+              });
+            }
+          }
+        } else if (config.NODE_ENV === "production") {
+          request.log.error(
+            {
+              ...request.observabilityContext,
+              eventType: "rate_limit_unavailable",
+              scope: "authentication.mfa_challenge",
+            },
+            "Shared authentication rate limiter is not configured",
+          );
+          return reply.status(503).send({
+            error: {
+              code: "SERVICE_UNAVAILABLE",
+              message: "The service is temporarily unavailable.",
+            },
+          });
+        } else {
+          const limiter = (mfaChallengeRateLimit ??= app.rateLimit({
+            max: config.AUTH_LOGIN_RATE_LIMIT_MAX,
+            timeWindow: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
+            onExceeded: (request: FastifyRequest) => {
+              request.log.warn(
+                {
+                  ...request.observabilityContext,
+                  eventType: "rate_limit_triggered",
+                  scope: "authentication.mfa_challenge",
+                  subjectHash: hashRateLimitIdentity(request.ip),
+                },
+                "MFA challenge rate limit exceeded",
+              );
+            },
+          }));
+          await limiter(request, reply);
+          if (reply.sent) return reply;
+        }
+        if (!validateMutationOrigin(request, reply, config)) return reply;
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const parsed = mfaChallengeSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return sendError(
+          reply,
+          400,
+          "BAD_REQUEST",
+          "Invalid MFA challenge request.",
+        );
+      }
+      const { email, password, code } = parsed.data;
+      const user = await identity.findUserByEmail(email);
+      if (!user || user.status !== "ACTIVE" || !user.passwordHash) {
+        await verifyPassword(await dummyPasswordHash, password);
+        return sendError(
+          reply,
+          401,
+          "UNAUTHORIZED",
+          "Email or password is incorrect.",
+        );
+      }
+      if (!(await verifyPassword(user.passwordHash, password))) {
+        await identity.recordFailedLogin(
+          email,
+          new Date(),
+          FAILURE_WINDOW_MS,
+          ACCOUNT_FAILURE_THRESHOLD,
+          ACCOUNT_LOCK_MS,
+          request.id,
+          request.ip.slice(0, 45),
+          (request.headers["user-agent"] ?? "").slice(0, 512),
+          request.observabilityContext?.correlationId ?? request.id,
+        );
+        return sendError(
+          reply,
+          401,
+          "UNAUTHORIZED",
+          "Email or password is incorrect.",
+        );
+      }
+      const credential = await identity.getMfaCredential(user.id);
+      if (
+        !credential?.enabledAt ||
+        !config.MFA_ENCRYPTION_KEY ||
+        !(await identity.userRequiresMfa(user.id))
+      ) {
+        return reply.status(403).send({
+          error: {
+            code: "MFA_REQUIRED",
+            message: "Multi-factor authentication is required.",
+          },
+          mfa: {
+            required: true,
+            method: "totp",
+            status: "enrollment_required",
+          },
+        });
+      }
+      const secret = decryptSecret(
+        credential.secretEncrypted,
+        config.MFA_ENCRYPTION_KEY,
+      );
+      const acceptedStep = verifyTotpStep(secret, code);
+      if (acceptedStep === null) {
+        await identity.recordAuthenticationEvent(
+          authenticationAudit(request, {
+            action: "AUTH_MFA_CHALLENGE_FAILURE",
+            actorUserId: user.id,
+            result: "FAILURE",
+            reason: "invalid_totp",
+          }),
+        );
+        return sendError(
+          reply,
+          401,
+          "UNAUTHORIZED",
+          "The MFA code is invalid.",
+        );
+      }
+      const now = new Date();
+      const consumed = await identity.consumeMfaTotpStep(
+        user.id,
+        acceptedStep,
+        authenticationAudit(request, {
+          action: "AUTH_MFA_CHALLENGE_SUCCESS",
+          actorUserId: user.id,
+          result: "SUCCESS",
+          reason: "totp_step_consumed",
+        }),
+      );
+      if (!consumed) {
+        await identity.recordAuthenticationEvent(
+          authenticationAudit(request, {
+            action: "AUTH_MFA_CHALLENGE_FAILURE",
+            actorUserId: user.id,
+            result: "FAILURE",
+            reason: "totp_replay",
+          }),
+        );
+        return sendError(
+          reply,
+          401,
+          "UNAUTHORIZED",
+          "The MFA code is invalid.",
+        );
+      }
+      const sessionSecret = randomBytes(32).toString("base64url");
+      const expiresAt = new Date(
+        now.getTime() + config.AUTH_SESSION_TTL_SECONDS * 1_000,
+      );
+      await identity.createSession(
+        {
+          secretHash: sessionDigest(sessionSecret),
+          userId: user.id,
+          organizationId: null,
+          branchId: null,
+          expiresAt,
+          ipAddress: request.ip.slice(0, 45),
+          userAgent: (request.headers["user-agent"] ?? "").slice(0, 512),
+        },
+        request.id,
+        now,
+        request.observabilityContext?.correlationId ?? request.id,
+        true,
+      );
+      reply.setCookie(SESSION_COOKIE, sessionSecret, {
+        ...cookieOptions(config),
+        maxAge: config.AUTH_SESSION_TTL_SECONDS,
+        expires: expiresAt,
+      });
+      return reply.send({
+        user: {
+          id: user.id,
+          email: user.email,
+          displayName: user.displayName,
         },
         session: { expiresAt: expiresAt.toISOString() },
       });

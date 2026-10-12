@@ -79,6 +79,56 @@ describe("API foundation", () => {
     await app.close();
   });
 
+  it("rejects disallowed origins on state-changing routes", async () => {
+    const app = buildApp(
+      loadConfig({
+        NODE_ENV: "test",
+        LOG_LEVEL: "silent",
+        AUTH_ALLOWED_ORIGINS: "https://business.example",
+      }),
+      new MemoryIdentityRepository(),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: "/organizations/00000000-0000-4000-8000-000000000101/branches",
+      headers: {
+        origin: "https://attacker.example",
+        "content-type": "application/json",
+      },
+      payload: { name: "Branch", code: "BR-1" },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe("FORBIDDEN");
+    expect(response.json().error.message).toBe(
+      "The request origin is not allowed.",
+    );
+    const crossSiteFetch = await app.inject({
+      method: "POST",
+      url: "/organizations/00000000-0000-4000-8000-000000000101/branches",
+      headers: {
+        origin: "https://business.example",
+        "sec-fetch-site": "cross-site",
+        "content-type": "application/json",
+      },
+      payload: { name: "Branch", code: "BR-2" },
+    });
+    expect(crossSiteFetch.statusCode).toBe(403);
+
+    const allowedOrigin = await app.inject({
+      method: "POST",
+      url: "/organizations/00000000-0000-4000-8000-000000000101/branches",
+      headers: {
+        origin: "https://business.example",
+        "content-type": "application/json",
+      },
+      payload: { name: "Branch", code: "BR-3" },
+    });
+    expect(allowedOrigin.statusCode).toBe(401);
+
+    await app.close();
+  });
+
   it("reports ready when the required dependency check succeeds", async () => {
     const readinessCheck = vi.fn(async () => {});
     const app = buildApp(

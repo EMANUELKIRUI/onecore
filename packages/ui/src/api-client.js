@@ -1,9 +1,10 @@
 export class ApiError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, mfa) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.mfa = mfa;
   }
 }
 
@@ -92,12 +93,25 @@ export function createApiClient(basePath = "", fetchImplementation = fetch) {
       }
       if (!response.ok) {
         const error = payload?.error;
+        const mfa = payload?.mfa;
+        const mfaRequirement =
+          error?.code === "MFA_REQUIRED" &&
+          mfa?.required === true &&
+          mfa?.method === "totp" &&
+          ["enrollment_required", "challenge_required"].includes(mfa?.status)
+            ? {
+                required: true,
+                method: "totp",
+                status: mfa.status,
+              }
+            : undefined;
         throw new ApiError(
           response.status,
           typeof error?.code === "string" ? error.code : "REQUEST_FAILED",
           typeof error?.message === "string"
             ? error.message
             : "The request could not be completed.",
+          mfaRequirement,
         );
       }
       return payload;

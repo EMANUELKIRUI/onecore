@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   check,
   date,
@@ -403,7 +404,10 @@ export const sales = pgTable(
     ),
     check("sales_currency_format", sql`${table.currency} ~ '^[A-Z]{3}$'`),
     check("sales_subtotal_nonnegative", sql`${table.subtotal} >= 0`),
-    check("sales_total_matches_subtotal", sql`${table.total} = ${table.subtotal}`),
+    check(
+      "sales_total_matches_subtotal",
+      sql`${table.total} = ${table.subtotal}`,
+    ),
     check(
       "sales_cancellation_state_consistent",
       sql`(${table.status} = 'OPEN' AND ${table.cancelledAt} IS NULL AND ${table.cancelledByUserId} IS NULL) OR (${table.status} = 'CANCELLED' AND ${table.cancelledAt} IS NOT NULL AND ${table.cancelledByUserId} IS NOT NULL)`,
@@ -552,7 +556,11 @@ export const inventoryReservations = pgTable(
     foreignKey({
       name: "inventory_reservations_sale_line_fk",
       columns: [table.organizationId, table.saleId, table.catalogItemId],
-      foreignColumns: [saleLines.organizationId, saleLines.saleId, saleLines.catalogItemId],
+      foreignColumns: [
+        saleLines.organizationId,
+        saleLines.saleId,
+        saleLines.catalogItemId,
+      ],
     }).onDelete("restrict"),
     foreignKey({
       name: "inventory_reservations_stock_balance_fk",
@@ -624,7 +632,10 @@ export const inventoryMovements = pgTable(
     foreignKey({
       name: "inventory_movements_reservation_fk",
       columns: [table.organizationId, table.reservationId],
-      foreignColumns: [inventoryReservations.organizationId, inventoryReservations.id],
+      foreignColumns: [
+        inventoryReservations.organizationId,
+        inventoryReservations.id,
+      ],
     }).onDelete("restrict"),
     check(
       "inventory_movements_effect_matches_type",
@@ -678,6 +689,72 @@ export const users = pgTable(
   ],
 );
 
+export const userMfaCredentials = pgTable(
+  "user_mfa_credentials",
+  {
+    userId: uuid("user_id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    secretEncrypted: text("secret_encrypted").notNull(),
+    enabledAt: timestamp("enabled_at", { withTimezone: true }),
+    enrollmentExpiresAt: timestamp("enrollment_expires_at", {
+      withTimezone: true,
+    }).notNull(),
+    lastTotpStep: bigint("last_totp_step", { mode: "number" }),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    check(
+      "user_mfa_credentials_secret_nonempty",
+      sql`length(${table.secretEncrypted}) > 0`,
+    ),
+    check(
+      "user_mfa_credentials_last_step_nonnegative",
+      sql`${table.lastTotpStep} IS NULL OR ${table.lastTotpStep} >= 0`,
+    ),
+  ],
+);
+
+export const ownerCredentialSetupTokens = pgTable(
+  "owner_credential_setup_tokens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull().unique(),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("owner_credential_setup_tokens_user_org_idx").on(
+      table.userId,
+      table.organizationId,
+    ),
+    index("owner_credential_setup_tokens_expiry_idx").on(table.expiresAt),
+    check(
+      "owner_credential_setup_tokens_hash_format",
+      sql`${table.tokenHash} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "owner_credential_setup_tokens_expiry_after_creation",
+      sql`${table.expiresAt} > ${table.createdAt}`,
+    ),
+    check(
+      "owner_credential_setup_tokens_terminal_state",
+      sql`${table.consumedAt} IS NULL OR ${table.revokedAt} IS NULL`,
+    ),
+  ],
+);
+
 export const sessions = pgTable(
   "sessions",
   {
@@ -692,6 +769,7 @@ export const sessions = pgTable(
     branchId: uuid("branch_id"),
     createdAt: createdAt(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    mfaVerifiedAt: timestamp("mfa_verified_at", { withTimezone: true }),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

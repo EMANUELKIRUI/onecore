@@ -28,6 +28,43 @@ describe("shared UI foundations", () => {
     );
   });
 
+  it("exposes only validated mandatory MFA requirements from API errors", async () => {
+    const api = createApiClient(
+      "",
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "MFA_REQUIRED",
+              message: "Multi-factor authentication is required.",
+            },
+            mfa: {
+              required: true,
+              method: "totp",
+              status: "enrollment_required",
+              secret: "must-not-be-retained",
+            },
+          }),
+          {
+            status: 403,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+
+    await expect(api.request("/auth/login")).rejects.toMatchObject({
+      code: "MFA_REQUIRED",
+      mfa: {
+        required: true,
+        method: "totp",
+        status: "enrollment_required",
+      },
+    });
+    await expect(api.request("/auth/login")).rejects.not.toHaveProperty(
+      "mfa.secret",
+    );
+  });
+
   it("sends JSON mutations and rejects cross-origin base paths", async () => {
     const fetchImplementation = vi
       .fn()

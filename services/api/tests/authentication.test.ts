@@ -1,13 +1,20 @@
 import { createHash } from "node:crypto";
 import { Algorithm, hash as hashPassword } from "@node-rs/argon2";
 import { loadConfig } from "@onecore/config";
-import type { IdentityUser } from "@onecore/database";
+import type { IdentityUser, RateLimiter } from "@onecore/database";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import {
   requireAuthenticated,
   requireOrganizationMembership,
 } from "../src/authentication.js";
+import {
+  decryptSecret,
+  encryptSecret,
+  generateTotpCode,
+  generateTotpSecret,
+  verifyTotp,
+} from "../src/identity-security.js";
 import { MemoryIdentityRepository } from "./identity-fixture.js";
 
 const userId = "fc4109a0-7e91-4194-a202-42c42da28c71";
@@ -43,14 +50,21 @@ function testUser(status: IdentityUser["status"] = "ACTIVE"): IdentityUser {
 function createTestApp(
   identity = new MemoryIdentityRepository(),
   rateLimitMax = 100,
+  rateLimiter?: RateLimiter,
 ) {
   const config = loadConfig({
     NODE_ENV: "test",
     LOG_LEVEL: "silent",
     AUTH_LOGIN_RATE_LIMIT_MAX: String(rateLimitMax),
     AUTH_LOGIN_RATE_LIMIT_WINDOW_MS: "60000",
+    MFA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
   });
-  const app = buildApp(config, identity);
+  const app = buildApp(
+    config,
+    identity,
+    undefined,
+    rateLimiter ? { rateLimiter } : {},
+  );
   return { app, identity };
 }
 
@@ -132,6 +146,55 @@ describe("identity and authentication API", () => {
     expect(identity.events.map((event) => event.action)).toContain(
       "AUTH_LOGIN_SUCCESS",
     );
+    await app.close();
+  });
+
+  it("blocks a previously unverified session if the user is later granted a privileged role", async () => {
+    const identity = new MemoryIdentityRepository();
+    const user = testUser();
+    identity.addUser(user);
+    const { app } = createTestApp(identity);
+    const authenticated = await login(app);
+    expect(authenticated.statusCode).toBe(200);
+    expect(identity.sessions.size).toBe(1);
+
+    identity.addPlatformRole(user.id, "SUPERADMIN");
+    const session = await app.inject({
+      method: "GET",
+      url: "/auth/session",
+      headers: { cookie: cookieFrom(authenticated) },
+    });
+
+    expect(session.statusCode).toBe(401);
+    expect(session.headers["set-cookie"]).toContain("onecore_session=");
+    await app.close();
+  });
+
+  it("rejects an expired MFA enrollment secret", async () => {
+    const identity = new MemoryIdentityRepository();
+    const user = testUser();
+    identity.addUser(user);
+    identity.addPlatformRole(user.id, "SUPERADMIN");
+    await identity.storeMfaSecret(
+      user.id,
+      encryptSecret(generateTotpSecret(), "0123456789abcdef0123456789abcdef"),
+      new Date(Date.now() - 1_000),
+    );
+    const { app } = createTestApp(identity);
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/mfa/enroll",
+      headers: { "content-type": "application/json" },
+      payload: {
+        email: user.email,
+        password,
+        code: "123456",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.message).toContain("expired");
+    expect(identity.sessions.size).toBe(0);
     await app.close();
   });
 
@@ -635,6 +698,445 @@ describe("identity and authentication API", () => {
     });
     expect(crossSite.statusCode).toBe(403);
     await app.close();
+  });
+
+  it.each(["SUPERADMIN", "Organization Owner", "Organization Admin"])(
+    "requires TOTP before issuing a %s session",
+    async (role) => {
+      const identity = new MemoryIdentityRepository();
+      const user = testUser();
+      if (role === "SUPERADMIN") {
+        identity.addPlatformRole(user.id, "SUPERADMIN");
+      } else {
+        identity.addMembership(user.id, {
+          organizationId: orgA,
+          name: "Demo Organization",
+          slug: "demo",
+        });
+        identity.addOrganizationRole(user.id, orgA, role);
+      }
+      identity.addUser(user);
+      const { app } = createTestApp(identity);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        headers: { "content-type": "application/json" },
+        payload: { email: "owner@example.test", password },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json().error.code).toBe("MFA_REQUIRED");
+      expect(response.json().mfa.status).toBe("enrollment_required");
+      expect(identity.sessions.size).toBe(0);
+      expect(response.headers["set-cookie"]).toBeUndefined();
+      await app.close();
+    },
+  );
+
+  it("accepts a valid TOTP challenge and stores encrypted secrets", async () => {
+    const identity = new MemoryIdentityRepository();
+    const user = testUser();
+    identity.addUser(user);
+    identity.addPlatformRole(user.id, "SUPERADMIN");
+    const { app } = createTestApp(identity);
+
+    const secret = generateTotpSecret();
+    const encrypted = encryptSecret(secret, "0123456789abcdef0123456789abcdef");
+    const now = new Date();
+    await identity.storeMfaSecret(
+      user.id,
+      encrypted,
+      new Date(now.getTime() + 10 * 60_000),
+    );
+    await identity.completeMfaEnrollment(
+      user.id,
+      Math.floor(Date.now() / 30_000) - 1,
+      {
+        action: "AUTH_MFA_ENROLLED",
+        actorUserId: user.id,
+        result: "SUCCESS",
+        requestId: "test-enrollment",
+        ipAddress: "127.0.0.1",
+        userAgent: "test",
+        occurredAt: now,
+      },
+    );
+
+    const code = generateTotpCode(secret);
+    const valid = await app.inject({
+      method: "POST",
+      url: "/auth/mfa/challenge",
+      headers: { "content-type": "application/json" },
+      payload: {
+        email: "owner@example.test",
+        password,
+        code,
+      },
+    });
+    expect(valid.statusCode).toBe(200);
+    expect(valid.json().user.email).toBe("owner@example.test");
+    expect(valid.headers["set-cookie"]).toContain("onecore_session=");
+    expect(valid.body).not.toContain(encrypted);
+    expect(valid.body).not.toContain(secret);
+    const decrypted = decryptSecret(
+      encrypted,
+      "0123456789abcdef0123456789abcdef",
+    );
+    expect(decrypted).toBe(secret);
+    await app.close();
+  });
+
+  it("rejects reuse of a TOTP time step", async () => {
+    const identity = new MemoryIdentityRepository();
+    const user = testUser();
+    identity.addUser(user);
+    identity.addPlatformRole(user.id, "SUPERADMIN");
+    const secret = generateTotpSecret();
+    const encrypted = encryptSecret(secret, "0123456789abcdef0123456789abcdef");
+    const now = new Date();
+    await identity.storeMfaSecret(
+      user.id,
+      encrypted,
+      new Date(now.getTime() + 10 * 60_000),
+    );
+    await identity.completeMfaEnrollment(
+      user.id,
+      Math.floor(Date.now() / 30_000) - 1,
+      {
+        action: "AUTH_MFA_ENROLLED",
+        actorUserId: user.id,
+        result: "SUCCESS",
+        requestId: "test-enrollment",
+        ipAddress: "127.0.0.1",
+        userAgent: "test",
+        occurredAt: now,
+      },
+    );
+    const { app } = createTestApp(identity);
+    const request = () =>
+      app.inject({
+        method: "POST",
+        url: "/auth/mfa/challenge",
+        headers: { "content-type": "application/json" },
+        payload: {
+          email: user.email,
+          password,
+          code: generateTotpCode(secret),
+        },
+      });
+
+    expect((await request()).statusCode).toBe(200);
+    const replay = await request();
+    expect(replay.statusCode).toBe(401);
+    expect(replay.json().error.message).toBe("The MFA code is invalid.");
+    expect(identity.sessions.size).toBe(1);
+    await app.close();
+  });
+
+  it("keeps MFA enrollment pending until a valid code is verified", async () => {
+    const identity = new MemoryIdentityRepository();
+    const user = testUser();
+    identity.addUser(user);
+    identity.addPlatformRole(user.id, "SUPERADMIN");
+    const { app } = createTestApp(identity);
+    const start = await app.inject({
+      method: "POST",
+      url: "/auth/mfa/enroll",
+      headers: { "content-type": "application/json" },
+      payload: { email: user.email, password },
+    });
+
+    expect(start.statusCode).toBe(200);
+    expect(start.headers["set-cookie"]).toBeUndefined();
+    expect(identity.sessions.size).toBe(0);
+    const provisioningUri = start.json().mfa.provisioningUri as string;
+    const secret = new URL(provisioningUri).searchParams.get("secret");
+    expect(secret).toBeTruthy();
+    const pending = await identity.getMfaCredential(user.id);
+    expect(pending?.enabledAt).toBeNull();
+    expect(pending?.secretEncrypted).not.toBe(secret);
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/auth/mfa/enroll",
+      headers: { "content-type": "application/json" },
+      payload: { email: user.email, password, code: "abcdef" },
+    });
+    expect(invalid.statusCode).toBe(401);
+    expect((await identity.getMfaCredential(user.id))?.enabledAt).toBeNull();
+    expect(identity.sessions.size).toBe(0);
+
+    const verified = await app.inject({
+      method: "POST",
+      url: "/auth/mfa/enroll",
+      headers: { "content-type": "application/json" },
+      payload: {
+        email: user.email,
+        password,
+        code: generateTotpCode(secret ?? ""),
+      },
+    });
+    expect(verified.statusCode).toBe(200);
+    expect(verified.headers["set-cookie"]).toContain("onecore_session=");
+    expect(
+      (await identity.getMfaCredential(user.id))?.enabledAt,
+    ).toBeInstanceOf(Date);
+    expect(identity.sessions.size).toBe(1);
+    await app.close();
+  });
+
+  it("rate limits unauthenticated MFA enrollment by IP and account", async () => {
+    const identity = new MemoryIdentityRepository();
+    const user = testUser();
+    identity.addUser(user);
+    identity.addPlatformRole(user.id, "SUPERADMIN");
+    const hits = new Map<string, number>();
+    const consumedSubjects: string[] = [];
+    const rateLimiter: RateLimiter = {
+      async consume({ scope, subject }) {
+        const key = `${scope}:${subject}`;
+        const hitCount = (hits.get(key) ?? 0) + 1;
+        hits.set(key, hitCount);
+        consumedSubjects.push(subject);
+        const limited = subject.startsWith("account:") && hitCount > 1;
+        return {
+          allowed: !limited,
+          remaining: limited ? 0 : 99,
+          resetAt: new Date(Date.now() + 60_000),
+        };
+      },
+    };
+    const { app } = createTestApp(identity, 100, rateLimiter);
+    const request = (email = user.email) =>
+      app.inject({
+        method: "POST",
+        url: "/auth/mfa/enroll",
+        headers: { "content-type": "application/json" },
+        payload: { email, password },
+      });
+
+    expect((await request()).statusCode).toBe(200);
+    const limited = await request(user.email.toUpperCase());
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json().error.code).toBe("TOO_MANY_REQUESTS");
+    expect(consumedSubjects).toContain("127.0.0.1");
+    expect(
+      consumedSubjects.some((subject) => subject.startsWith("account:")),
+    ).toBe(true);
+    expect(consumedSubjects.join(" ")).not.toContain(user.email);
+    expect(identity.sessions.size).toBe(0);
+    await app.close();
+  });
+
+  it("records failed enrollment passwords and locks the account at the login threshold", async () => {
+    const identity = new MemoryIdentityRepository();
+    const user = testUser();
+    identity.addUser(user);
+    identity.addPlatformRole(user.id, "SUPERADMIN");
+    const { app } = createTestApp(identity);
+    const request = () =>
+      app.inject({
+        method: "POST",
+        url: "/auth/mfa/enroll",
+        headers: { "content-type": "application/json" },
+        payload: {
+          email: user.email,
+          password: "incorrect synthetic password",
+        },
+      });
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      expect((await request()).statusCode).toBe(401);
+    }
+    expect((await identity.findUserById(user.id))?.status).toBe("LOCKED");
+    expect(
+      identity.events.filter((event) => event.action === "AUTH_LOGIN_FAILURE"),
+    ).toHaveLength(10);
+    expect(
+      identity.events.filter((event) => event.action === "AUTH_ACCOUNT_LOCKED"),
+    ).toHaveLength(1);
+    expect(identity.sessions.size).toBe(0);
+
+    const stillLocked = await app.inject({
+      method: "POST",
+      url: "/auth/mfa/enroll",
+      headers: { "content-type": "application/json" },
+      payload: { email: user.email, password },
+    });
+    expect(stillLocked.statusCode).toBe(401);
+    expect(stillLocked.json().error.message).toBe(
+      "Email or password is incorrect.",
+    );
+    expect((await identity.findUserById(user.id))?.status).toBe("LOCKED");
+
+    const expiredLock = await identity.findUserById(user.id);
+    if (!expiredLock) throw new Error("Synthetic locked user was not found");
+    expiredLock.lockedUntil = new Date(Date.now() - 1_000);
+    identity.addUser(expiredLock);
+    const unlockedLogin = await login(app);
+    expect(unlockedLogin.statusCode).toBe(403);
+    expect(unlockedLogin.json().error.code).toBe("MFA_REQUIRED");
+    expect((await identity.findUserById(user.id))?.status).toBe("ACTIVE");
+    expect((await identity.findUserById(user.id))?.failedLoginAttempts).toBe(0);
+
+    const enrollmentAfterUnlock = await app.inject({
+      method: "POST",
+      url: "/auth/mfa/enroll",
+      headers: { "content-type": "application/json" },
+      payload: { email: user.email, password },
+    });
+    expect(enrollmentAfterUnlock.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("fails closed when the shared limiter is unavailable in production", async () => {
+    const identity = new MemoryIdentityRepository();
+    const user = testUser();
+    identity.addUser(user);
+    identity.addPlatformRole(user.id, "SUPERADMIN");
+    const config = loadConfig({
+      NODE_ENV: "production",
+      LOG_LEVEL: "silent",
+      AUTH_ALLOWED_ORIGINS: "https://business.example.test",
+      MFA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
+    });
+    const app = buildApp(config, identity);
+    const request = () =>
+      app.inject({
+        method: "POST",
+        url: "/auth/mfa/enroll",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://business.example.test",
+        },
+        payload: { email: user.email, password },
+      });
+
+    const response = await request();
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe("SERVICE_UNAVAILABLE");
+    expect(response.body).not.toContain("provisioningUri");
+    expect(identity.sessions.size).toBe(0);
+    await app.close();
+  });
+
+  it("does not verify credentials when the shared limiter store throws", async () => {
+    const identity = new MemoryIdentityRepository();
+    const user = testUser();
+    identity.addUser(user);
+    identity.addPlatformRole(user.id, "SUPERADMIN");
+    const config = loadConfig({
+      NODE_ENV: "production",
+      LOG_LEVEL: "silent",
+      AUTH_ALLOWED_ORIGINS: "https://business.example.test",
+      MFA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
+    });
+    const rateLimiter: RateLimiter = {
+      consume: async () => {
+        throw new Error("synthetic shared limiter store failure");
+      },
+    };
+    const app = buildApp(config, identity, undefined, { rateLimiter });
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/mfa/enroll",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://business.example.test",
+      },
+      payload: { email: user.email, password },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "An unexpected error occurred.",
+      },
+    });
+    expect(response.body).not.toContain(
+      "synthetic shared limiter store failure",
+    );
+    expect(response.body).not.toContain("provisioningUri");
+    expect(identity.sessions.size).toBe(0);
+    await app.close();
+  });
+
+  it("ignores client-supplied roles when deciding whether MFA is mandatory", async () => {
+    const identity = new MemoryIdentityRepository();
+    identity.addUser(testUser());
+    const { app } = createTestApp(identity);
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: {
+        email: "owner@example.test",
+        password,
+        role: "SUPERADMIN",
+        platformRoles: ["SUPERADMIN"],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(identity.sessions.size).toBe(1);
+    await app.close();
+  });
+
+  it("rate limits invalid TOTP challenge attempts", async () => {
+    const identity = new MemoryIdentityRepository();
+    const user = testUser();
+    identity.addUser(user);
+    identity.addPlatformRole(user.id, "SUPERADMIN");
+    const secret = generateTotpSecret();
+    const now = new Date();
+    await identity.storeMfaSecret(
+      user.id,
+      encryptSecret(secret, "0123456789abcdef0123456789abcdef"),
+      new Date(now.getTime() + 10 * 60_000),
+    );
+    await identity.completeMfaEnrollment(
+      user.id,
+      Math.floor(Date.now() / 30_000) - 1,
+      {
+        action: "AUTH_MFA_ENROLLED",
+        actorUserId: user.id,
+        result: "SUCCESS",
+        requestId: "test-enrollment",
+        ipAddress: "127.0.0.1",
+        userAgent: "test",
+        occurredAt: now,
+      },
+    );
+    const { app } = createTestApp(identity, 2);
+    const request = () =>
+      app.inject({
+        method: "POST",
+        url: "/auth/mfa/challenge",
+        headers: { "content-type": "application/json" },
+        payload: { email: user.email, password, code: "abcdef" },
+      });
+
+    expect((await request()).statusCode).toBe(401);
+    expect((await request()).statusCode).toBe(401);
+    const limited = await request();
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json().error.code).toBe("TOO_MANY_REQUESTS");
+    expect(identity.sessions.size).toBe(0);
+    await app.close();
+  });
+
+  it("verifies correct TOTP values and rejects incorrect codes", () => {
+    const secret = generateTotpSecret();
+    const now = 1_700_000_000_000;
+    const code = generateTotpCode(secret, now);
+
+    expect(verifyTotp(secret, code, now)).toBe(true);
+    expect(verifyTotp(secret, "abcdef", now)).toBe(false);
+    expect(
+      verifyTotp(secret, generateTotpCode(secret, now - 60_000), now),
+    ).toBe(false);
   });
 
   it("rejects expired cookies and does not persist plaintext passwords", async () => {

@@ -4,14 +4,17 @@ The service is `services/api`. It requires `DATABASE_URL` for a non-owner, `NOBY
 
 ## Authentication routes
 
-| Method | Route                   | Behavior                                                                                                                                     |
-| ------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST` | `/auth/login`           | Validates credentials, creates an opaque server-side session, sets the `HttpOnly` cookie, and returns only safe user/session metadata.       |
-| `POST` | `/auth/logout`          | Revokes the presented session and clears the cookie; safe to call when already anonymous.                                                    |
-| `POST` | `/auth/password/change` | Requires the current password, changes the Argon2id credential, revokes all of the user's active sessions atomically, and clears the cookie. |
-| `GET`  | `/auth/session`         | Requires authentication and returns safe user details, selected organization/branch, active memberships, authorized branches, and expiry.    |
-| `POST` | `/auth/organization`    | Requires authentication and an active membership in the requested organization before switching session context.                             |
-| `POST` | `/auth/branch`          | Requires a selected organization and an active branch assignment or explicit organization-wide branch access.                                |
+| Method | Route                          | Behavior                                                                                                                                                     |
+| ------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST` | `/auth/login`                  | Validates credentials; privileged roles receive `MFA_REQUIRED` without a normal session until MFA is completed.                                              |
+| `POST` | `/auth/owner-credential-setup` | Consumes a one-hour, single-use first-Owner invitation and stores an Argon2id password; issues no session and requires sign-in plus mandatory MFA afterward. |
+| `POST` | `/auth/mfa/enroll`             | Requires an authenticated user or a privileged user's verified password; starts a ten-minute TOTP enrollment or verifies and enables it.                     |
+| `POST` | `/auth/mfa/challenge`          | Re-verifies the password, throttles attempts, atomically consumes a valid TOTP time-step, then issues the normal session.                                    |
+| `POST` | `/auth/logout`                 | Revokes the presented session and clears the cookie; safe to call when already anonymous.                                                                    |
+| `POST` | `/auth/password/change`        | Requires the current password, changes the Argon2id credential, revokes all of the user's active sessions atomically, and clears the cookie.                 |
+| `GET`  | `/auth/session`                | Requires authentication and returns safe user details, selected organization/branch, active memberships, authorized branches, and expiry.                    |
+| `POST` | `/auth/organization`           | Requires authentication and an active membership in the requested organization before switching session context.                                             |
+| `POST` | `/auth/branch`                 | Requires a selected organization and an active branch assignment or explicit organization-wide branch access.                                                |
 
 Login failures return a generic 401 regardless of whether the account exists or is active. Login is rate-limited by IP. State-changing routes require JSON and validate browser origin. The cookie secret is never included in response JSON. See [authentication security](../security/authentication.md).
 
@@ -22,12 +25,14 @@ instances without an injected limiter use Fastify's process-local limiter.
 
 ## Public organization applications
 
-| Method | Route                                            | Behavior                                                                                                                                     |
-| ------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/public/organization-applications/modules`      | Lists currently available modules that an applicant may request.                                                                             |
-| `POST` | `/public/organization-applications`              | Validates and stores a rate-limited organization application in `PENDING`; it does not create an owner identity, login, or workspace access. |
-| `GET`  | `/platform/organization-applications`            | Lists applications for an authenticated platform superadmin.                                                                                 |
-| `POST` | `/platform/organization-applications/:id/status` | Transitions an application through the platform lifecycle service for an authenticated platform superadmin.                                  |
+| Method | Route                                                      | Behavior                                                                                                                                                                                                 |
+| ------ | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/public/organization-applications/modules`                | Lists currently available modules that an applicant may request.                                                                                                                                         |
+| `POST` | `/public/organization-applications`                        | Validates and stores a rate-limited organization application in `PENDING`; it does not create an owner identity, login, or workspace access.                                                             |
+| `GET`  | `/platform/organization-applications`                      | Lists applications for an authenticated platform superadmin.                                                                                                                                             |
+| `POST` | `/platform/organization-applications/:id/status`           | Transitions an application through the platform lifecycle service for an authenticated platform superadmin.                                                                                              |
+| `POST` | `/platform/organization-applications/:id/provision`        | For an approved application, atomically enables its requested available modules, activates its organization, and provisions one invited Organization Owner; requires a live platform Superadmin session. |
+| `POST` | `/platform/organization-applications/:id/owner-invitation` | Issues a fresh setup token only for the invited Owner of an active application organization and sends it through configured Resend; requires a live platform Superadmin session.                         |
 
 The public POST validates JSON and browser origin and permits at most five
 requests per IP per minute using the shared PostgreSQL limiter in production.
@@ -36,7 +41,11 @@ configured or cannot run; denied requests return `429`. Tests and
 non-production app instances without an injected limiter use Fastify's
 process-local limiter. Submission does not itself approve, activate, or
 provision an organization. Review and later owner-account setup remain
-separate administrator operations.
+separate administrator operations. Provisioning remains separate from
+credential activation. The Owner invitation requires `MFA_ENCRYPTION_KEY`,
+`BUSINESS_APP_ORIGIN`, `RESEND_API_KEY`, and `RESEND_FROM_EMAIL`; it returns
+`QUEUED` only when Resend accepts the message, which is not proof of delivery.
+Retries revoke prior unconsumed setup tokens and issue a fresh link.
 
 Authentication is not the complete authorization engine. Business Manager currently provides organization-scoped customer and catalog CRUD at `/organizations/:organizationId/business/customers` and `/organizations/:organizationId/business/catalog`. The organization configuration `GET`/`PATCH` routes also expose the authorized business contact and address profile. These routes verify the requested organization against authenticated context and enforce permissions, module entitlements, branch access, and data-scope rules before returning or changing data. Organization and branch IDs are requested context only; the server verifies current membership, organization/branch status, and branch access. Branch selection does not replace RBAC or data-scope checks. Branch-directory CRUD and membership branch assignment routes are documented below. Platform roles do not grant operational access.
 The configuration `GET` response includes `permissions.canUpdateSettings` as
@@ -67,11 +76,11 @@ data scope, and tenant authorization.
 
 ## Sales transaction foundation
 
-| Method | Route | Behavior |
-| ------ | ----- | -------- |
-| `POST` | `/organizations/:organizationId/sales` | Creates an unpaid `OPEN` sale from active catalog IDs and positive whole quantities. Requires `Idempotency-Key` and `core.sales.sale.create`. Prices, currency, branch, organization, cashier, and totals are resolved server-side. |
-| `GET` | `/organizations/:organizationId/sales?limit=&offset=` | Lists sale summaries for the verified current branch and effective `core.sales.sale.read` data scope. |
-| `GET` | `/organizations/:organizationId/sales/:saleId` | Returns the sale and immutable transaction-time line snapshots within the current authorized branch and data scope. |
+| Method | Route                                                 | Behavior                                                                                                                                                                                                                            |
+| ------ | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST` | `/organizations/:organizationId/sales`                | Creates an unpaid `OPEN` sale from active catalog IDs and positive whole quantities. Requires `Idempotency-Key` and `core.sales.sale.create`. Prices, currency, branch, organization, cashier, and totals are resolved server-side. |
+| `GET`  | `/organizations/:organizationId/sales?limit=&offset=` | Lists sale summaries for the verified current branch and effective `core.sales.sale.read` data scope.                                                                                                                               |
+| `GET`  | `/organizations/:organizationId/sales/:saleId`        | Returns the sale and immutable transaction-time line snapshots within the current authorized branch and data scope.                                                                                                                 |
 
 Create bodies are strict: `{ "lines": [{ "catalogItemId": "<uuid>",
 "quantity": 1 }] }`. There must be 1-100 unique catalog IDs; quantities are
@@ -86,11 +95,13 @@ missing branch, and `404` for concealed foreign-tenant resources.
 
 Sales routes require a live session, active organization membership and
 organization, verified active branch, the `core.sales` entitlement, and the
-permission named above. RLS is forced on `sales` and `sale_lines`. The only
-supported status is `OPEN` (unpaid); total currently equals subtotal. The API
-does not reserve or decrement stock, process or confirm payments, calculate
-taxes/discounts, finalize sales, or return receipts. The POS frontend is not
-wired to this contract. See the [Sales module boundary](../modules/sales.md).
+permission named above. RLS is forced on `sales` and `sale_lines`. Sale
+creation reserves available product stock in the same transaction and rejects
+insufficient stock; Inventory also exposes branch stock reads and
+receipt/adjustment movements. The only supported sale status is `OPEN`
+(unpaid); total currently equals subtotal. The API does not process or confirm
+payments, calculate taxes/discounts, finalize sales, or return receipts. The
+Business POS calls this contract. See the [Sales module boundary](../modules/sales.md).
 
 ## Workflow execution history
 
@@ -111,11 +122,12 @@ authoritative.
 ## Production lifecycle mutations
 
 - `POST /platform/organizations` creates an organization in `PENDING`, provisions the existing default role templates, and creates or resolves the explicitly supplied bootstrap owner as an active identity with an `ACTIVE` membership and the existing Organization Owner role; email is required. A new identity also requires display name and password, which is Argon2id-hashed; an existing active identity is reused without changing credentials. A live platform `SUPERADMIN` session is required.
-- `POST /platform/organizations/:organizationId/activate` activates only a status that may transition to `ACTIVE`; a live platform `SUPERADMIN` session is required.
+- `POST /platform/organizations/:organizationId/activate` activates only non-application organizations whose status may transition to `ACTIVE`; application organizations must use the approved application provisioning operation.
+- `POST /platform/organization-applications/:id/provision` requires `APPROVED`, provisions the applicant as an invited `PENDING`/`INVITED` Owner without a password or session, enables only the application-requested modules that remain available, and activates the organization in one transaction. Retries return the already-provisioned result; incomplete or inconsistent active application state fails closed.
 - `POST /organizations/:organizationId/users` creates an active user and organization membership; it requires `core.organization.user.create` in the verified organization context. The supplied password is Argon2id-hashed and never returned or written to audit/event data.
 - `POST /organizations/:organizationId/invitations` creates or reuses an identity and records an `INVITED` membership. It requires `core.organization.user.create` in the verified organization context.
 
-Each successful mutation, its audit record, and its lifecycle outbox event commit in one transaction. A platform SUPERADMIN is never added to a tenant as bootstrap owner; the explicit owner must be a distinct identity. Ordinary invitations persist pending identity and `INVITED` membership state; no email/SMS delivery or token/acceptance flow is configured or claimed.
+Each successful mutation, its audit record, and its lifecycle outbox event commit in one transaction. A platform SUPERADMIN is never added to a tenant as bootstrap owner; the explicit owner must be a distinct identity. Application provisioning leaves the new Owner invited and unable to sign in until the one-time credential setup token is accepted. Setup activates the pending identity and membership atomically, verifies the invitation email, and does not issue a session. The Owner must then sign in and complete mandatory authenticator-app MFA before normal session issuance. Ordinary invitations still persist pending identity and `INVITED` membership state; no generalized email/SMS delivery or member invitation acceptance flow is configured or claimed.
 
 ## Organization member directory
 

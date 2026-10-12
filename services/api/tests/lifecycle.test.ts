@@ -150,6 +150,22 @@ function testLifecycleService(
     activateOrganization: vi.fn(
       async () => ({ ...organization, status: "ACTIVE" }) as never,
     ),
+    provisionApprovedOrganizationApplication: vi.fn(async (id) => ({
+      organization: {
+        ...organization,
+        id,
+        status: "ACTIVE",
+      },
+      owner: {
+        id: crypto.randomUUID(),
+        membershipId: crypto.randomUUID(),
+        email: "owner@example.test",
+        displayName: "Initial Owner",
+        accountStatus: "PENDING" as const,
+        membershipStatus: "INVITED" as const,
+      },
+      enabledModules: ["core.business_manager"],
+    })),
     createUser: vi.fn(
       async (_transaction, organizationId, _actorId, _metadata, input) => ({
         id: crypto.randomUUID(),
@@ -578,6 +594,95 @@ describe("lifecycle API routes", () => {
     expect(anonymous.statusCode).toBe(401);
     expect(invalidTransition.statusCode).toBe(409);
     expect(activateOrganization).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it("requires an authenticated, authorized lifecycle service for application provisioning", async () => {
+    const organizationId = crypto.randomUUID();
+    const { identity, secret, userId } = authenticatedIdentity();
+    const provision = vi.fn(async () => {
+      throw new LifecycleMutationError("LIFECYCLE_UNAUTHORIZED");
+    });
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      undefined,
+      {
+        lifecycleMutations: testLifecycleService({
+          provisionApprovedOrganizationApplication: provision as never,
+        }),
+      },
+    );
+    const anonymous = await app.inject({
+      method: "POST",
+      url: `/platform/organization-applications/${organizationId}/provision`,
+      headers: { "content-type": "application/json" },
+      payload: {},
+    });
+    const spoofed = await app.inject({
+      method: "POST",
+      url: `/platform/organization-applications/${organizationId}/provision`,
+      cookies: { onecore_session: secret },
+      headers: { "content-type": "application/json" },
+      payload: { platformRoles: ["SUPERADMIN"] },
+    });
+    const unauthorized = await app.inject({
+      method: "POST",
+      url: `/platform/organization-applications/${organizationId}/provision`,
+      cookies: { onecore_session: secret },
+      headers: { "content-type": "application/json" },
+      payload: {},
+    });
+
+    expect(anonymous.statusCode).toBe(401);
+    expect(spoofed.statusCode).toBe(400);
+    expect(unauthorized.statusCode).toBe(403);
+    expect(provision).toHaveBeenCalledOnce();
+    expect(provision).toHaveBeenCalledWith(
+      organizationId,
+      expect.objectContaining({ userId }),
+      expect.objectContaining({ requestId: expect.any(String) }),
+    );
+    await app.close();
+  });
+
+  it("returns only non-secret invited-owner provisioning state", async () => {
+    const organizationId = crypto.randomUUID();
+    const { identity, secret } = authenticatedIdentity();
+    const provision =
+      testLifecycleService().provisionApprovedOrganizationApplication;
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      undefined,
+      {
+        lifecycleMutations: testLifecycleService({
+          provisionApprovedOrganizationApplication: provision,
+        }),
+      },
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/platform/organization-applications/${organizationId}/provision`,
+      cookies: { onecore_session: secret },
+      headers: { "content-type": "application/json" },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      application: { reference: organizationId, status: "ACTIVE" },
+      owner: {
+        email: "owner@example.test",
+        accountStatus: "PENDING",
+        membershipStatus: "INVITED",
+        role: "Organization Owner",
+        credentialSetup: "PENDING_INVITATION",
+      },
+      enabledModules: ["core.business_manager"],
+    });
+    expect(response.body).not.toContain("password");
+    expect(response.body).not.toContain("token");
     await app.close();
   });
 

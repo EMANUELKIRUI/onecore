@@ -87,6 +87,7 @@ const organizationApplicationSchema = z
 const applicationTransitionSchema = z
   .object({ status: z.enum(["UNDER_REVIEW", "APPROVED", "REJECTED"]) })
   .strict();
+const applicationProvisionSchema = z.object({}).strict();
 const applicationProfileSchema = z.object({
   application: organizationApplicationSchema
     .omit({
@@ -141,7 +142,8 @@ function sendLifecycleFailure(
   const statusCode =
     error.code === "LIFECYCLE_UNAUTHORIZED"
       ? 403
-      : error.code === "ORGANIZATION_NOT_FOUND"
+      : error.code === "ORGANIZATION_NOT_FOUND" ||
+          error.code === "APPLICATION_NOT_FOUND"
         ? 404
         : error.code === "BOOTSTRAP_OWNER_CREDENTIALS_REQUIRED"
           ? 400
@@ -161,9 +163,21 @@ function sendLifecycleFailure(
         ? "The requested resource was not found."
         : statusCode === 400
           ? "A display name and password are required for a new bootstrap owner."
-          : error.code === "APPLICATION_ALREADY_EXISTS"
-            ? "An application using these details already exists."
-            : "The requested lifecycle change conflicts with the current state.";
+          : error.code === "APPLICATION_NOT_APPROVED"
+            ? "The organization application must be approved before provisioning."
+            : error.code === "APPLICATION_PROVISIONING_REQUIRED"
+              ? "Use the approved application provisioning workflow to activate this organization."
+              : error.code === "APPLICATION_MODULE_UNAVAILABLE"
+                ? "A requested module is no longer available."
+                : error.code === "APPLICATION_MODULE_DEPENDENCY_UNSATISFIED"
+                  ? "The requested modules do not include all required dependencies."
+                  : error.code === "APPLICATION_OWNER_CANNOT_BE_SUPERADMIN"
+                    ? "A platform Superadmin cannot be provisioned as the organization Owner."
+                    : error.code === "APPLICATION_PROVISIONING_INCOMPLETE"
+                      ? "The organization provisioning state is incomplete. Contact platform support."
+                      : error.code === "APPLICATION_ALREADY_EXISTS"
+                        ? "An application using these details already exists."
+                        : "The requested lifecycle change conflicts with the current state.";
   return sendError(reply, statusCode, code, message);
 }
 
@@ -394,6 +408,58 @@ export function registerLifecycleRoutes(
             organizationName: organization.name,
             status: organization.status,
           },
+        });
+      } catch (error) {
+        return sendLifecycleFailure(reply, error);
+      }
+    },
+  );
+
+  app.post(
+    "/platform/organization-applications/:organizationId/provision",
+    { preHandler: requireAuthenticated() },
+    async (request, reply) => {
+      if (!validateMutationOrigin(request, reply, config)) return reply;
+      const path = organizationPathSchema.safeParse(request.params);
+      const body = applicationProvisionSchema.safeParse(request.body ?? {});
+      if (!path.success || !body.success) {
+        return sendError(
+          reply,
+          400,
+          "BAD_REQUEST",
+          "Invalid organization provisioning request.",
+        );
+      }
+      if (!request.auth) {
+        return sendError(
+          reply,
+          401,
+          "UNAUTHORIZED",
+          "Authentication is required.",
+        );
+      }
+      try {
+        const result = await lifecycle.provisionApprovedOrganizationApplication(
+          path.data.organizationId,
+          request.auth,
+          lifecycleMetadata(request),
+        );
+        return reply.status(200).send({
+          application: {
+            reference: result.organization.id,
+            status: result.organization.status,
+          },
+          owner: {
+            userId: result.owner.id,
+            membershipId: result.owner.membershipId,
+            email: result.owner.email,
+            displayName: result.owner.displayName,
+            accountStatus: result.owner.accountStatus,
+            membershipStatus: result.owner.membershipStatus,
+            role: "Organization Owner",
+            credentialSetup: "PENDING_INVITATION",
+          },
+          enabledModules: result.enabledModules,
         });
       } catch (error) {
         return sendLifecycleFailure(reply, error);

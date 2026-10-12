@@ -57,6 +57,7 @@ describe("loadConfig", () => {
       loadConfig({
         DATABASE_URL: "postgresql://onecore_app@localhost/onecore",
         AUTH_ALLOWED_ORIGINS: "https://business.example,https://admin.example",
+        BUSINESS_APP_ORIGIN: "https://business.example",
       }),
     ).toMatchObject({
       DATABASE_URL: "postgresql://onecore_app@localhost/onecore",
@@ -64,6 +65,7 @@ describe("loadConfig", () => {
         "https://business.example",
         "https://admin.example",
       ],
+      BUSINESS_APP_ORIGIN: "https://business.example",
     });
     expect(() =>
       loadConfig({ DATABASE_URL: "mysql://localhost/onecore" }),
@@ -71,6 +73,30 @@ describe("loadConfig", () => {
     expect(() =>
       loadConfig({ AUTH_ALLOWED_ORIGINS: "https://evil.example/path" }),
     ).toThrow(ConfigurationError);
+    expect(() =>
+      loadConfig({ BUSINESS_APP_ORIGIN: "http://business.example" }),
+    ).toThrow(ConfigurationError);
+  });
+
+  it("accepts only HTTPS Resend endpoints and a sufficiently long MFA key", () => {
+    expect(
+      loadConfig({
+        RESEND_API_KEY: "re_placeholder",
+        RESEND_FROM_EMAIL: "no-reply@example.test",
+        RESEND_BASE_URL: "https://api.resend.com/emails",
+        MFA_ENCRYPTION_KEY: "replace-with-a-32-byte-or-longer-secret-key",
+      }),
+    ).toMatchObject({
+      RESEND_API_KEY: "re_placeholder",
+      RESEND_FROM_EMAIL: "no-reply@example.test",
+      RESEND_BASE_URL: "https://api.resend.com/emails",
+    });
+    expect(() =>
+      loadConfig({ RESEND_BASE_URL: "http://api.resend.com/emails" }),
+    ).toThrow(ConfigurationError);
+    expect(() => loadConfig({ MFA_ENCRYPTION_KEY: "too-short" })).toThrow(
+      ConfigurationError,
+    );
   });
 
   it("rejects invalid values without including them in the error", () => {

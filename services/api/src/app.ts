@@ -17,7 +17,10 @@ import {
   sanitizeErrorForLog,
   type RequestContext,
 } from "@onecore/config";
-import { registerAuthentication } from "./authentication.js";
+import {
+  registerAuthentication,
+  validateRequestOrigin,
+} from "./authentication.js";
 import { registerAuthorizationRoutes } from "./authorization.js";
 import { registerConfigurationRoutes } from "./configuration.js";
 import { registerConfigurationResourceRoutes } from "./configuration-resources.js";
@@ -34,12 +37,14 @@ import { registerModuleRoutes } from "./modules.js";
 import { registerLifecycleRoutes } from "./lifecycle.js";
 import { createApiFastify } from "./fastify-instance.js";
 import { unavailableSecretStore } from "./integration-boundaries.js";
+import type { TransactionalEmailSender } from "./identity-security.js";
 
 export interface ApiAppOptions {
   readinessCheck?: () => Promise<void>;
   rateLimiter?: RateLimiter;
   lifecycleMutations?: LifecycleMutationService;
   secretStore?: SecretStore;
+  transactionalEmailSender?: TransactionalEmailSender;
 }
 
 declare module "fastify" {
@@ -104,6 +109,10 @@ export function buildApp(
 
   app.decorateRequest("observabilityContext", null);
   app.decorateRequest("requestStartedAt", 0);
+  app.addHook("preHandler", async (request, reply) => {
+    if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) return;
+    if (!validateRequestOrigin(request, reply, config)) return reply;
+  });
   app.addHook("onRequest", (request, reply, done) => {
     const correlationId = resolveCorrelationId(
       request.headers["x-correlation-id"],
@@ -196,7 +205,13 @@ export function buildApp(
   app.get("/health/ready", readiness);
 
   const correlatedAuthorization = withRequestCorrelation(authorizationService);
-  registerAuthentication(app, config, identityRepository, options.rateLimiter);
+  registerAuthentication(
+    app,
+    config,
+    identityRepository,
+    options.rateLimiter,
+    options.transactionalEmailSender,
+  );
   registerAuthorizationRoutes(app, correlatedAuthorization);
   registerConfigurationRoutes(app, correlatedAuthorization);
   registerConfigurationResourceRoutes(app, correlatedAuthorization);

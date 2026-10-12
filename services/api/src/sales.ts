@@ -78,11 +78,19 @@ function unauthorized(
 }
 
 function notFound(): OperationResponse {
-  return operationResponse(404, "NOT_FOUND", "The requested resource was not found.");
+  return operationResponse(
+    404,
+    "NOT_FOUND",
+    "The requested resource was not found.",
+  );
 }
 
 function invalid(): OperationResponse {
-  return operationResponse(400, "BAD_REQUEST", "The request could not be processed.");
+  return operationResponse(
+    400,
+    "BAD_REQUEST",
+    "The request could not be processed.",
+  );
 }
 
 function conflict(): OperationResponse {
@@ -236,25 +244,31 @@ export function registerSalesRoutes(
     return send(reply, result.value);
   });
 
-    app.get(salesPath, async (request, reply) => {
-      const path = organizationPathSchema.safeParse(request.params);
-      const query = saleListQuerySchema.safeParse(request.query);
-      if (!path.success || !query.success) return send(reply, invalid());
-      const result = await authorization.withPermission(
-        requestContext(request),
-        readPermission,
-        { requestId: request.id },
-        async (transaction, context) => {
-          if (path.data.organizationId !== context.organizationId) return notFound();
-          if (!context.branchId) {
-            return operationResponse(
-              403,
-              "FORBIDDEN",
-              "An authorized active branch is required.",
-            );
-          }
+  app.get(salesPath, async (request, reply) => {
+    const path = organizationPathSchema.safeParse(request.params);
+    const query = saleListQuerySchema.safeParse(request.query);
+    if (!path.success || !query.success) return send(reply, invalid());
+    const result = await authorization.withPermission(
+      requestContext(request),
+      readPermission,
+      { requestId: request.id },
+      async (transaction, context) => {
+        if (path.data.organizationId !== context.organizationId)
+          return notFound();
+        if (!context.branchId) {
+          return operationResponse(
+            403,
+            "FORBIDDEN",
+            "An authorized active branch is required.",
+          );
+        }
         const page = await listSales(transaction, context, query.data);
-        if (!page) return operationResponse(403, "FORBIDDEN", "The request is not authorized.");
+        if (!page)
+          return operationResponse(
+            403,
+            "FORBIDDEN",
+            "The request is not authorized.",
+          );
         return {
           statusCode: 200,
           body: {
@@ -288,7 +302,8 @@ export function registerSalesRoutes(
       readPermission,
       { requestId: request.id },
       async (transaction, context) => {
-        if (path.data.organizationId !== context.organizationId) return notFound();
+        if (path.data.organizationId !== context.organizationId)
+          return notFound();
         if (!context.branchId) {
           return operationResponse(
             403,
@@ -315,7 +330,8 @@ export function registerSalesRoutes(
       cancelPermissions,
       { requestId: request.id },
       async (transaction, context) => {
-        if (path.data.organizationId !== context.organizationId) return notFound();
+        if (path.data.organizationId !== context.organizationId)
+          return notFound();
         if (!context.branchId) {
           return operationResponse(
             403,
@@ -331,12 +347,19 @@ export function registerSalesRoutes(
         );
         if (!("sale" in cancelled)) {
           return cancelled.outcome === "FORBIDDEN"
-            ? operationResponse(403, "FORBIDDEN", "The request is not authorized.")
+            ? operationResponse(
+                403,
+                "FORBIDDEN",
+                "The request is not authorized.",
+              )
             : notFound();
         }
         return {
           statusCode: 200,
-          body: { sale: saleView(cancelled.sale), idempotent: cancelled.outcome === "EXISTING" },
+          body: {
+            sale: saleView(cancelled.sale),
+            idempotent: cancelled.outcome === "EXISTING",
+          },
         };
       },
     );

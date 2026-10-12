@@ -40,6 +40,15 @@ const environmentSchema = z.object({
         }),
       "AUTH_ALLOWED_ORIGINS must contain comma-separated origins",
     ),
+  BUSINESS_APP_ORIGIN: z
+    .string()
+    .url()
+    .refine(
+      (value) =>
+        new URL(value).origin === value && new URL(value).protocol === "https:",
+      "BUSINESS_APP_ORIGIN must be an HTTPS origin without a path",
+    )
+    .optional(),
   AUTH_SESSION_TTL_SECONDS: z.coerce
     .number()
     .int()
@@ -53,6 +62,16 @@ const environmentSchema = z.object({
     .min(1_000)
     .max(3_600_000)
     .default(60_000),
+  MFA_ENCRYPTION_KEY: z.string().min(32).optional(),
+  RESEND_API_KEY: z.string().min(1).optional(),
+  RESEND_FROM_EMAIL: z.string().email().optional(),
+  RESEND_BASE_URL: z
+    .string()
+    .url()
+    .refine((value) => new URL(value).protocol === "https:", {
+      message: "RESEND_BASE_URL must use HTTPS",
+    })
+    .optional(),
 });
 
 export type RuntimeConfig = z.infer<typeof environmentSchema>;

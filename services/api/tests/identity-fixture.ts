@@ -2,6 +2,7 @@ import type {
   AuthenticationAuditEvent,
   IdentityBranch,
   IdentityMembership,
+  IdentityMfaCredential,
   IdentityRepository,
   IdentitySession,
   IdentityUser,
@@ -17,6 +18,19 @@ export class MemoryIdentityRepository implements IdentityRepository {
   private readonly inactiveBranches = new Set<string>();
   private readonly inactiveOrganizations = new Set<string>();
   private readonly inactiveMemberships = new Set<string>();
+  private readonly mfaCredentials = new Map<string, IdentityMfaCredential>();
+  private readonly platformRoles = new Map<string, Set<string>>();
+  private readonly organizationRoles = new Map<string, Set<string>>();
+  private readonly ownerSetupTokens = new Map<
+    string,
+    {
+      userId: string;
+      organizationId: string;
+      expiresAt: Date;
+      consumed: boolean;
+      revoked: boolean;
+    }
+  >();
 
   addUser(user: IdentityUser): void {
     this.users.set(user.email, structuredClone(user));
@@ -84,6 +98,179 @@ export class MemoryIdentityRepository implements IdentityRepository {
 
   suspendOrganization(organizationId: string): void {
     this.inactiveOrganizations.add(organizationId);
+  }
+
+  addOrganizationRole(
+    userId: string,
+    organizationId: string,
+    roleName: string,
+  ): void {
+    const key = `${userId}:${organizationId}`;
+    const roles = this.organizationRoles.get(key) ?? new Set<string>();
+    roles.add(roleName);
+    this.organizationRoles.set(key, roles);
+  }
+
+  addPlatformRole(userId: string, roleName: string): void {
+    const roles = this.platformRoles.get(userId) ?? new Set<string>();
+    roles.add(roleName);
+    this.platformRoles.set(userId, roles);
+  }
+
+  async issueOwnerCredentialSetup(
+    organizationId: string,
+    actorUserId: string,
+    tokenHash: string,
+    expiresAt: Date,
+    event: AuthenticationAuditEvent,
+  ) {
+    if (!this.platformRoles.get(actorUserId)?.has("SUPERADMIN")) {
+      return undefined;
+    }
+    const ownerMembership = [...this.organizationRoles.entries()].find(
+      ([key, roles]) =>
+        key.endsWith(`:${organizationId}`) && roles.has("Organization Owner"),
+    );
+    if (!ownerMembership) return undefined;
+    const userId = ownerMembership[0].slice(0, -organizationId.length - 1);
+    const user = await this.findUserById(userId);
+    if (!user || user.status !== "PENDING" || user.passwordHash) {
+      return undefined;
+    }
+    for (const token of this.ownerSetupTokens.values()) {
+      if (
+        token.userId === userId &&
+        token.organizationId === organizationId &&
+        !token.consumed
+      ) {
+        token.revoked = true;
+      }
+    }
+    this.ownerSetupTokens.set(tokenHash, {
+      userId,
+      organizationId,
+      expiresAt,
+      consumed: false,
+      revoked: false,
+    });
+    this.events.push(structuredClone(event));
+    return {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+    };
+  }
+
+  async completeOwnerCredentialSetup(
+    tokenHash: string,
+    passwordHash: string,
+    event: AuthenticationAuditEvent,
+  ): Promise<boolean> {
+    const token = this.ownerSetupTokens.get(tokenHash);
+    if (
+      !token ||
+      token.consumed ||
+      token.revoked ||
+      token.expiresAt <= event.occurredAt
+    ) {
+      return false;
+    }
+    const user = await this.findUserById(token.userId);
+    if (!user || user.status !== "PENDING" || user.passwordHash) return false;
+    token.consumed = true;
+    user.passwordHash = passwordHash;
+    user.status = "ACTIVE";
+    this.users.set(user.email, user);
+    this.inactiveMemberships.delete(`${user.id}:${token.organizationId}`);
+    for (const candidate of this.ownerSetupTokens.values()) {
+      if (candidate.userId === user.id && !candidate.consumed) {
+        candidate.revoked = true;
+      }
+    }
+    this.events.push(structuredClone(event));
+    return true;
+  }
+
+  async userRequiresMfa(userId: string): Promise<boolean> {
+    if (this.platformRoles.get(userId)?.has("SUPERADMIN")) {
+      return true;
+    }
+    return [...this.organizationRoles.entries()].some(
+      ([key, roles]) =>
+        key.startsWith(`${userId}:`) &&
+        this.memberships
+          .get(userId)
+          ?.some(
+            (membership) =>
+              key === `${userId}:${membership.organizationId}` &&
+              !this.inactiveMemberships.has(
+                `${userId}:${membership.organizationId}`,
+              ) &&
+              !this.inactiveOrganizations.has(membership.organizationId),
+          ) &&
+        (roles.has("Organization Owner") || roles.has("Organization Admin")),
+    );
+  }
+
+  async getMfaCredential(
+    userId: string,
+  ): Promise<IdentityMfaCredential | null> {
+    const credential = this.mfaCredentials.get(userId);
+    return credential ? structuredClone(credential) : null;
+  }
+
+  async storeMfaSecret(
+    userId: string,
+    secretEncrypted: string,
+    enrollmentExpiresAt: Date,
+  ): Promise<void> {
+    const existing = this.mfaCredentials.get(userId);
+    if (existing?.enabledAt) {
+      throw new Error("MFA is already enabled for this user");
+    }
+    this.mfaCredentials.set(userId, {
+      secretEncrypted,
+      enabledAt: null,
+      enrollmentExpiresAt,
+      lastTotpStep: null,
+    });
+  }
+
+  async completeMfaEnrollment(
+    userId: string,
+    acceptedTotpStep: number,
+    event: AuthenticationAuditEvent,
+  ): Promise<boolean> {
+    const credential = this.mfaCredentials.get(userId);
+    if (
+      !credential ||
+      credential.enabledAt ||
+      credential.enrollmentExpiresAt <= event.occurredAt
+    ) {
+      return false;
+    }
+    credential.enabledAt = event.occurredAt;
+    credential.lastTotpStep = acceptedTotpStep;
+    this.events.push(structuredClone(event));
+    return true;
+  }
+
+  async consumeMfaTotpStep(
+    userId: string,
+    acceptedTotpStep: number,
+    event: AuthenticationAuditEvent,
+  ): Promise<boolean> {
+    const credential = this.mfaCredentials.get(userId);
+    if (
+      !credential?.enabledAt ||
+      (credential.lastTotpStep !== null &&
+        credential.lastTotpStep >= acceptedTotpStep)
+    ) {
+      return false;
+    }
+    credential.lastTotpStep = acceptedTotpStep;
+    this.events.push(structuredClone(event));
+    return true;
   }
 
   async findUserByEmail(email: string): Promise<IdentityUser | undefined> {
@@ -186,10 +373,18 @@ export class MemoryIdentityRepository implements IdentityRepository {
     session: Omit<IdentitySession, "id" | "lastUsedAt" | "revokedAt">,
     requestId: string,
     now: Date,
+    correlationId?: string,
+    mfaVerified = false,
   ): Promise<IdentitySession> {
+    if (!mfaVerified && (await this.userRequiresMfa(session.userId))) {
+      throw new Error(
+        "Mandatory MFA was not completed before session creation",
+      );
+    }
     const created: IdentitySession = {
       ...session,
       id: crypto.randomUUID(),
+      mfaVerifiedAt: mfaVerified ? now : null,
       lastUsedAt: now,
       revokedAt: null,
     };
@@ -234,6 +429,12 @@ export class MemoryIdentityRepository implements IdentityRepository {
     const session = this.sessions.get(secretHash);
     if (!session || session.revokedAt || session.expiresAt <= now)
       return undefined;
+    if (
+      (await this.userRequiresMfa(session.userId)) &&
+      !session.mfaVerifiedAt
+    ) {
+      return undefined;
+    }
     const user = await this.findUserById(session.userId);
     if (!user || user.status !== "ACTIVE") return undefined;
     return { session: structuredClone(session), user };

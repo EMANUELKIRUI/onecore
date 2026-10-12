@@ -81,9 +81,7 @@ async function saleWithLines(
   const [sale] = await transaction
     .select()
     .from(sales)
-    .where(
-      and(eq(sales.organizationId, organizationId), eq(sales.id, saleId)),
-    )
+    .where(and(eq(sales.organizationId, organizationId), eq(sales.id, saleId)))
     .limit(1);
   if (!sale) return undefined;
   const lines = await transaction
@@ -135,7 +133,9 @@ async function existingOutcome(
     existing.id,
     context.organizationId,
   );
-  return sale ? { outcome: "EXISTING", sale } : { outcome: "IDEMPOTENCY_CONFLICT" };
+  return sale
+    ? { outcome: "EXISTING", sale }
+    : { outcome: "IDEMPOTENCY_CONFLICT" };
 }
 
 export async function createSale(
@@ -315,8 +315,14 @@ export async function cancelSale(
     .limit(1);
   if (!sale) return { outcome: "NOT_FOUND" };
   if (sale.status === "CANCELLED") {
-    const existing = await saleWithLines(transaction, sale.id, context.organizationId);
-    return existing ? { outcome: "EXISTING", sale: existing } : { outcome: "NOT_FOUND" };
+    const existing = await saleWithLines(
+      transaction,
+      sale.id,
+      context.organizationId,
+    );
+    return existing
+      ? { outcome: "EXISTING", sale: existing }
+      : { outcome: "NOT_FOUND" };
   }
 
   const releasedLineCount = await releaseSaleReservations(
@@ -362,7 +368,11 @@ export async function cancelSale(
     sale.id,
     { releasedLineCount },
   );
-  const cancelled = await saleWithLines(transaction, sale.id, context.organizationId);
+  const cancelled = await saleWithLines(
+    transaction,
+    sale.id,
+    context.organizationId,
+  );
   if (!cancelled) return { outcome: "NOT_FOUND" };
   return { outcome: "CANCELLED", sale: cancelled };
 }

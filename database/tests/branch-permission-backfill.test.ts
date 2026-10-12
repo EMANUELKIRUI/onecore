@@ -19,6 +19,12 @@ const repairMigrationPath = fileURLToPath(
     import.meta.url,
   ),
 );
+const branchAdministrationMigrationPath = fileURLToPath(
+  new URL(
+    "../migrations/20261010020000_branch_administration_contract/migration.sql",
+    import.meta.url,
+  ),
+);
 const assignmentMigrationPath = fileURLToPath(
   new URL(
     "../migrations/20261010030000_membership_branch_assignment_contract/migration.sql",
@@ -42,6 +48,7 @@ describe("Branch permission backfill repair", () => {
       ALTER TABLE "role_permissions" OWNER TO onecore_migrator;
       ALTER TABLE "roles" OWNER TO onecore_migrator;
       ALTER TABLE "permissions" OWNER TO onecore_migrator;
+      ALTER TABLE "branches" OWNER TO onecore_migrator;
       ALTER TABLE "membership_branches" OWNER TO onecore_migrator;
     `);
   }, 30_000);
@@ -148,10 +155,122 @@ describe("Branch permission backfill repair", () => {
       assignmentMigrationPath,
       "utf8",
     );
+    const branchAdministrationMigrationSql = await readFile(
+      branchAdministrationMigrationPath,
+      "utf8",
+    );
     const repairMigrationSql = await readFile(repairMigrationPath, "utf8");
+
+    const rlsRows = await client.query<{
+      relname: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(`
+      SELECT relname, relrowsecurity, relforcerowsecurity
+      FROM pg_class
+      WHERE relname IN ('roles', 'role_permissions')
+      ORDER BY relname
+    `);
+    expect(rlsRows.rows).toHaveLength(2);
+    expect(
+      rlsRows.rows.every(
+        (row) => row.relrowsecurity && row.relforcerowsecurity,
+      ),
+    ).toBe(true);
+
+    let legacyMigrationFailure: unknown;
     await client.exec("BEGIN");
     try {
       await client.exec("SET LOCAL ROLE onecore_migrator");
+      await client.exec(`
+        INSERT INTO role_permissions
+          (organization_id, role_id, permission_id, scope_type, scope)
+        SELECT roles.organization_id, roles.id, permissions.id,
+          'ORGANIZATION', '{}'::jsonb
+        FROM roles
+        JOIN permissions ON permissions.key IN (
+          'core.organization.branch.read',
+          'core.organization.branch.create',
+          'core.organization.branch.update'
+        )
+        WHERE roles.is_system = true
+          AND roles.name IN ('Organization Owner', 'Organization Admin')
+        ON CONFLICT (organization_id, role_id, permission_id) DO NOTHING
+      `);
+      await client.exec("COMMIT");
+    } catch (error) {
+      legacyMigrationFailure = error;
+      await client.exec("ROLLBACK");
+    }
+    expect(String(legacyMigrationFailure)).toMatch(
+      /row-level security policy/i,
+    );
+
+    let migrationFailure: unknown;
+    await client.exec("BEGIN");
+    try {
+      await client.exec("SET LOCAL ROLE onecore_migrator");
+      for (const statement of branchAdministrationMigrationSql
+        .split("--> statement-breakpoint")
+        .map((value) => value.trim())
+        .filter(Boolean)) {
+        await client.exec(statement);
+      }
+      await client.exec("SELECT 1 / 0");
+      await client.exec("COMMIT");
+    } catch (error) {
+      migrationFailure = error;
+      await client.exec("ROLLBACK");
+    }
+    expect(String(migrationFailure)).toMatch(/division by zero/i);
+    for (const organization of organizations) {
+      const rolledBackGrants = await database
+        .select({ count: sql<number>`count(*)` })
+        .from(schema.rolePermissions)
+        .where(
+          sql`${schema.rolePermissions.organizationId} = ${organization.id}`,
+        );
+      expect(Number(rolledBackGrants[0]?.count ?? 0)).toBe(
+        organization.id === existingOwner.organizationId ? 1 : 0,
+      );
+    }
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await client.exec("BEGIN");
+      try {
+        await client.exec("SET LOCAL ROLE onecore_migrator");
+        for (const statement of branchAdministrationMigrationSql
+          .split("--> statement-breakpoint")
+          .map((value) => value.trim())
+          .filter(Boolean)) {
+          await client.exec(statement);
+        }
+        await client.exec("COMMIT");
+      } catch (error) {
+        await client.exec("ROLLBACK");
+        throw error;
+      }
+    }
+
+    for (const organization of organizations) {
+      const branchGrantCount = await database
+        .select({ count: sql<number>`count(*)` })
+        .from(schema.rolePermissions)
+        .where(
+          sql`${schema.rolePermissions.organizationId} = ${organization.id}`,
+        );
+      expect(Number(branchGrantCount[0]?.count ?? 0)).toBe(6);
+    }
+
+    await client.exec("BEGIN");
+    try {
+      await client.exec("SET LOCAL ROLE onecore_migrator");
+      for (const statement of assignmentMigrationSql
+        .split("--> statement-breakpoint")
+        .map((value) => value.trim())
+        .filter(Boolean)) {
+        await client.exec(statement);
+      }
       for (const statement of assignmentMigrationSql
         .split("--> statement-breakpoint")
         .map((value) => value.trim())
@@ -179,6 +298,57 @@ describe("Branch permission backfill repair", () => {
     const tenantA = organizations[0];
     const tenantB = organizations[1];
     if (!tenantA || !tenantB) throw new Error("Test tenant was not created");
+    const roleGrantRows = await client.query<{
+      organization_id: string;
+      role_name: string;
+      permission_key: string;
+      scope_type: string;
+      scope: Record<string, unknown>;
+    }>(
+      `
+        SELECT roles.organization_id, roles.name AS role_name,
+          permissions.key AS permission_key,
+          role_permissions.scope_type, role_permissions.scope
+        FROM role_permissions
+        JOIN roles
+          ON roles.organization_id = role_permissions.organization_id
+          AND roles.id = role_permissions.role_id
+        JOIN permissions ON permissions.id = role_permissions.permission_id
+        WHERE roles.organization_id IN ($1, $2)
+          AND roles.name IN ('Organization Owner', 'Organization Admin')
+        ORDER BY roles.organization_id, roles.name, permissions.key
+    `,
+      [tenantA.id, tenantB.id],
+    );
+    const expectedPermissionKeys = [
+      "core.organization.branch.create",
+      "core.organization.branch.read",
+      "core.organization.branch.update",
+      "core.organization.membership_branch.assign",
+      "core.organization.membership_branch.read",
+      "core.organization.membership_branch.remove",
+    ];
+    expect(roleGrantRows.rows).toHaveLength(organizations.length * 2 * 6);
+    for (const organization of organizations) {
+      for (const roleName of ["Organization Owner", "Organization Admin"]) {
+        const grants = roleGrantRows.rows.filter(
+          (row) =>
+            row.organization_id === organization.id &&
+            row.role_name === roleName,
+        );
+        expect(grants.map((grant) => grant.permission_key).sort()).toEqual(
+          expectedPermissionKeys,
+        );
+        expect(
+          grants.every(
+            (grant) =>
+              grant.scope_type === "ORGANIZATION" &&
+              Object.keys(grant.scope).length === 0,
+          ),
+        ).toBe(true);
+      }
+    }
+
     const tenantAVisible = await client.transaction(async (transaction) => {
       await transaction.exec("SET LOCAL ROLE onecore_app");
       await transaction.query(

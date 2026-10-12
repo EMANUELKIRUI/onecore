@@ -30,7 +30,9 @@ function response(statusCode: number, code: string, message: string) {
 }
 
 function send(
-  reply: { status: (statusCode: number) => { send: (body: unknown) => unknown } },
+  reply: {
+    status: (statusCode: number) => { send: (body: unknown) => unknown };
+  },
   result: { statusCode: number; body: unknown },
 ) {
   return reply.status(result.statusCode).send(result.body);
@@ -68,13 +70,22 @@ export function registerInventoryRoutes(
       { requestId: request.id },
       async (transaction, context) => {
         if (path.data.organizationId !== context.organizationId) {
-          return response(404, "NOT_FOUND", "The requested resource was not found.");
+          return response(
+            404,
+            "NOT_FOUND",
+            "The requested resource was not found.",
+          );
         }
         if (!context.branchId) {
-          return response(403, "FORBIDDEN", "An authorized active branch is required.");
+          return response(
+            403,
+            "FORBIDDEN",
+            "An authorized active branch is required.",
+          );
         }
         const items = await listBranchStock(transaction, context, query.data);
-        if (!items) return response(403, "FORBIDDEN", "The request is not authorized.");
+        if (!items)
+          return response(403, "FORBIDDEN", "The request is not authorized.");
         return { statusCode: 200, body: { items, branchId: context.branchId } };
       },
     );
@@ -86,9 +97,14 @@ export function registerInventoryRoutes(
     if (!validateMutationOrigin(request, reply, config)) return;
     const path = organizationPathSchema.safeParse(request.params);
     const input = inventoryAdjustmentInputSchema.safeParse(request.body);
-    const key = idempotencyKeySchema.safeParse(request.headers["idempotency-key"]);
+    const key = idempotencyKeySchema.safeParse(
+      request.headers["idempotency-key"],
+    );
     if (!path.success || !input.success || !key.success) {
-      return send(reply, response(400, "BAD_REQUEST", "Invalid stock movement request."));
+      return send(
+        reply,
+        response(400, "BAD_REQUEST", "Invalid stock movement request."),
+      );
     }
     const result = await authorization.withPermission(
       requestContext(request),
@@ -96,10 +112,18 @@ export function registerInventoryRoutes(
       { requestId: request.id },
       async (transaction, context) => {
         if (path.data.organizationId !== context.organizationId) {
-          return response(404, "NOT_FOUND", "The requested resource was not found.");
+          return response(
+            404,
+            "NOT_FOUND",
+            "The requested resource was not found.",
+          );
         }
         if (!context.branchId) {
-          return response(403, "FORBIDDEN", "An authorized active branch is required.");
+          return response(
+            403,
+            "FORBIDDEN",
+            "An authorized active branch is required.",
+          );
         }
         const adjustment = await adjustBranchStock(
           transaction,
@@ -112,16 +136,31 @@ export function registerInventoryRoutes(
           case "FORBIDDEN":
             return response(403, "FORBIDDEN", "The request is not authorized.");
           case "CATALOG_ITEM_UNAVAILABLE":
-            return response(404, "NOT_FOUND", "The requested resource was not found.");
+            return response(
+              404,
+              "NOT_FOUND",
+              "The requested resource was not found.",
+            );
           case "INSUFFICIENT_STOCK":
-            return response(409, "INSUFFICIENT_STOCK", "Stock cannot be reduced below active reservations.");
+            return response(
+              409,
+              "INSUFFICIENT_STOCK",
+              "Stock cannot be reduced below active reservations.",
+            );
           case "IDEMPOTENCY_CONFLICT":
-            return response(409, "CONFLICT", "The idempotency key was used for a different stock movement.");
+            return response(
+              409,
+              "CONFLICT",
+              "The idempotency key was used for a different stock movement.",
+            );
           case "CREATED":
           case "EXISTING":
             return {
               statusCode: adjustment.outcome === "CREATED" ? 201 : 200,
-              body: { movementId: adjustment.movementId, stock: adjustment.stock },
+              body: {
+                movementId: adjustment.movementId,
+                stock: adjustment.stock,
+              },
             };
         }
       },

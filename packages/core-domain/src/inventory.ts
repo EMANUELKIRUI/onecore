@@ -19,10 +19,7 @@ export type InventoryReservationStatus = z.infer<
 
 export const inventoryStockQuerySchema = z
   .object({
-    catalogItemId: z.union([
-      z.uuid(),
-      z.array(z.uuid()).min(1).max(100),
-    ]),
+    catalogItemId: z.union([z.uuid(), z.array(z.uuid()).min(1).max(100)]),
   })
   .strict()
   .transform(({ catalogItemId }) => ({
@@ -37,12 +34,16 @@ export const inventoryAdjustmentInputSchema = z
   .object({
     catalogItemId: z.uuid(),
     movementType: z.enum(["RECEIPT", "ADJUSTMENT"]),
-    delta: z.number().int().min(-1_000_000).max(1_000_000).refine((value) => value !== 0),
+    delta: z
+      .number()
+      .int()
+      .min(-1_000_000)
+      .max(1_000_000)
+      .refine((value) => value !== 0),
   })
   .strict()
   .refine(
-    ({ movementType, delta }) =>
-      movementType !== "RECEIPT" || delta > 0,
+    ({ movementType, delta }) => movementType !== "RECEIPT" || delta > 0,
     { path: ["delta"], message: "Receipts must add a positive quantity." },
   );
 

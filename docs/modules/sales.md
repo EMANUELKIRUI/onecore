@@ -2,11 +2,13 @@
 
 ## Status
 
-**IMPLEMENTED - DISPOSABLE DATABASE/API TESTS PASSED; MIGRATION APPLICATION AND DEPLOYMENT VERIFICATION PENDING.**
+**IMPLEMENTED — API, DATABASE, AND DISPOSABLE BROWSER/API JOURNEY VERIFIED LOCALLY; TARGET MIGRATION AND DEPLOYMENT VERIFICATION PENDING.**
 
-This is a limited sales-recording foundation, not a complete checkout,
-inventory, payment, accounting, or receipt system. The POS frontend is not wired
-to these endpoints.
+This is a limited sales-recording and stock-reservation foundation, not a
+complete payment, accounting, or receipt system. The Business POS calls these
+endpoints. The local Playwright journey verified checkout and an uncertain
+request retry against the real API and disposable PostgreSQL; it does not verify
+a deployed frontend, API, or database.
 
 ## Domain and lifecycle
 
@@ -87,21 +89,26 @@ keys remain independent database boundaries. Catalog rows are read under
 shared locks and validated for active status, tenant, branch applicability,
 and common currency before snapshots and exact totals are persisted.
 
-The sale, lines, `SALE_CREATED` outbox event, and audit records commit in one
-transaction. Same-key concurrent requests converge on the unique idempotency
-record; a failed line or outbox write rolls the whole transaction back. The
-event contains only sale ID and line count. It does not signal payment or
-finalization.
+The sale, lines, product stock reservations and reservation movements,
+`SALE_CREATED` outbox event, and audit records commit in one transaction.
+Same-key concurrent requests converge on the unique idempotency record; an
+insufficient-stock, line, reservation, or outbox failure rolls the transaction
+back. The event contains only sale ID and line count. It does not signal
+payment or finalization.
 
 ## Unsupported behavior
 
-No authoritative inventory model exists. Checkout does not reserve, decrement,
-or validate stock and cannot guarantee against overselling. No payment provider
-is integrated; the API accepts no card data and never marks a sale paid. Tax,
-discount, accounting, receipt-numbering, payment, refund, reconciliation,
-and offline retry policies require explicit business decisions and future
-implementations. A receipt endpoint is not available because no sale can be
-finalized.
+The inventory foundation tracks branch stock balances, receipt/adjustment
+movements, and product reservations created by sales. Reservations reduce
+available stock and insufficient availability rejects checkout. This is not a
+full Inventory module: purchasing, suppliers, valuation/costing,
+replenishment, and broader stock workflows are not implemented.
+
+No payment provider is integrated; the API accepts no card data and never
+marks a sale paid. Tax, discount, accounting, receipt numbering, payment,
+refund, reconciliation, and offline policies require explicit decisions and
+future implementation. The only supported sale state is `OPEN` (unpaid); a
+receipt endpoint is unavailable.
 
 The generated migration has been replayed by disposable PGlite tests only. No
 external migration ledger, production database, or deployment was inspected

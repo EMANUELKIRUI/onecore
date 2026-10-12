@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { fileURLToPath, URL } from "node:url";
-import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL, URL } from "node:url";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import process from "node:process";
 import { Algorithm, hash as hashPassword } from "@node-rs/argon2";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { chromium, expect } from "playwright/test";
 import { moduleManifestSchema } from "@onecore/core-domain";
+import { generateTotpCode } from "../services/api/dist/identity-security.js";
 import {
   branches,
   createDatabase,
@@ -21,6 +23,7 @@ import {
   modules,
   organizationMemberships,
   organizationModules,
+  ownerCredentialSetupTokens,
   organizations,
   permissions,
   planModules,
@@ -28,6 +31,7 @@ import {
   plans,
   rolePermissions,
   roles,
+  sessions,
   subscriptionItems,
   subscriptions,
   users,
@@ -39,6 +43,7 @@ const databasePassword = "onecore_e2e_only";
 const appPassword = "onecore_app_test";
 const migratorPassword = "onecore_migrator_test";
 const workerPassword = "onecore_worker_test";
+const mfaEncryptionKey = randomBytes(32).toString("base64url");
 const testPassword = "Synthetic-E2E-Password-2026";
 const organizationName = "Isolated E2E Organization";
 const ownerEmail = "e2e-owner@onecore.test";
@@ -47,6 +52,7 @@ const viewerEmail = "e2e-viewer@onecore.test";
 const foreignEmail = "e2e-foreign@onecore.test";
 const platformAdminEmail = "e2e-platform-admin@onecore.test";
 const applicationOwnerEmail = "e2e-new-owner@onecore.test";
+const e2eMfaSecrets = new Map();
 const branchPermissionKeys = [
   "core.organization.branch.read",
   "core.organization.branch.create",
@@ -60,6 +66,9 @@ const expectedMigrationNames = [
   "20261010030000_membership_branch_assignment_contract",
   "20261010040000_branch_permission_backfill_repair",
   "20261010140000_session_revoked_at_insert_grant",
+  "20261012092151_orange_proudstar",
+  "20261012092652_safe_iron_lad",
+  "20261012110014_owner_credential_setup",
 ];
 const ownerPermissionKeys = [
   ...branchPermissionKeys,
@@ -287,7 +296,8 @@ async function createFixture(database) {
       code: "E2E-SALES",
     })
     .returning();
-  if (!checkoutBranch) throw new Error("Checkout branch fixture was not created");
+  if (!checkoutBranch)
+    throw new Error("Checkout branch fixture was not created");
 
   const allModuleRows = await database.select().from(modules);
   const coreModuleRows = await database
@@ -557,10 +567,12 @@ function createFrontendServer(apiPort) {
   const superadminRoot = resolve(root, "apps/superadmin");
   const uiModuleRoot = resolve(root, "packages/ui/src");
   const uiModules = new Map(
-    ["api-client.js", "elements.js", "localization.js"].map((fileName) => [
-      `/packages/ui/src/${fileName}`,
-      resolve(uiModuleRoot, fileName),
-    ]),
+    ["api-client.js", "elements.js", "localization.js", "mfa-login.js"].map(
+      (fileName) => [
+        `/packages/ui/src/${fileName}`,
+        resolve(uiModuleRoot, fileName),
+      ],
+    ),
   );
   const appModules = new Map(
     ["pos.js", "inventory.js"].map((fileName) => [
@@ -569,9 +581,21 @@ function createFrontendServer(apiPort) {
     ]),
   );
   const auxiliaryFiles = new Map([
-    ["/register/", [resolve(registrationRoot, "index.html"), "text/html; charset=utf-8"]],
-    ["/register/index.html", [resolve(registrationRoot, "index.html"), "text/html; charset=utf-8"]],
-    ["/register/registration.js", [resolve(registrationRoot, "registration.js"), "text/javascript; charset=utf-8"]],
+    [
+      "/register/",
+      [resolve(registrationRoot, "index.html"), "text/html; charset=utf-8"],
+    ],
+    [
+      "/register/index.html",
+      [resolve(registrationRoot, "index.html"), "text/html; charset=utf-8"],
+    ],
+    [
+      "/register/registration.js",
+      [
+        resolve(registrationRoot, "registration.js"),
+        "text/javascript; charset=utf-8",
+      ],
+    ],
     [
       "/register/application-response.js",
       [
@@ -579,9 +603,26 @@ function createFrontendServer(apiPort) {
         "text/javascript; charset=utf-8",
       ],
     ],
-    ["/superadmin/", [resolve(superadminRoot, "index.html"), "text/html; charset=utf-8"]],
-    ["/superadmin/index.html", [resolve(superadminRoot, "index.html"), "text/html; charset=utf-8"]],
-    ["/superadmin/app.js", [resolve(superadminRoot, "app.js"), "text/javascript; charset=utf-8"]],
+    [
+      "/superadmin/",
+      [resolve(superadminRoot, "index.html"), "text/html; charset=utf-8"],
+    ],
+    [
+      "/superadmin/index.html",
+      [resolve(superadminRoot, "index.html"), "text/html; charset=utf-8"],
+    ],
+    [
+      "/superadmin/app.js",
+      [resolve(superadminRoot, "app.js"), "text/javascript; charset=utf-8"],
+    ],
+    [
+      "/setup.html",
+      [resolve(frontendRoot, "setup.html"), "text/html; charset=utf-8"],
+    ],
+    [
+      "/setup.js",
+      [resolve(frontendRoot, "setup.js"), "text/javascript; charset=utf-8"],
+    ],
   ]);
   const stylesheetPath = resolve(root, "packages/ui/styles.css");
   const frontend = createServer(async (request, response) => {
@@ -669,6 +710,64 @@ function loginSelectors(page) {
   };
 }
 
+async function completeMfaLogin(page, loginResponse, accountEmail) {
+  assert.equal(
+    loginResponse.status(),
+    403,
+    `privileged login should require MFA; received HTTP ${loginResponse.status()}`,
+  );
+  const loginBody = await loginResponse.json();
+  assert.equal(loginBody.mfa?.required, true);
+  assert.equal(loginBody.mfa?.method, "totp");
+  assert.ok(
+    ["enrollment_required", "challenge_required"].includes(
+      loginBody.mfa?.status,
+    ),
+  );
+  const enrollment = loginBody.mfa.status === "enrollment_required";
+  const codeField = page.getByLabel("Authenticator code");
+  await expect(codeField).toBeVisible();
+
+  if (enrollment) {
+    const provisioningUri = await page
+      .locator('a[href^="otpauth://totp/"]')
+      .getAttribute("href");
+    assert.ok(provisioningUri?.startsWith("otpauth://totp/"));
+    const secret = new URL(provisioningUri).searchParams.get("secret");
+    assert.ok(secret);
+    e2eMfaSecrets.set(accountEmail, secret);
+    await codeField.fill(generateTotpCode(secret));
+  } else {
+    const secret = e2eMfaSecrets.get(accountEmail);
+    assert.ok(
+      secret,
+      `No E2E authenticator secret is available for ${accountEmail}`,
+    );
+    await codeField.fill(generateTotpCode(secret));
+  }
+
+  const verificationPath = enrollment
+    ? "/api/auth/mfa/enroll"
+    : "/api/auth/mfa/challenge";
+  const verificationResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(verificationPath) &&
+      response.request().method() === "POST",
+  );
+  await page
+    .getByRole("button", {
+      name: enrollment ? "Verify and finish setup" : "Verify and sign in",
+    })
+    .click();
+  const response = await verificationResponse;
+  assert.equal(
+    response.status(),
+    200,
+    `MFA verification failed with HTTP ${response.status()}`,
+  );
+  return response;
+}
+
 async function login(page, email, webOrigin, branchId) {
   const selectors = loginSelectors(page);
   await selectors.email.fill(email);
@@ -679,7 +778,10 @@ async function login(page, email, webOrigin, branchId) {
       response.request().method() === "POST",
   );
   await selectors.submit.click();
-  const response = await loginResponse;
+  let response = await loginResponse;
+  if (response.status() === 403) {
+    response = await completeMfaLogin(page, response, email);
+  }
   const sanitizedResponse = await response
     .json()
     .then((body) =>
@@ -730,7 +832,7 @@ async function verifyMigrationEvidence(adminDatabase) {
   assert.deepEqual(
     ledgerRows.map((row) => row.name),
     expectedMigrationNames,
-    "the four intended test migrations were recorded exactly once",
+    "the intended test migrations were recorded exactly once",
   );
   const security = await adminDatabase.execute(
     sql`
@@ -739,12 +841,12 @@ async function verifyMigrationEvidence(adminDatabase) {
       FROM pg_class c
       JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public'
-        AND c.relname IN ('roles', 'role_permissions', 'branches', 'membership_branches', 'sessions')
+        AND c.relname IN ('roles', 'role_permissions', 'branches', 'membership_branches', 'sessions', 'owner_credential_setup_tokens')
       ORDER BY c.relname
     `,
   );
   const securityRows = resultRows(security);
-  assert.equal(securityRows.length, 5);
+  assert.equal(securityRows.length, 6);
   assert.ok(
     securityRows.every(
       (row) =>
@@ -756,7 +858,7 @@ async function verifyMigrationEvidence(adminDatabase) {
       SELECT count(*)::int AS total
       FROM pg_policies
       WHERE schemaname = 'public'
-        AND tablename IN ('roles', 'role_permissions', 'branches', 'membership_branches')
+        AND tablename IN ('roles', 'role_permissions', 'branches', 'membership_branches', 'owner_credential_setup_tokens')
     `,
   );
   const policyRows = resultRows(policies);
@@ -842,10 +944,14 @@ async function verifyMigrationEvidence(adminDatabase) {
 
 let containerId;
 let adminConnection;
+let adminRootConnection;
 let apiProcess;
 let apiOutput = "";
 let browser;
 let frontend;
+let screenshotDirectory;
+let emailCaptureDirectory;
+let emailCapturePath;
 
 try {
   if (process.env.NODE_ENV === "production" || process.env.DATABASE_URL) {
@@ -853,6 +959,14 @@ try {
       "E2E runner refuses production mode or an inherited DATABASE_URL",
     );
   }
+
+  screenshotDirectory = await mkdtemp(
+    resolve(tmpdir(), "onecore-business-e2e-screenshots-"),
+  );
+  emailCaptureDirectory = await mkdtemp(
+    resolve(tmpdir(), "onecore-owner-setup-e2e-"),
+  );
+  emailCapturePath = join(emailCaptureDirectory, "provider-messages.jsonl");
 
   const repositoryChanges = run("git", ["status", "--porcelain"]);
   if (!repositoryChanges) {
@@ -898,6 +1012,7 @@ try {
   const adminRoot = createDatabase(`${adminBase}/postgres`, {
     maxConnections: 1,
   });
+  adminRootConnection = adminRoot;
   await waitFor(async () => {
     try {
       await adminRoot.db.execute(sql`SELECT 1`);
@@ -925,6 +1040,7 @@ try {
     sql.raw("CREATE DATABASE onecore_e2e OWNER onecore_migrator"),
   );
   await adminRoot.close();
+  adminRootConnection = undefined;
 
   const adminUrl = `${adminBase}/onecore_e2e`;
   const admin = createDatabase(adminUrl, { maxConnections: 1 });
@@ -955,20 +1071,33 @@ try {
     frontend.listen(webPort, "127.0.0.1", resolvePromise);
   });
 
-  apiProcess = spawn(process.execPath, ["services/api/dist/server.js"], {
-    cwd: root,
-    env: {
-      ...process.env,
-      NODE_ENV: "test",
-      HOST: "127.0.0.1",
-      PORT: String(apiPort),
-      LOG_LEVEL: "error",
-      DATABASE_URL: `postgres://onecore_app:${appPassword}@127.0.0.1:${mappedPort}/onecore_e2e`,
-      AUTH_ALLOWED_ORIGINS: webOrigin,
-      AUTH_LOGIN_RATE_LIMIT_MAX: "20",
+  apiProcess = spawn(
+    process.execPath,
+    [
+      "--import",
+      pathToFileURL(resolve(root, "scripts/mock-resend-provider.mjs")).href,
+      "services/api/dist/server.js",
+    ],
+    {
+      cwd: root,
+      env: {
+        ...process.env,
+        NODE_ENV: "test",
+        HOST: "127.0.0.1",
+        PORT: String(apiPort),
+        LOG_LEVEL: "error",
+        DATABASE_URL: `postgres://onecore_app:${appPassword}@127.0.0.1:${mappedPort}/onecore_e2e`,
+        AUTH_ALLOWED_ORIGINS: webOrigin,
+        BUSINESS_APP_ORIGIN: "https://business.example.test",
+        AUTH_LOGIN_RATE_LIMIT_MAX: "20",
+        MFA_ENCRYPTION_KEY: mfaEncryptionKey,
+        RESEND_API_KEY: "re_onecore_e2e_mock_only",
+        RESEND_FROM_EMAIL: "no-reply@onecore.test",
+        ONECORE_E2E_EMAIL_CAPTURE_PATH: emailCapturePath,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
     },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  );
   apiProcess.stdout.on("data", (chunk) => {
     apiOutput = `${apiOutput}${chunk}`.slice(-8_000);
   });
@@ -1003,15 +1132,29 @@ try {
   );
 
   const registrationPage = await context.newPage();
+  let submittedApplication;
+  registrationPage.on("request", (request) => {
+    if (
+      request.url().endsWith("/api/public/organization-applications") &&
+      request.method() === "POST"
+    ) {
+      submittedApplication = request.postDataJSON();
+    }
+  });
   await registrationPage.goto(`${webOrigin}/register/`);
   await expect(
     registrationPage.getByRole("heading", {
       name: "Request a Business Account",
     }),
   ).toBeVisible();
-  await registrationPage.getByLabel("Organization name").fill(
-    "E2E Registration Applicant Ltd.",
-  );
+  await registrationPage.getByRole("button", { name: "Continue" }).click();
+  await expect(registrationPage.locator("#registration-message")).toBeVisible();
+  await expect(
+    registrationPage.getByRole("heading", { name: "Business information" }),
+  ).toBeVisible();
+  await registrationPage
+    .getByLabel("Organization name")
+    .fill("E2E Registration Applicant Ltd.");
   await registrationPage
     .getByLabel("Organization reference")
     .fill("e2e-registration-applicant");
@@ -1019,9 +1162,7 @@ try {
   await registrationPage
     .getByLabel("Business email")
     .fill("e2e-registration-business@onecore.test");
-  await registrationPage
-    .getByLabel("Business phone")
-    .fill("+254700000099");
+  await registrationPage.getByLabel("Business phone").fill("+254700000099");
   await registrationPage.getByLabel("Country code (e.g. KE)").fill("KE");
   await registrationPage.getByLabel("County / region").fill("Nairobi");
   await registrationPage.getByLabel("Town / city").fill("Nairobi");
@@ -1030,9 +1171,7 @@ try {
   await registrationPage
     .getByLabel("Owner / administrator name")
     .fill("E2E Application Owner");
-  await registrationPage
-    .getByLabel("Owner email")
-    .fill(applicationOwnerEmail);
+  await registrationPage.getByLabel("Owner email").fill(applicationOwnerEmail);
   await registrationPage.getByRole("button", { name: "Continue" }).click();
   const requestedBusinessManager = registrationPage.locator(
     'input[name="requestedModules"][value="core.business_manager"]',
@@ -1064,8 +1203,25 @@ try {
   await expect(registrationPage.locator("body")).toContainText(
     "does not create an owner login",
   );
+  assert.ok(submittedApplication);
+  const duplicateRegistration = await registrationPage.evaluate(
+    async (application) => {
+      const response = await globalThis.fetch(
+        "/api/public/organization-applications",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(application),
+        },
+      );
+      return { status: response.status, body: await response.json() };
+    },
+    submittedApplication,
+  );
+  assert.equal(duplicateRegistration.status, 409);
+  assert.equal(duplicateRegistration.body.error.code, "CONFLICT");
   globalThis.console.info(
-    "PASS: browser registration reaches the real API and returns a pending application without owner credentials",
+    "PASS: browser registration validates required fields, persists a pending request without owner credentials, and rejects duplicate submissions",
   );
 
   const adminContext = await browser.newContext();
@@ -1080,7 +1236,10 @@ try {
   });
   adminPage.on("request", (request) => {
     if (request.url().includes("/platform/organization-applications")) {
-      adminLifecycleRequests.push({ method: request.method(), url: request.url() });
+      adminLifecycleRequests.push({
+        method: request.method(),
+        url: request.url(),
+      });
     }
   });
   adminPage.on("response", (response) => {
@@ -1093,9 +1252,19 @@ try {
   await adminPage.goto(`${webOrigin}/superadmin/`);
   await adminPage.getByLabel("Email address").fill(platformAdminEmail);
   await adminPage.locator("#login-password").fill(testPassword);
+  const adminLoginResponse = adminPage.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/auth/login") &&
+      response.request().method() === "POST",
+  );
   await adminPage
     .getByRole("button", { name: "Sign in to administration" })
     .click();
+  await completeMfaLogin(
+    adminPage,
+    await adminLoginResponse,
+    platformAdminEmail,
+  );
   await expect(adminPage.locator("#app-view")).toBeVisible();
   await adminPage.locator('[data-admin-view="requests"]').click();
   await adminPage
@@ -1120,8 +1289,10 @@ try {
       exact: true,
     }),
   ).toBeVisible();
-  await expect(adminPage.locator("body")).toContainText(
-    "Approving an application records the review decision. It does not activate an organization or create owner credentials.",
+  await expect(
+    adminPage.locator('[aria-labelledby="review-boundary-title"]'),
+  ).toContainText(
+    "Approving an application records the review decision. It does not activate an organization.",
   );
   const approveButton = adminPage
     .locator("#request-detail")
@@ -1139,8 +1310,11 @@ try {
   const approvalResponse = await approvalResponsePromise;
   assert.equal(approvalResponse.status(), 200);
   assert.equal((await approvalResponse.json()).application.status, "APPROVED");
+  await expect(adminPage.locator("#request-detail")).toContainText(
+    "core.business_manager",
+  );
   const applicationOrganization = await admin.db
-    .select({ status: organizations.status })
+    .select({ id: organizations.id, status: organizations.status })
     .from(organizations)
     .where(eq(organizations.slug, "e2e-registration-applicant"))
     .limit(1);
@@ -1153,6 +1327,278 @@ try {
   assert.deepEqual(applicationOwner, []);
   globalThis.console.info(
     "PASS: Superadmin review and approval persist APPROVED without activation or owner-account provisioning",
+  );
+  await expect(
+    adminPage.getByRole("button", {
+      name: "Activate & provision Owner",
+      exact: true,
+    }),
+  ).toBeVisible();
+  const provisionResponsePromise = adminPage.waitForResponse(
+    (response) =>
+      response.url().includes("/platform/organization-applications/") &&
+      response.url().endsWith("/provision") &&
+      response.request().method() === "POST",
+  );
+  const ownerInvitationResponsePromise = adminPage.waitForResponse(
+    (response) =>
+      response.url().endsWith("/owner-invitation") &&
+      response.request().method() === "POST",
+  );
+  await adminPage
+    .getByRole("button", {
+      name: "Activate & provision Owner",
+      exact: true,
+    })
+    .click();
+  const provisionResponse = await provisionResponsePromise;
+  const ownerInvitationResponse = await ownerInvitationResponsePromise;
+  assert.equal(provisionResponse.status(), 200);
+  assert.equal(ownerInvitationResponse.status(), 202);
+  assert.equal(
+    (await ownerInvitationResponse.json()).invitation.status,
+    "QUEUED",
+  );
+  const provisionResult = await provisionResponse.json();
+  assert.equal(provisionResult.application.status, "ACTIVE");
+  assert.equal(provisionResult.owner.accountStatus, "PENDING");
+  assert.equal(provisionResult.owner.membershipStatus, "INVITED");
+  assert.equal(provisionResult.owner.credentialSetup, "PENDING_INVITATION");
+  const activatedApplication = await admin.db
+    .select({ id: organizations.id, status: organizations.status })
+    .from(organizations)
+    .where(eq(organizations.id, applicationOrganization[0].id))
+    .limit(1);
+  assert.deepEqual(activatedApplication, [
+    { id: applicationOrganization[0].id, status: "ACTIVE" },
+  ]);
+  const provisionedOwner = await admin.db
+    .select({
+      id: users.id,
+      status: users.status,
+      passwordHash: users.passwordHash,
+      emailVerifiedAt: users.emailVerifiedAt,
+    })
+    .from(users)
+    .where(eq(users.email, applicationOwnerEmail))
+    .limit(1);
+  assert.equal(provisionedOwner.length, 1);
+  assert.equal(provisionedOwner[0].status, "PENDING");
+  assert.equal(provisionedOwner[0].passwordHash, null);
+  assert.equal(provisionedOwner[0].emailVerifiedAt, null);
+  const provisionedMembership = await admin.db
+    .select({
+      id: organizationMemberships.id,
+      status: organizationMemberships.status,
+    })
+    .from(organizationMemberships)
+    .where(
+      eq(organizationMemberships.organizationId, applicationOrganization[0].id),
+    );
+  assert.equal(provisionedMembership.length, 1);
+  assert.equal(provisionedMembership[0].status, "INVITED");
+  const assignedOwnerRole = await admin.db
+    .select({ name: roles.name })
+    .from(membershipRoles)
+    .innerJoin(
+      roles,
+      and(
+        eq(roles.organizationId, membershipRoles.organizationId),
+        eq(roles.id, membershipRoles.roleId),
+      ),
+    )
+    .where(eq(membershipRoles.membershipId, provisionedMembership[0].id));
+  assert.deepEqual(assignedOwnerRole, [{ name: "Organization Owner" }]);
+  const provisionedEntitlements = await admin.db
+    .select({
+      key: modules.key,
+      status: organizationModules.status,
+    })
+    .from(organizationModules)
+    .innerJoin(modules, eq(modules.id, organizationModules.moduleId))
+    .where(
+      eq(organizationModules.organizationId, applicationOrganization[0].id),
+    );
+  assert.deepEqual(provisionedEntitlements, [
+    { key: "core.business_manager", status: "ENABLED" },
+  ]);
+  const retryProvision = await adminPage.evaluate(async (reference) => {
+    const response = await globalThis.fetch(
+      `/api/platform/organization-applications/${encodeURIComponent(reference)}/provision`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      },
+    );
+    return { status: response.status, body: await response.json() };
+  }, applicationOrganization[0].id);
+  assert.equal(retryProvision.status, 200);
+  assert.equal(
+    retryProvision.body.owner.membershipId,
+    provisionResult.owner.membershipId,
+  );
+  const emailPayload = JSON.parse(
+    (await readFile(emailCapturePath, "utf8")).trim().split("\n").at(-1),
+  );
+  assert.equal(emailPayload.to[0], applicationOwnerEmail);
+  const setupToken = emailPayload.text.match(
+    /https:\/\/business\.example\.test\/setup\.html#token=([A-Za-z0-9_-]{43})/,
+  )?.[1];
+  assert.ok(setupToken, "mock provider captured an Owner setup link");
+  const ownerSessions = await admin.db
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(eq(sessions.userId, provisionedOwner[0].id));
+  assert.deepEqual(ownerSessions, []);
+  const ownerPage = await context.newPage();
+  await ownerPage.goto(webOrigin);
+  const ownerLogin = await ownerPage.evaluate(async (email) => {
+    const response = await globalThis.fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email,
+        password: "synthetic-password-not-set-for-invited-owner",
+      }),
+    });
+    return { status: response.status, body: await response.json() };
+  }, applicationOwnerEmail);
+  assert.equal(ownerLogin.status, 401);
+  assert.equal(
+    ownerLogin.body.error.message,
+    "Email or password is incorrect.",
+  );
+  await ownerPage.goto(`${webOrigin}/setup.html#token=${setupToken}`);
+  await expect(
+    ownerPage.getByRole("heading", { name: "Choose your password" }),
+  ).toBeVisible();
+  assert.equal(new URL(ownerPage.url()).hash, "");
+  await ownerPage.getByLabel("New password").fill(testPassword);
+  await ownerPage.getByLabel("Confirm password").fill(testPassword);
+  const setupResponsePromise = ownerPage.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/auth/owner-credential-setup") &&
+      response.request().method() === "POST",
+  );
+  await ownerPage.getByRole("button", { name: "Set password" }).click();
+  const setupResponse = await setupResponsePromise;
+  const setupResponseBody = await setupResponse.json();
+  assert.equal(
+    setupResponse.status(),
+    200,
+    `${JSON.stringify(setupResponseBody)}\n${apiOutput}`,
+  );
+  assert.equal(setupResponseBody.nextStep, "SIGN_IN_AND_ENROLL_MFA");
+  assert.equal(setupResponse.headers()["set-cookie"], undefined);
+  const rawTokenReuse = await ownerPage.evaluate(
+    async ({ token, password }) => {
+      const response = await globalThis.fetch(
+        "/api/auth/owner-credential-setup",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token, password }),
+        },
+      );
+      return response.status;
+    },
+    { token: setupToken, password: testPassword },
+  );
+  assert.equal(rawTokenReuse, 400);
+  const setupTokenRows = await admin.db
+    .select({
+      tokenHash: ownerCredentialSetupTokens.tokenHash,
+      consumedAt: ownerCredentialSetupTokens.consumedAt,
+      revokedAt: ownerCredentialSetupTokens.revokedAt,
+    })
+    .from(ownerCredentialSetupTokens)
+    .where(eq(ownerCredentialSetupTokens.userId, provisionedOwner[0].id));
+  assert.equal(setupTokenRows.length, 1);
+  assert.equal(
+    setupTokenRows[0].tokenHash,
+    createHash("sha256").update(setupToken).digest("hex"),
+  );
+  assert.ok(setupTokenRows[0].consumedAt);
+  const activatedOwner = await admin.db
+    .select({
+      status: users.status,
+      passwordHash: users.passwordHash,
+      emailVerifiedAt: users.emailVerifiedAt,
+    })
+    .from(users)
+    .where(eq(users.id, provisionedOwner[0].id))
+    .limit(1);
+  assert.equal(activatedOwner[0].status, "ACTIVE");
+  assert.ok(activatedOwner[0].passwordHash);
+  assert.ok(activatedOwner[0].emailVerifiedAt);
+  const acceptedMembership = await admin.db
+    .select({ status: organizationMemberships.status })
+    .from(organizationMemberships)
+    .where(eq(organizationMemberships.id, provisionedMembership[0].id));
+  assert.deepEqual(acceptedMembership, [{ status: "ACTIVE" }]);
+  await ownerPage.goto(webOrigin);
+  const ownerLoginResponse = ownerPage.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/auth/login") &&
+      response.request().method() === "POST",
+  );
+  await ownerPage.getByLabel("Email address").fill(applicationOwnerEmail);
+  await ownerPage.locator("#login-password").fill(testPassword);
+  await ownerPage.getByRole("button", { name: "Sign in to OneCore" }).click();
+  await completeMfaLogin(
+    ownerPage,
+    await ownerLoginResponse,
+    applicationOwnerEmail,
+  );
+  await expect(ownerPage.locator("#app-view")).toBeVisible();
+  await ownerPage.locator("#organization-select").selectOption({
+    label: "E2E Registration Applicant Ltd.",
+  });
+  await expect(ownerPage.locator("#sidebar-organization")).toHaveText(
+    "E2E Registration Applicant Ltd.",
+  );
+  const ownerSessionAssurance = await admin.db
+    .select({
+      organizationId: sessions.organizationId,
+      mfaVerifiedAt: sessions.mfaVerifiedAt,
+    })
+    .from(sessions)
+    .where(eq(sessions.userId, provisionedOwner[0].id));
+  assert.equal(ownerSessionAssurance.length, 1);
+  assert.equal(
+    ownerSessionAssurance[0].organizationId,
+    applicationOrganization[0].id,
+  );
+  assert.ok(ownerSessionAssurance[0].mfaVerifiedAt);
+  const crossTenantResponse = await ownerPage.evaluate(
+    async (organizationId) => {
+      const response = await globalThis.fetch(
+        `/api/organizations/${encodeURIComponent(organizationId)}/business/customers`,
+      );
+      return response.status;
+    },
+    fixture.organizationId,
+  );
+  assert.equal(crossTenantResponse, 403);
+  globalThis.console.info(
+    "PASS: first Owner uses a mocked invitation email, single-use setup activates the account, mandatory MFA precedes session issuance, and sign-in selects only the new tenant",
+  );
+  const ownerLogoutStatus = await ownerPage.evaluate(async () => {
+    const response = await globalThis.fetch("/api/auth/logout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    return response.status;
+  });
+  assert.equal(ownerLogoutStatus, 204);
+  await ownerPage.close();
+  await expect(adminPage.locator("#requests-message")).toContainText(
+    "The email provider accepted the Owner setup invitation",
+  );
+  globalThis.console.info(
+    "PASS: Superadmin provisioning atomically activates the approved organization and requested module, creates one invited Owner, safely replays, and denies login without credential setup",
   );
   await adminContext.close();
 
@@ -1181,7 +1627,7 @@ try {
   await login(page, ownerEmail, webOrigin, fixture.checkoutBranchId);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({
-    path: "/tmp/onecore-business-overview-1440x900.png",
+    path: resolve(screenshotDirectory, "business-overview-1440x900.png"),
     fullPage: true,
   });
   globalThis.console.info(
@@ -1286,7 +1732,9 @@ try {
   await page.getByLabel("Movement type").selectOption("RECEIPT");
   await page.getByLabel("Quantity change").fill("5");
   await page.getByRole("button", { name: "Record movement" }).click();
-  await expect(page.getByText(/Stock received\. Available quantity: 5/)).toBeVisible();
+  await expect(
+    page.getByText(/Stock received\. Available quantity: 5/),
+  ).toBeVisible();
   const inventoryRow = page.getByRole("row", {
     name: /E2E Browser Product/,
   });
@@ -1301,12 +1749,16 @@ try {
   await expect(
     page.getByText(/Low-stock thresholds, category\/supplier fields/),
   ).toBeVisible();
-  await page.getByLabel("Filter inventory by stock status").selectOption("OUT_OF_STOCK");
-  await expect(page.getByText("No products on this page match the selected stock status.")).toBeVisible();
+  await page
+    .getByLabel("Filter inventory by stock status")
+    .selectOption("OUT_OF_STOCK");
+  await expect(
+    page.getByText("No products on this page match the selected stock status."),
+  ).toBeVisible();
   await page.getByLabel("Filter inventory by stock status").selectOption("ALL");
   await expect(inventoryRow).toBeVisible();
   await page.screenshot({
-    path: "/tmp/onecore-inventory-desktop-1440x900.png",
+    path: resolve(screenshotDirectory, "inventory-desktop-1440x900.png"),
     fullPage: true,
   });
   await page.setViewportSize({ width: 320, height: 700 });
@@ -1325,7 +1777,7 @@ try {
     "Inventory layout should not overflow the page at 320px",
   );
   await page.screenshot({
-    path: "/tmp/onecore-inventory-mobile-320x700.png",
+    path: resolve(screenshotDirectory, "inventory-mobile-320x700.png"),
     fullPage: true,
   });
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -1354,12 +1806,15 @@ try {
     "whole-number quantity greater than zero",
   );
   await page.screenshot({
-    path: "/tmp/onecore-pos-desktop-1280x900.png",
+    path: resolve(screenshotDirectory, "pos-desktop-1280x900.png"),
     fullPage: true,
   });
   for (const viewport of [
-    { width: 820, height: 900 },
+    { width: 1440, height: 900 },
+    { width: 1280, height: 800 },
+    { width: 768, height: 1024 },
     { width: 390, height: 844 },
+    { width: 320, height: 700 },
   ]) {
     await page.setViewportSize(viewport);
     await expect(draftCart).toBeVisible();
@@ -1373,7 +1828,10 @@ try {
       `POS layout should not overflow at ${viewport.width}px`,
     );
     await page.screenshot({
-      path: `/tmp/onecore-pos-${viewport.width}x${viewport.height}.png`,
+      path: resolve(
+        screenshotDirectory,
+        `pos-${viewport.width}x${viewport.height}.png`,
+      ),
       fullPage: true,
     });
   }
@@ -1392,7 +1850,11 @@ try {
     },
     { organizationId: fixture.organizationId, catalogItemId },
   );
-  assert.equal(changedServerPrice.status, 200, JSON.stringify(changedServerPrice.body));
+  assert.equal(
+    changedServerPrice.status,
+    200,
+    JSON.stringify(changedServerPrice.body),
+  );
 
   const checkoutAttempts = [];
   let firstCheckoutSaleId;
@@ -1440,7 +1902,9 @@ try {
   await expect(retryButton).toBeEnabled();
   const checkoutResponsePromise = page.waitForResponse(
     (response) =>
-      response.url().endsWith(`/organizations/${fixture.organizationId}/sales`) &&
+      response
+        .url()
+        .endsWith(`/organizations/${fixture.organizationId}/sales`) &&
       response.request().method() === "POST",
   );
   await retryButton.click();
@@ -1558,7 +2022,9 @@ try {
   });
   await expect(salesRow).toContainText("OPEN");
   await expect(salesRow).toContainText("57.750003 KES");
-  await salesRow.getByRole("button", { name: `View sale ${firstCheckoutSaleId}` }).click();
+  await salesRow
+    .getByRole("button", { name: `View sale ${firstCheckoutSaleId}` })
+    .click();
   await expect(page.locator("#boundary-content")).toContainText(
     "This sale is unpaid. Payment completion and receipt issuance are not supported",
   );
@@ -1581,7 +2047,9 @@ try {
   await expect(page.locator("#boundary-content")).toContainText(
     "A distinct company CRM model and API are not available",
   );
-  await page.getByRole("link", { name: "Open supported customer records" }).click();
+  await page
+    .getByRole("link", { name: "Open supported customer records" })
+    .click();
   await expect(page.locator("#boundary-title")).toHaveText("Customers");
   globalThis.console.info(
     "PASS: inventory and unpaid Sales history use persisted APIs; unsupported Finance, CRM Companies, HR, and Payroll routes are explicit and Companies links to supported customer records",
@@ -1590,19 +2058,18 @@ try {
   const viewerContext = await browser.newContext();
   const viewerPosPage = await viewerContext.newPage();
   await viewerPosPage.goto(webOrigin);
-  await login(
-    viewerPosPage,
-    viewerEmail,
-    webOrigin,
-    fixture.checkoutBranchId,
-  );
+  await login(viewerPosPage, viewerEmail, webOrigin, fixture.checkoutBranchId);
   await viewerPosPage.locator("#pos-nav").click();
   await viewerPosPage.getByLabel("Search catalog").fill("E2E Browser Product");
-  await viewerPosPage.getByRole("button", { name: "Search", exact: true }).click();
+  await viewerPosPage
+    .getByRole("button", { name: "Search", exact: true })
+    .click();
   const viewerProduct = viewerPosPage
     .locator(".oc-pos-product")
     .filter({ hasText: "E2E Browser Product" });
-  await expect(viewerProduct.getByRole("button", { name: "Add to draft" })).toBeVisible();
+  await expect(
+    viewerProduct.getByRole("button", { name: "Add to draft" }),
+  ).toBeVisible();
   await viewerProduct.getByRole("button", { name: "Add to draft" }).click();
   const viewerCart = viewerPosPage.locator(".oc-pos-cart");
   await viewerCart.getByRole("button", { name: "Create unpaid sale" }).click();
@@ -1617,7 +2084,7 @@ try {
   );
 
   globalThis.console.info(
-    "PASS: responsive viewport checks completed at 1280x720, 820x900, and 390x844 with screenshots in /tmp",
+    "PASS: responsive viewport checks completed at 1440x900, 1280x800, 768x1024, 390x844, and 320x700",
   );
   await page.locator("#products-nav").click();
   page.once("dialog", (dialog) => dialog.accept());
@@ -1992,6 +2459,7 @@ try {
     });
   }
   if (adminConnection) await adminConnection.close().catch(() => {});
+  if (adminRootConnection) await adminRootConnection.close().catch(() => {});
   if (containerId) {
     try {
       execFileSync("docker", ["stop", containerId], {
@@ -2004,5 +2472,11 @@ try {
         stdio: "ignore",
       });
     }
+  }
+  if (screenshotDirectory) {
+    await rm(screenshotDirectory, { recursive: true, force: true });
+  }
+  if (emailCaptureDirectory) {
+    await rm(emailCaptureDirectory, { recursive: true, force: true });
   }
 }

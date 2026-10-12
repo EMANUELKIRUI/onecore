@@ -91,15 +91,17 @@ remains a trusted, separate operation and is not exposed by these routes.
   `onecore_migrator` with `NOSUPERUSER NOBYPASSRLS`. The new assignment
   migration also succeeded as that role with existing Owner/Admin rows and
   left affected tables owned by the migrator with forced RLS enabled.
-- Replaying the existing `20261010020000_branch_administration_contract`
-  role-permission backfill with pre-existing system roles fails as
-  `onecore_migrator` because the cross-tenant insert violates forced RLS on
-  `role_permissions`. The forward-only
-  `20261010040000_branch_permission_backfill_repair` migration now backfills
-  the branch and membership-branch permissions one tenant at a time. Its
-  idempotency was tested against two tenants in PGlite and its tenant-scoped
-  execution was tested in disposable PostgreSQL 18.6 after the assignment
-  migration.
+- The original `20261010020000_branch_administration_contract` role-permission
+  backfill failed as `onecore_migrator` because the cross-tenant insert
+  violated forced RLS on `role_permissions`. Its repository source has been
+  corrected to set transaction-local organization context for each tenant.
+  A focused PGlite regression now verifies rollback after a simulated
+  transaction failure, repeated migration execution, exact branch and
+  membership-branch grants for existing Owner/Admin roles, empty
+  organization-scoped permission scopes, and cross-tenant visibility
+  isolation. This source change alters the migration hash; no target ledger
+  was inspected, so staging recovery remains blocked pending operator
+  reconciliation and migration-owner approval.
 - The disposable E2E database completed the ordered migrations as
   `onecore_migrator` with `NOSUPERUSER NOBYPASSRLS`; its ledger contains the
   three branch-related migrations and
@@ -113,8 +115,8 @@ remains a trusted, separate operation and is not exposed by these routes.
   runner cannot reach migration `20261010040000` if migration `20261010020000`
   is still unapplied and fails on existing roles; that predecessor must be
   reconciled based on the actual deployment ledger before continuing. Do not
-  edit the historical migration or manually advance a ledger without that
-  evidence.
+  apply the corrected historical migration to an existing target or manually
+  advance its ledger without that evidence and migration-owner approval.
 - Branch administration and membership assignment remain
   `IMPLEMENTED — VERIFICATION PENDING` because deployed migration history
   remains unreconciled. The Playwright/Chromium journey passes via
@@ -170,25 +172,39 @@ The current foundation records immutable, unpaid `OPEN` sales from active
 catalog items. It includes exact server-side totals, branch-scoped create/list/
 detail APIs, line snapshots, organization-scoped idempotency, forced RLS,
 central permission/entitlement checks, audit, and an atomic `SALE_CREATED`
-outbox event. The `core.sales` module has no automatic plan eligibility,
-organization entitlement, or role backfill; trusted product activation and
-explicit RBAC grants are still required before use.
+outbox event. The Business POS calls the API and retains the original
+idempotency key after uncertain requests. Sale creation reserves product stock
+in the same transaction; insufficient available stock rejects the sale. The
+Inventory foundation also supports branch stock reads and receipt/adjustment
+movements.
 
-There is no authoritative inventory balance or movement model, so the API does
-not reserve/decrement stock or prevent overselling. There is no payment
-provider, tax or discount policy, accounting integration, finalized sale state,
-receipt numbering, or receipt API. `OPEN` means unpaid. The POS frontend is not
-wired to the endpoint, and no successful sale should be shown by the UI until
-an authoritative API response is implemented there. For retry after an
-uncertain timeout, clients must reuse the original idempotency key.
+The local Playwright E2E journey passed against the real API and a disposable
+PostgreSQL 18.6 database. It verified POS checkout, same-key retry, persisted
+sale and stock reservation, insufficient-stock rejection, sale-history display,
+and unauthorized checkout denial. This is local integration evidence only;
+the target migration ledger, deployment permissions, deployed frontend/API,
+and production database remain unverified.
+
+The `core.sales` module has no automatic plan eligibility, organization
+entitlement, or role backfill; trusted product activation and explicit RBAC
+grants are still required before use. Inventory is not a complete module:
+purchasing, suppliers, valuation/costing, replenishment, and broader workflows
+remain absent. There is no payment provider, tax or discount policy,
+accounting integration, finalized sale state, receipt numbering, or receipt
+API. `OPEN` means unpaid.
 
 The new migration `20261010184156_sales_checkout_foundation` was replayed in
 disposable PGlite tests only. No external migration ledger was inspected and
-the migration was not applied to a deployment. The documented
-`20261010020000_branch_administration_contract` forced-RLS backfill failure
-remains a prerequisite if absent from a target ledger; do not skip it, edit it,
-or infer success. Production readiness is not established. See the [Sales
-module boundary](../modules/sales.md) and [ADR 0015](adr/0015-sales-transaction-foundation.md).
+the migration was not applied to a deployment. The original
+`20261010020000_branch_administration_contract` role-permission backfill failed
+under forced RLS when existing Owner/Admin roles were present. Its repository
+source is now corrected to scope writes by tenant, with a regression covering
+forced RLS, rollback, repeatability, and expected grants. This changes the
+migration content hash; target ledgers and effects must be reconciled before
+running the changed file against any existing database. Do not retry a
+missing-ledger migration or infer that it had no partial effects. Production
+readiness is not established. See the [migration recovery guidance](../../database/migrations/README.md),
+[Sales module boundary](../modules/sales.md), and [ADR 0015](adr/0015-sales-transaction-foundation.md).
 
 ## Phase 18 — Workflow Execution and Automation Foundation
 

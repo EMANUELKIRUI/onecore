@@ -6,6 +6,15 @@ Phase 2 adds a production-database migration boundary. Hosting and release proce
 
 The API validates environment variables at startup through `@onecore/config`. `NODE_ENV` must be exactly one of `development`, `test`, `staging`, or `production`; production is explicitly supported, and other values are rejected. The `.env.example` file uses `development` for local work. Staging/production or a supplied `PORT` defaults the listener to `0.0.0.0`; local development retains `127.0.0.1`. The port uses `process.env.PORT` when provided and otherwise defaults to `3000`. Set `NODE_ENV=production` for a production service and provide Render's assigned `PORT` and PostgreSQL `DATABASE_URL`. The API's checked-in Render service uses `npm ci && npm run build` and `npm start`; automatic deploy is disabled. `AUTH_ALLOWED_ORIGINS` must contain the exact comma-separated browser origins when cross-origin browser requests are supported; the current frontend contract uses same-origin routing.
 
+First-Owner setup invitations additionally require the server-side
+`BUSINESS_APP_ORIGIN` (the exact HTTPS origin of the Business static app),
+`MFA_ENCRYPTION_KEY`, `RESEND_API_KEY`, and `RESEND_FROM_EMAIL`. Configure
+`RESEND_BASE_URL` only to an approved HTTPS Resend-compatible endpoint. Keep all
+provider credentials in API deployment secrets, not frontend build variables.
+Provider acceptance is not delivery confirmation. The sender domain, production
+values, and end-to-end delivery must be verified before enabling invitations;
+live email delivery was not exercised by repository tests.
+
 ## Static frontend deployment
 
 Marketing, Business, Superadmin, and Support are separate native static HTML, CSS, and ES-module applications. Each Vercel project uses its corresponding `apps/<name>` Root Directory, runs the checked-in build command, and publishes `dist`. Enable Vercel's **Include files outside the Root Directory** setting so the build can read `scripts/build-static-app.mjs` and `packages/ui`; the build copies the required shared stylesheet and modules into each app output. No bundler or external frontend dependency is required. Superadmin provides the existing organization application review API; Support has no connected support API and displays an unavailable state without customer data.

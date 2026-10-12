@@ -8,6 +8,14 @@ const application = await readFile(
   "utf8",
 );
 const pos = await readFile(new URL("../pos.js", import.meta.url), "utf8");
+const setupPage = await readFile(
+  new URL("../setup.html", import.meta.url),
+  "utf8",
+);
+const setupScript = await readFile(
+  new URL("../setup.js", import.meta.url),
+  "utf8",
+);
 const styles = await readFile(
   new URL("../../../packages/ui/styles.css", import.meta.url),
   "utf8",
@@ -32,6 +40,19 @@ describe("authenticated business shell", () => {
     expect(page).toContain('aria-controls="app-sidebar"');
     expect(page).toContain('aria-live="polite"');
     expect(page).toContain('role="alert"');
+  });
+
+  describe("first Owner credential setup page", () => {
+    it("keeps the one-time token out of persistent browser storage and requires matching passwords", () => {
+      expect(setupPage).toContain('name="referrer" content="no-referrer"');
+      expect(setupPage).toContain('autocomplete="new-password"');
+      expect(setupScript).toContain("history.replaceState(null,");
+      expect(setupScript).toContain('"/auth/owner-credential-setup"');
+      expect(setupScript).toContain(
+        "password !== form.elements.passwordConfirm.value",
+      );
+      expect(setupScript).not.toMatch(/localStorage|sessionStorage|console\./);
+    });
   });
 
   it("uses only existing session and organization-scoped APIs", () => {
@@ -394,8 +415,13 @@ describe("Business Manager capability boundary", () => {
     expect(application).toContain(
       "Stock availability is not provided by this API.",
     );
-    const checkoutStart = application.indexOf("async function submitPosCheckout");
-    const checkoutEnd = application.indexOf("function renderPosWorkspace", checkoutStart);
+    const checkoutStart = application.indexOf(
+      "async function submitPosCheckout",
+    );
+    const checkoutEnd = application.indexOf(
+      "function renderPosWorkspace",
+      checkoutStart,
+    );
     expect(application.slice(checkoutStart, checkoutEnd)).not.toMatch(
       /\/(payments|transactions|receipts|inventory)\b/i,
     );
@@ -410,12 +436,15 @@ describe("Business Manager capability boundary", () => {
   });
 
   it("loads branch inventory from authorized catalog and stock APIs without inferring valuation or reorder levels", () => {
-    expect(page).toContain('id="inventory-nav"');
-    expect(page).toContain('href="#inventory" data-view="inventory"');
+    expect(page).toMatch(
+      /id="inventory-nav"[\s\S]*?href="#inventory"[\s\S]*?data-view="inventory"/,
+    );
     expect(application).toContain("async function loadInventoryView");
     expect(application).toContain("/business/catalog?${catalogQuery}");
     expect(application).toContain("/inventory/stock?${stockQuery}");
-    expect(application).toContain('catalogQuery.set("search", inventorySearch)');
+    expect(application).toContain(
+      'catalogQuery.set("search", inventorySearch)',
+    );
     expect(application).toContain('"OUT_OF_STOCK"');
     expect(application).toContain("No active products match this search.");
     expect(application).toContain("Reorder thresholds");
@@ -427,10 +456,16 @@ describe("Business Manager capability boundary", () => {
     expect(page).toContain('id="sales-nav"');
     expect(page).toContain('href="#sales" data-view="sales"');
     expect(application).toContain("async function loadSalesView");
-    expect(application).toContain("/sales?limit=${salesPageSize}&offset=${salesOffset}");
-    expect(application).toContain("/sales/${encodeURIComponent(selectedSaleId)}");
+    expect(application).toContain(
+      "/sales?limit=${salesPageSize}&offset=${salesOffset}",
+    );
+    expect(application).toContain(
+      "/sales/${encodeURIComponent(selectedSaleId)}",
+    );
     expect(application).toContain("This sale is unpaid.");
-    expect(application).toContain("Payment completion and receipt issuance are not supported");
+    expect(application).toContain(
+      "Payment completion and receipt issuance are not supported",
+    );
     expect(application).not.toMatch(/\/(payments|receipts)\b/);
     expect(application).toContain('"sales-nav"');
   });
@@ -446,9 +481,13 @@ describe("Business Manager capability boundary", () => {
       expect(page).toContain(`href="#${view}" data-view="${view}"`);
       expect(application).toContain(`${view}: {`);
     }
-    expect(application).toContain("A distinct company CRM model and API are not available");
+    expect(application).toContain(
+      "A distinct company CRM model and API are not available",
+    );
     expect(application).toContain("Open supported customer records");
-    expect(application).toContain("Payroll periods, calculations, approvals, and payslips");
+    expect(application).toContain(
+      "Payroll periods, calculations, approvals, and payslips",
+    );
     expect(application).toContain('role", "status"');
   });
 });

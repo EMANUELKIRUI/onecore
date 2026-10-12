@@ -117,12 +117,19 @@ async function createTenant(name: string) {
   if (!organization) throw new Error("Test organization was not created");
   const [user] = await database
     .insert(schema.users)
-    .values({ email: `${crypto.randomUUID()}@sales.test`, displayName: "Cashier" })
+    .values({
+      email: `${crypto.randomUUID()}@sales.test`,
+      displayName: "Cashier",
+    })
     .returning();
   if (!user) throw new Error("Test user was not created");
   const [branch] = await database
     .insert(schema.branches)
-    .values({ organizationId: organization.id, name: "Sales branch", code: "SALES" })
+    .values({
+      organizationId: organization.id,
+      name: "Sales branch",
+      code: "SALES",
+    })
     .returning();
   if (!branch) throw new Error("Test branch was not created");
   return { organization, user, branch };
@@ -346,14 +353,33 @@ describe("Sales persistence", () => {
 
   it("returns the original outcome for duplicate keys and conflicts on changed input", async () => {
     const fixture = await createTenant("Sales idempotency");
-    const itemA = await createCatalogItem(fixture.organization.id, fixture.user.id);
-    const itemB = await createCatalogItem(fixture.organization.id, fixture.user.id, {
-      name: "Second item",
-      reference: "SKU-2",
-      price: "2",
-    });
-    await receiveStock(fixture.organization.id, fixture.user.id, fixture.branch.id, itemA.id, 5);
-    await receiveStock(fixture.organization.id, fixture.user.id, fixture.branch.id, itemB.id, 5);
+    const itemA = await createCatalogItem(
+      fixture.organization.id,
+      fixture.user.id,
+    );
+    const itemB = await createCatalogItem(
+      fixture.organization.id,
+      fixture.user.id,
+      {
+        name: "Second item",
+        reference: "SKU-2",
+        price: "2",
+      },
+    );
+    await receiveStock(
+      fixture.organization.id,
+      fixture.user.id,
+      fixture.branch.id,
+      itemA.id,
+      5,
+    );
+    await receiveStock(
+      fixture.organization.id,
+      fixture.user.id,
+      fixture.branch.id,
+      itemB.id,
+      5,
+    );
     const context = authorizationContext(
       fixture.organization.id,
       fixture.user.id,
@@ -377,29 +403,30 @@ describe("Sales persistence", () => {
           "stable-key-1",
         ),
     );
-      const [otherCashier] = await database
-        .insert(schema.users)
-        .values({
-          email: `other-cashier-${crypto.randomUUID()}@sales.test`,
-          displayName: "Other cashier",
-        })
-        .returning();
-      if (!otherCashier) throw new Error("Second cashier fixture was not created");
-      const otherCashierReplay = await withTenant(
-        fixture.organization.id,
-        fixture.branch.id,
-        (transaction) =>
-          createSale(
-            transaction,
-            authorizationContext(
-              fixture.organization.id,
-              otherCashier.id,
-              fixture.branch.id,
-            ),
-            payload,
-            "stable-key-1",
+    const [otherCashier] = await database
+      .insert(schema.users)
+      .values({
+        email: `other-cashier-${crypto.randomUUID()}@sales.test`,
+        displayName: "Other cashier",
+      })
+      .returning();
+    if (!otherCashier)
+      throw new Error("Second cashier fixture was not created");
+    const otherCashierReplay = await withTenant(
+      fixture.organization.id,
+      fixture.branch.id,
+      (transaction) =>
+        createSale(
+          transaction,
+          authorizationContext(
+            fixture.organization.id,
+            otherCashier.id,
+            fixture.branch.id,
           ),
-      );
+          payload,
+          "stable-key-1",
+        ),
+    );
     expect(first.outcome).toBe("CREATED");
     expect(duplicate).toMatchObject({ outcome: "EXISTING" });
     if (first.outcome !== "CREATED" || duplicate.outcome !== "EXISTING") {
@@ -424,7 +451,11 @@ describe("Sales persistence", () => {
     );
     const foreignBranch = await database
       .insert(schema.branches)
-      .values({ organizationId: fixture.organization.id, name: "Other", code: "OTHER" })
+      .values({
+        organizationId: fixture.organization.id,
+        name: "Other",
+        code: "OTHER",
+      })
       .returning();
     const otherBranchId = foreignBranch[0]!.id;
     const otherBranchItem = await createCatalogItem(
@@ -432,13 +463,20 @@ describe("Sales persistence", () => {
       fixture.user.id,
       { branchId: otherBranchId },
     );
-    const itemA = await createCatalogItem(fixture.organization.id, fixture.user.id);
-    const itemB = await createCatalogItem(fixture.organization.id, fixture.user.id, {
-      name: "USD item",
-      reference: "USD-1",
-      price: "1",
-      currency: "USD",
-    });
+    const itemA = await createCatalogItem(
+      fixture.organization.id,
+      fixture.user.id,
+    );
+    const itemB = await createCatalogItem(
+      fixture.organization.id,
+      fixture.user.id,
+      {
+        name: "USD item",
+        reference: "USD-1",
+        price: "1",
+        currency: "USD",
+      },
+    );
     const context = authorizationContext(
       fixture.organization.id,
       fixture.user.id,
@@ -456,9 +494,9 @@ describe("Sales persistence", () => {
     expect((await attempt(inactive.id, "inactive-item")).outcome).toBe(
       "CATALOG_ITEM_UNAVAILABLE",
     );
-    expect((await attempt(otherBranchItem.id, "other-branch-item")).outcome).toBe(
-      "CATALOG_ITEM_UNAVAILABLE",
-    );
+    expect(
+      (await attempt(otherBranchItem.id, "other-branch-item")).outcome,
+    ).toBe("CATALOG_ITEM_UNAVAILABLE");
     const mixed = await withTenant(
       fixture.organization.id,
       fixture.branch.id,
@@ -481,8 +519,17 @@ describe("Sales persistence", () => {
   it("denies cross-tenant reads and prevents mutation", async () => {
     const tenantA = await createTenant("Sales tenant A");
     const tenantB = await createTenant("Sales tenant B");
-    const item = await createCatalogItem(tenantA.organization.id, tenantA.user.id);
-    await receiveStock(tenantA.organization.id, tenantA.user.id, tenantA.branch.id, item.id, 2);
+    const item = await createCatalogItem(
+      tenantA.organization.id,
+      tenantA.user.id,
+    );
+    await receiveStock(
+      tenantA.organization.id,
+      tenantA.user.id,
+      tenantA.branch.id,
+      item.id,
+      2,
+    );
     const contextA = authorizationContext(
       tenantA.organization.id,
       tenantA.user.id,
@@ -513,7 +560,10 @@ describe("Sales persistence", () => {
         page: await listSales(transaction, contextB, { limit: 50, offset: 0 }),
       }),
     );
-    expect(hidden).toMatchObject({ sale: undefined, page: { items: [], total: 0 } });
+    expect(hidden).toMatchObject({
+      sale: undefined,
+      page: { items: [], total: 0 },
+    });
     await expect(
       withTenant(tenantA.organization.id, tenantA.branch.id, (transaction) =>
         transaction
@@ -526,8 +576,17 @@ describe("Sales persistence", () => {
 
   it("serializes concurrent identical checkout attempts to one sale", async () => {
     const fixture = await createTenant("Sales concurrent");
-    const item = await createCatalogItem(fixture.organization.id, fixture.user.id);
-    await receiveStock(fixture.organization.id, fixture.user.id, fixture.branch.id, item.id, 1);
+    const item = await createCatalogItem(
+      fixture.organization.id,
+      fixture.user.id,
+    );
+    await receiveStock(
+      fixture.organization.id,
+      fixture.user.id,
+      fixture.branch.id,
+      item.id,
+      1,
+    );
     const context = authorizationContext(
       fixture.organization.id,
       fixture.user.id,
@@ -805,7 +864,11 @@ describe("Sales persistence", () => {
     }
 
     const [salesModule] = await database
-      .select({ name: schema.modules.name, lifecycle: schema.modules.lifecycle, isAvailable: schema.modules.isAvailable })
+      .select({
+        name: schema.modules.name,
+        lifecycle: schema.modules.lifecycle,
+        isAvailable: schema.modules.isAvailable,
+      })
       .from(schema.modules)
       .where(eq(schema.modules.key, "core.sales"));
     expect(salesModule).toEqual({
@@ -815,17 +878,38 @@ describe("Sales persistence", () => {
     });
 
     const permissions = await database
-      .select({ key: schema.permissions.key, status: schema.permissions.status, description: schema.permissions.description })
+      .select({
+        key: schema.permissions.key,
+        status: schema.permissions.status,
+        description: schema.permissions.description,
+      })
       .from(schema.permissions)
       .where(eq(schema.permissions.moduleKey, "core.sales"));
     expect(permissions).toHaveLength(3);
     expect(permissions.every(({ status }) => status === "INACTIVE")).toBe(true);
-    expect(permissions.every(({ description }) => description.endsWith(" (disabled)"))).toBe(true);
+    expect(
+      permissions.every(({ description }) =>
+        description.endsWith(" (disabled)"),
+      ),
+    ).toBe(true);
 
     const [moduleVersion] = await database
-      .select({ status: schema.moduleVersions.status, manifest: schema.moduleVersions.manifest })
+      .select({
+        status: schema.moduleVersions.status,
+        manifest: schema.moduleVersions.manifest,
+      })
       .from(schema.moduleVersions)
-      .where(eq(schema.moduleVersions.moduleId, (await database.select({ id: schema.modules.id }).from(schema.modules).where(eq(schema.modules.key, "core.sales")))[0]!.id));
+      .where(
+        eq(
+          schema.moduleVersions.moduleId,
+          (
+            await database
+              .select({ id: schema.modules.id })
+              .from(schema.modules)
+              .where(eq(schema.modules.key, "core.sales"))
+          )[0]!.id,
+        ),
+      );
     expect(moduleVersion?.status).toBe("DEPRECATED");
     expect(moduleVersion?.manifest.lifecycle).toBe("DEPRECATED");
   });

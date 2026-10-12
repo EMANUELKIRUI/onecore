@@ -194,7 +194,11 @@ export function createInventoryMovementController({
         return { kind: "UNCERTAIN", reason: "INVALID_RESPONSE" };
       }
       removeAttempt();
-      return { kind: "SUCCESS", movementId: response.movementId, stock: response.stock };
+      return {
+        kind: "SUCCESS",
+        movementId: response.movementId,
+        stock: response.stock,
+      };
     } catch (error) {
       const status = error?.status;
       const code = error?.code;
@@ -239,9 +243,12 @@ export function inventoryMovementMessage(result) {
     case "INVALID_MOVEMENT":
       return "Choose a product and enter a non-zero whole-number stock change. Receipts must add stock.";
     case "REJECTED":
-      if (result.status === 401) return "Your session expired. Sign in again before recording stock.";
-      if (result.status === 403) return "You are not authorized to adjust stock for this organization and branch.";
-      if (result.status === 409) return "The stock change conflicts with existing reservations or an earlier movement.";
+      if (result.status === 401)
+        return "Your session expired. Sign in again before recording stock.";
+      if (result.status === 403)
+        return "You are not authorized to adjust stock for this organization and branch.";
+      if (result.status === 409)
+        return "The stock change conflicts with existing reservations or an earlier movement.";
       return "The server could not accept this stock movement. Review the product and quantity.";
     case "UNCERTAIN":
       return "The movement could not be confirmed. Retry this same movement with its saved idempotency key.";

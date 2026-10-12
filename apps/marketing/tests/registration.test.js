@@ -15,6 +15,13 @@ describe("organization application response", () => {
     );
   });
 
+  it("preserves selected modules while moving from the module step to review and submission", () => {
+    expect(registration).toContain(
+      "const moduleInputs = form.querySelectorAll('input[name=\"requestedModules\"]');",
+    );
+    expect(registration).toContain("if (moduleInputs.length > 0) {");
+  });
+
   it("accepts and returns the actual application status and reference", () => {
     const application = {
       reference: "organization-reference",

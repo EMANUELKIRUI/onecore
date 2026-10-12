@@ -56,6 +56,7 @@ and permission metadata but deliberately adds no plan eligibility, organization
 entitlements, or role grants; access remains denied until trusted product
 activation and explicit RBAC provisioning are approved. Sale and line RLS
 remain forced independently of route predicates.
+
 ## Context, enforcement, and errors
 
 `createAuthorizationService` is the centralized boundary. It revalidates the

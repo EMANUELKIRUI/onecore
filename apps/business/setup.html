@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="onecore-api-base" content="" />
+    <meta name="theme-color" content="#10284f" />
+    <title>Set up your OneCore account</title>
+    <link rel="stylesheet" href="../packages/ui/styles.css" />
+  </head>
+  <body class="oc-business-app">
+    <a class="oc-skip-link" href="#main-content">Skip to main content</a>
+    <main id="main-content" class="oc-auth-frame">
+      <section
+        class="oc-card oc-auth-card oc-stack"
+        aria-labelledby="setup-title"
+      >
+        <a class="oc-brand" href="../marketing/">
+          <span class="oc-brand-mark" aria-hidden="true">O</span>
+          <span class="oc-brand__text">
+            <strong>OneCore</strong>
+            <span>Business OS</span>
+          </span>
+        </a>
+        <span class="oc-status">Owner account setup</span>
+        <h1 id="setup-title" class="oc-title">Choose your password</h1>
+        <p class="oc-muted">
+          After setup, sign in and complete required authenticator-app
+          verification before accessing your organization.
+        </p>
+        <p
+          id="setup-message"
+          class="oc-alert"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></p>
+        <form id="setup-form" class="oc-stack" hidden>
+          <div class="oc-field">
+            <label for="setup-password">New password</label>
+            <input
+              id="setup-password"
+              class="oc-input"
+              name="password"
+              type="password"
+              autocomplete="new-password"
+              minlength="12"
+              maxlength="1024"
+              required
+            />
+            <small class="oc-help">Use at least 12 characters.</small>
+          </div>
+          <div class="oc-field">
+            <label for="setup-password-confirm">Confirm password</label>
+            <input
+              id="setup-password-confirm"
+              class="oc-input"
+              name="passwordConfirm"
+              type="password"
+              autocomplete="new-password"
+              minlength="12"
+              maxlength="1024"
+              required
+            />
+          </div>
+          <button
+            id="setup-submit"
+            class="oc-button oc-button--wide"
+            type="submit"
+          >
+            Set password
+          </button>
+        </form>
+        <a
+          id="setup-signin"
+          class="oc-button oc-button--secondary"
+          href="./"
+          hidden
+        >
+          Continue to sign in
+        </a>
+      </section>
+    </main>
+    <script type="module" src="./setup.js"></script>
+  </body>
+</html>

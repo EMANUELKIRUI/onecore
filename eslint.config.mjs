@@ -20,6 +20,7 @@ export default tseslint.config(
         HTMLDialogElement: "readonly",
         location: "readonly",
         Response: "readonly",
+        URLSearchParams: "readonly",
         window: "readonly",
       },
     },

@@ -4,7 +4,10 @@ export const saleStatuses = ["OPEN", "CANCELLED"] as const;
 export const saleStatusSchema = z.enum(saleStatuses);
 export type SaleStatus = z.infer<typeof saleStatusSchema>;
 
-export const saleLifecycleTransitions: Record<SaleStatus, readonly SaleStatus[]> = {
+export const saleLifecycleTransitions: Record<
+  SaleStatus,
+  readonly SaleStatus[]
+> = {
   OPEN: ["CANCELLED"],
   CANCELLED: [],
 };
@@ -40,9 +43,7 @@ export const saleCreateRequestSchema = z
 
 export type SaleCreateRequest = z.infer<typeof saleCreateRequestSchema>;
 
-export const idempotencyKeySchema = z
-  .string()
-  .regex(/^[\x21-\x7e]{1,200}$/);
+export const idempotencyKeySchema = z.string().regex(/^[\x21-\x7e]{1,200}$/);
 
 const paginationValue = (defaultValue: number, minimum: number) =>
   z
@@ -108,7 +109,11 @@ export function calculateSaleTotals(
     throw new RangeError("A sale must contain between 1 and 100 lines.");
   }
   const lineAmounts = lines.map(({ unitPrice, quantity }) => {
-    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 1_000_000) {
+    if (
+      !Number.isSafeInteger(quantity) ||
+      quantity < 1 ||
+      quantity > 1_000_000
+    ) {
       throw new RangeError("Sale quantities must be positive whole numbers.");
     }
     const amount = salePriceToScaledAmount(unitPrice) * BigInt(quantity);
@@ -118,7 +123,9 @@ export function calculateSaleTotals(
   const subtotal = sumSaleAmounts(lineAmounts);
   const total = formatSaleAmount(subtotal);
   return {
-    lines: lineAmounts.map((amount) => ({ lineTotal: formatSaleAmount(amount) })),
+    lines: lineAmounts.map((amount) => ({
+      lineTotal: formatSaleAmount(amount),
+    })),
     subtotal: total,
     total,
   };
