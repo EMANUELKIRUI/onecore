@@ -135,6 +135,8 @@ async function lifecycleRecordCounts() {
     organizations,
     users,
     memberships,
+    branches,
+    membershipBranches,
     roles,
     organizationModules,
     rolePermissions,
@@ -147,6 +149,10 @@ async function lifecycleRecordCounts() {
     database
       .select({ id: schema.organizationMemberships.id })
       .from(schema.organizationMemberships),
+    database.select({ id: schema.branches.id }).from(schema.branches),
+    database
+      .select({ branchId: schema.membershipBranches.branchId })
+      .from(schema.membershipBranches),
     database.select({ id: schema.roles.id }).from(schema.roles),
     database
       .select({ id: schema.organizationModules.id })
@@ -164,6 +170,8 @@ async function lifecycleRecordCounts() {
     organizations: organizations.length,
     users: users.length,
     memberships: memberships.length,
+    branches: branches.length,
+    membershipBranches: membershipBranches.length,
     roles: roles.length,
     organizationModules: organizationModules.length,
     rolePermissions: rolePermissions.length,
@@ -869,6 +877,58 @@ describe("production lifecycle mutations", () => {
         source: "MANUAL",
       },
     ]);
+    const initialBranches = await database
+      .select({
+        id: schema.branches.id,
+        name: schema.branches.name,
+        code: schema.branches.code,
+      })
+      .from(schema.branches)
+      .where(eq(schema.branches.organizationId, organization.id));
+    expect(initialBranches).toHaveLength(1);
+    expect(initialBranches[0]).toMatchObject({ name: "Main", code: "MAIN" });
+    const ownerBranchAssignments = await database
+      .select({ branchId: schema.membershipBranches.branchId })
+      .from(schema.membershipBranches)
+      .where(
+        and(
+          eq(schema.membershipBranches.organizationId, organization.id),
+          eq(schema.membershipBranches.membershipId, result.owner.membershipId),
+        ),
+      );
+    expect(ownerBranchAssignments).toEqual([
+      { branchId: initialBranches[0]?.id },
+    ]);
+    const branchAudits = await database
+      .select({ action: schema.auditLogs.action })
+      .from(schema.auditLogs)
+      .where(
+        and(
+          eq(schema.auditLogs.organizationId, organization.id),
+          eq(schema.auditLogs.resource, "branch"),
+        ),
+      );
+    expect(branchAudits.map(({ action }) => action)).toContain(
+      "BRANCH_CREATED",
+    );
+    expect(
+      await database
+        .select({ action: schema.auditLogs.action })
+        .from(schema.auditLogs)
+        .where(
+          and(
+            eq(schema.auditLogs.organizationId, organization.id),
+            eq(schema.auditLogs.resource, "membership_branch"),
+          ),
+        ),
+    ).toEqual([{ action: "MEMBERSHIP_BRANCH_ASSIGNED" }]);
+    const branchEvents = await database
+      .select({ eventType: schema.outboxEvents.eventType })
+      .from(schema.outboxEvents)
+      .where(eq(schema.outboxEvents.organizationId, organization.id));
+    expect(branchEvents.map(({ eventType }) => eventType)).toEqual(
+      expect.arrayContaining(["BRANCH_CREATED", "MEMBERSHIP_BRANCH_ASSIGNED"]),
+    );
     await expect(
       withActiveOrganizationTransaction(
         applicationDatabase,
@@ -885,6 +945,26 @@ describe("production lifecycle mutations", () => {
     );
     expect(repeated.owner.id).toBe(result.owner.id);
     expect(repeated.owner.membershipId).toBe(result.owner.membershipId);
+    expect(
+      await database
+        .select({ id: schema.branches.id })
+        .from(schema.branches)
+        .where(eq(schema.branches.organizationId, organization.id)),
+    ).toHaveLength(1);
+    expect(
+      await database
+        .select({ branchId: schema.membershipBranches.branchId })
+        .from(schema.membershipBranches)
+        .where(
+          and(
+            eq(schema.membershipBranches.organizationId, organization.id),
+            eq(
+              schema.membershipBranches.membershipId,
+              result.owner.membershipId,
+            ),
+          ),
+        ),
+    ).toEqual([{ branchId: initialBranches[0]?.id }]);
     expect(
       await database
         .select({ id: schema.organizationMemberships.id })

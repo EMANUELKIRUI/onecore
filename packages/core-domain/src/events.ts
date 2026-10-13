@@ -83,6 +83,19 @@ const eventDefinitions = {
       })
       .strict(),
   },
+  BRANCH_CREATED: {
+    version: 1,
+    owningModule: "core.organization",
+    description: "An initial or additional organization branch was created.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({
+        branchId: z.uuid(),
+        name: z.string().trim().min(1).max(200),
+        code: z.string().trim().min(1).max(50),
+      })
+      .strict(),
+  },
   USER_CREATED: {
     version: 1,
     owningModule: "core.identity",
@@ -121,6 +134,15 @@ const eventDefinitions = {
         roleId: z.uuid(),
         change: z.enum(["ASSIGNED", "REMOVED"]),
       })
+      .strict(),
+  },
+  MEMBERSHIP_BRANCH_ASSIGNED: {
+    version: 1,
+    owningModule: "core.organization",
+    description: "A branch was assigned to an organization membership.",
+    compatibilityPolicy: "ADDITIVE_ONLY",
+    payloadSchema: z
+      .object({ membershipId: z.uuid(), branchId: z.uuid() })
       .strict(),
   },
   MODULE_ENABLED: {

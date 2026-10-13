@@ -313,7 +313,19 @@ export function registerSalesRoutes(
         }
         const sale = await getSale(transaction, context, path.data.saleId);
         return sale
-          ? { statusCode: 200, body: { sale: saleView(sale) } }
+          ? {
+              statusCode: 200,
+              body: {
+                sale: saleView(sale),
+                capabilities: {
+                  canCancel: cancelPermissions.every((permissionKey) =>
+                    context.permissions.some(
+                      (permission) => permission.key === permissionKey,
+                    ),
+                  ),
+                },
+              },
+            }
           : notFound();
       },
     );

@@ -17,6 +17,8 @@ import {
   branches,
   createDatabase,
   businessSettings,
+  inventoryReservations,
+  membershipBranches,
   membershipRoles,
   modulePermissions,
   moduleVersions,
@@ -31,6 +33,7 @@ import {
   plans,
   rolePermissions,
   roles,
+  sales,
   sessions,
   subscriptionItems,
   subscriptions,
@@ -91,9 +94,11 @@ const ownerPermissionKeys = [
   "core.modules.entitlement.read",
   "core.sales.sale.create",
   "core.sales.sale.read",
+  "core.sales.sale.cancel",
   "core.inventory.stock.read",
   "core.inventory.stock.adjust",
   "core.inventory.stock.reserve",
+  "core.inventory.stock.release",
 ];
 const viewerPermissionKeys = [
   "core.organization.user.read",
@@ -1422,6 +1427,22 @@ try {
   assert.deepEqual(provisionedEntitlements, [
     { key: "core.business_manager", status: "ENABLED" },
   ]);
+  const provisionedBranches = await admin.db
+    .select({ id: branches.id, name: branches.name, code: branches.code })
+    .from(branches)
+    .where(eq(branches.organizationId, applicationOrganization[0].id));
+  assert.equal(provisionedBranches.length, 1);
+  assert.deepEqual(
+    { name: provisionedBranches[0].name, code: provisionedBranches[0].code },
+    { name: "Main", code: "MAIN" },
+  );
+  const initialOwnerBranchAccess = await admin.db
+    .select({ branchId: membershipBranches.branchId })
+    .from(membershipBranches)
+    .where(eq(membershipBranches.membershipId, provisionedMembership[0].id));
+  assert.deepEqual(initialOwnerBranchAccess, [
+    { branchId: provisionedBranches[0].id },
+  ]);
   const retryProvision = await adminPage.evaluate(async (reference) => {
     const response = await globalThis.fetch(
       `/api/platform/organization-applications/${encodeURIComponent(reference)}/provision`,
@@ -1557,6 +1578,19 @@ try {
   });
   await expect(ownerPage.locator("#sidebar-organization")).toHaveText(
     "E2E Registration Applicant Ltd.",
+  );
+  await ownerPage.locator("#branch-select").selectOption({
+    value: provisionResult.branch.id,
+  });
+  const selectedOwnerBranch = await ownerPage.evaluate(async () => {
+    const response = await globalThis.fetch("/api/auth/session");
+    return response.json();
+  });
+  assert.equal(selectedOwnerBranch.branch.branchId, provisionResult.branch.id);
+  assert.ok(
+    selectedOwnerBranch.availableBranches.some(
+      (branch) => branch.branchId === provisionResult.branch.id,
+    ),
   );
   const ownerSessionAssurance = await admin.db
     .select({
@@ -2030,6 +2064,53 @@ try {
   );
   await expect(page.locator("#boundary-content")).toContainText(
     "E2E Browser Product",
+  );
+  await expect(
+    page.getByRole("button", { name: "Cancel unpaid sale" }),
+  ).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  const cancellationResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(
+        `/api/organizations/${fixture.organizationId}/sales/${firstCheckoutSaleId}/cancel`,
+      ) && response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Cancel unpaid sale" }).click();
+  const cancellationResponse = await cancellationResponsePromise;
+  assert.equal(cancellationResponse.status(), 200);
+  assert.equal(
+    (await cancellationResponse.json()).sale.status,
+    "CANCELLED",
+  );
+  await expect(page.locator("#boundary-content")).toContainText(
+    "This sale is cancelled. No payment or receipt state is inferred.",
+  );
+  await expect(page.locator("#boundary-content")).toContainText(
+    "Unpaid sale cancelled. Any stock reservation was released.",
+  );
+  const cancelledSaleRows = await admin.db
+    .select({ status: sales.status })
+    .from(sales)
+    .where(eq(sales.id, firstCheckoutSaleId));
+  assert.deepEqual(cancelledSaleRows, [{ status: "CANCELLED" }]);
+  const releasedReservationRows = await admin.db
+    .select({ status: inventoryReservations.status })
+    .from(inventoryReservations)
+    .where(eq(inventoryReservations.saleId, firstCheckoutSaleId));
+  assert.deepEqual(releasedReservationRows, [{ status: "RELEASED" }]);
+  const stockAfterCancellation = await admin.db.execute(sql`
+    SELECT on_hand, reserved
+    FROM inventory_stock_balances
+    WHERE organization_id = ${fixture.organizationId}
+      AND branch_id = ${fixture.checkoutBranchId}
+      AND catalog_item_id = ${catalogItemId}
+  `);
+  assert.deepEqual(resultRows(stockAfterCancellation)[0], {
+    on_hand: 5,
+    reserved: 0,
+  });
+  globalThis.console.info(
+    "PASS: owner cancels an unpaid sale through the UI; the fresh read shows CANCELLED and disposable PostgreSQL confirms reservation release",
   );
   for (const [navigationId, title] of [
     ["finance-nav", "Finance"],

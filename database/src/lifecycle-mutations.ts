@@ -11,7 +11,9 @@ import type { Database, OrganizationTransaction } from "./index.js";
 import { recordOutboxEvent } from "./outbox.js";
 import {
   auditLogs,
+  branches,
   membershipRoles,
+  membershipBranches,
   modules,
   moduleDependencies,
   organizationMemberships,
@@ -184,6 +186,7 @@ export interface LifecycleMutationService {
       accountStatus: (typeof users.$inferSelect)["status"];
       membershipStatus: (typeof organizationMemberships.$inferSelect)["status"];
     };
+    branch: { id: string; name: string; code: string };
     enabledModules: string[];
   }>;
   createUser(
@@ -1189,8 +1192,39 @@ export function createLifecycleMutationService(
             const enabledModuleKeys = enabledModules
               .map(({ key }) => key)
               .sort();
+            const [initialBranch] = await transaction
+              .select({
+                id: branches.id,
+                name: branches.name,
+                code: branches.code,
+              })
+              .from(branches)
+              .where(eq(branches.organizationId, trustedOrganizationId))
+              .orderBy(asc(branches.createdAt), asc(branches.id))
+              .limit(1);
+            const [ownerBranchAssignment] = initialBranch
+              ? await transaction
+                  .select({ branchId: membershipBranches.branchId })
+                  .from(membershipBranches)
+                  .where(
+                    and(
+                      eq(
+                        membershipBranches.organizationId,
+                        trustedOrganizationId,
+                      ),
+                      eq(
+                        membershipBranches.membershipId,
+                        existingOwner?.membershipId ?? "",
+                      ),
+                      eq(membershipBranches.branchId, initialBranch.id),
+                    ),
+                  )
+                  .limit(1)
+              : [];
             if (
               !existingOwner ||
+              !initialBranch ||
+              !ownerBranchAssignment ||
               application.requestedModules.some(
                 (moduleKey) => !enabledModuleKeys.includes(moduleKey),
               )
@@ -1202,6 +1236,7 @@ export function createLifecycleMutationService(
             return {
               organization,
               owner: existingOwner,
+              branch: initialBranch,
               enabledModules: enabledModuleKeys,
             };
           }
@@ -1346,6 +1381,92 @@ export function createLifecycleMutationService(
             }),
           );
 
+          await transaction.execute(sql`
+            INSERT INTO "branches" ("organization_id", "name", "code")
+            VALUES (${trustedOrganizationId}, 'Main', 'MAIN')
+          `);
+          const [initialBranch] = await transaction
+            .select({
+              id: branches.id,
+              name: branches.name,
+              code: branches.code,
+            })
+            .from(branches)
+            .where(
+              and(
+                eq(branches.organizationId, trustedOrganizationId),
+                eq(branches.code, "MAIN"),
+              ),
+            )
+            .limit(1);
+          if (!initialBranch) {
+            throw new LifecycleMutationError(
+              "APPLICATION_PROVISIONING_INCOMPLETE",
+            );
+          }
+          await transaction.execute(sql`
+            INSERT INTO "membership_branches" (
+              "organization_id", "membership_id", "branch_id"
+            ) VALUES (
+              ${trustedOrganizationId}, ${owner.membershipId}, ${initialBranch.id}
+            )
+          `);
+          await writeLifecycleAudit(
+            transaction,
+            trustedOrganizationId,
+            actor.userId,
+            metadata,
+            "BRANCH_CREATED",
+            "branch",
+            initialBranch.id,
+            null,
+            { name: initialBranch.name, code: initialBranch.code },
+          );
+          await recordOutboxEvent(
+            transaction,
+            createDomainEvent({
+              eventType: "BRANCH_CREATED",
+              organizationId: trustedOrganizationId,
+              actorUserId: actor.userId,
+              correlationId: metadata.correlationId,
+              aggregateType: "branch",
+              aggregateId: initialBranch.id,
+              payload: {
+                branchId: initialBranch.id,
+                name: initialBranch.name,
+                code: initialBranch.code,
+              },
+              metadata: { requestId: metadata.requestId },
+            }),
+          );
+          await writeLifecycleAudit(
+            transaction,
+            trustedOrganizationId,
+            actor.userId,
+            metadata,
+            "MEMBERSHIP_BRANCH_ASSIGNED",
+            "membership_branch",
+            `${owner.membershipId}:${initialBranch.id}`,
+            null,
+            { membershipId: owner.membershipId, branchId: initialBranch.id },
+          );
+          await recordOutboxEvent(
+            transaction,
+            createDomainEvent({
+              eventType: "MEMBERSHIP_BRANCH_ASSIGNED",
+              organizationId: trustedOrganizationId,
+              actorUserId: actor.userId,
+              correlationId: metadata.correlationId,
+              aggregateType: "organization_membership",
+              aggregateId: owner.membershipId,
+              payload: {
+                membershipId: owner.membershipId,
+                branchId: initialBranch.id,
+              },
+              metadata: { requestId: metadata.requestId },
+            }),
+          );
+
           for (const module of requestedModules) {
             const [enabled] = await transaction
               .insert(organizationModules)
@@ -1444,6 +1565,7 @@ export function createLifecycleMutationService(
               accountStatus: owner.status,
               membershipStatus: "INVITED" as const,
             },
+            branch: initialBranch,
             enabledModules: [...requestedModuleKeys].sort(),
           };
         },

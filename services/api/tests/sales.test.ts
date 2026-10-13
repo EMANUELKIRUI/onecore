@@ -131,8 +131,16 @@ function allowSales(
     hasPermission: async (context, key) =>
       context !== null && grantedPermissions.includes(key),
     withPermission,
-    withAllPermissions: async (context, keys, metadata, operation) =>
-      withPermission(context, keys[0] ?? "", metadata, operation),
+    withAllPermissions: async (context, keys, metadata, operation) => {
+      if (keys.some((key) => !grantedPermissions.includes(key))) {
+        return {
+          allowed: false,
+          statusCode: context ? 403 : 401,
+          dataScopes: [],
+        };
+      }
+      return withPermission(context, keys[0] ?? "", metadata, operation);
+    },
     withAnyPermission: async (context, keys, metadata, operation) =>
       withPermission(context, keys[0] ?? "", metadata, operation),
   };
@@ -389,6 +397,7 @@ describe("Sales API", () => {
       cookies: { onecore_session: sessionSecret },
     });
     expect(detail.statusCode).toBe(200);
+    expect(detail.json().capabilities.canCancel).toBe(false);
     const foreign = await app.inject({
       method: "GET",
       url: `/organizations/${crypto.randomUUID()}/sales/${created.json().sale.id}`,
@@ -459,6 +468,82 @@ describe("Sales API", () => {
       .from(schema.auditLogs)
       .where(eq(schema.auditLogs.action, "SALE_CREATED"));
     expect(rollbackAudit).toHaveLength(1);
+
+    const cancelUrl = `${baseUrl}/${created.json().sale.id}/cancel`;
+    const missingReleasePermissionApp = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      allowSales(["core.sales.sale.cancel", "core.sales.sale.read"]),
+    );
+    const missingReleasePermission = await missingReleasePermissionApp.inject({
+      method: "POST",
+      url: cancelUrl,
+      cookies: { onecore_session: sessionSecret },
+      payload: {},
+    });
+    expect(missingReleasePermission.statusCode).toBe(403);
+    await missingReleasePermissionApp.close();
+
+    const cancellationApp = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      identity,
+      allowSales([
+        "core.sales.sale.read",
+        "core.sales.sale.cancel",
+        "core.inventory.stock.release",
+      ]),
+    );
+    const cancellableDetail = await cancellationApp.inject({
+      method: "GET",
+      url: `${baseUrl}/${created.json().sale.id}`,
+      cookies: { onecore_session: sessionSecret },
+    });
+    expect(cancellableDetail.statusCode).toBe(200);
+    expect(cancellableDetail.json().capabilities.canCancel).toBe(true);
+    const cancelled = await cancellationApp.inject({
+      method: "POST",
+      url: cancelUrl,
+      cookies: { onecore_session: sessionSecret },
+      payload: {},
+    });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json()).toMatchObject({
+      idempotent: false,
+      sale: { id: created.json().sale.id, status: "CANCELLED" },
+    });
+    const repeatedCancellation = await cancellationApp.inject({
+      method: "POST",
+      url: cancelUrl,
+      cookies: { onecore_session: sessionSecret },
+      payload: {},
+    });
+    expect(repeatedCancellation.statusCode).toBe(200);
+    expect(repeatedCancellation.json()).toMatchObject({
+      idempotent: true,
+      sale: { id: created.json().sale.id, status: "CANCELLED" },
+    });
+    const [reservation] = await database
+      .select({ status: schema.inventoryReservations.status })
+      .from(schema.inventoryReservations)
+      .where(eq(schema.inventoryReservations.saleId, created.json().sale.id));
+    expect(reservation?.status).toBe("RELEASED");
+    const [balance] = await database
+      .select({
+        onHand: schema.inventoryStockBalances.onHand,
+        reserved: schema.inventoryStockBalances.reserved,
+      })
+      .from(schema.inventoryStockBalances)
+      .where(eq(schema.inventoryStockBalances.catalogItemId, item.id));
+    expect(balance).toEqual({ onHand: 5, reserved: 0 });
+    expect(
+      await database
+        .select({ eventType: schema.outboxEvents.eventType })
+        .from(schema.outboxEvents)
+        .where(
+          sql`${schema.outboxEvents.eventType} = 'SALE_CANCELLED' AND ${schema.outboxEvents.organizationId} = ${organization.id}`,
+        ),
+    ).toHaveLength(1);
+    await cancellationApp.close();
 
     await app.close();
   });

@@ -459,6 +459,7 @@ export function registerLifecycleRoutes(
             role: "Organization Owner",
             credentialSetup: "PENDING_INVITATION",
           },
+          branch: result.branch,
           enabledModules: result.enabledModules,
         });
       } catch (error) {

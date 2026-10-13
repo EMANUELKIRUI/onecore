@@ -5,15 +5,440 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="OneCore is a shared foundation for organization identity, access, configuration, and entitled business capabilities."
+      content="OneCore Business OS brings business operations together in one platform."
     />
-    <meta name="theme-color" content="#f5f7fb" />
-    <title>OneCore Business OS · One platform for organizations</title>
+    <meta name="theme-color" content="#f3f8ff" />
+    <title>OneCore Business OS · Built for Growth</title>
     <link rel="stylesheet" href="../../packages/ui/styles.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="module" src="./homepage.js"></script>
   </head>
-  <body class="oc-public-page">
+  <body class="oc-public-page mc-marketing">
     <a class="oc-skip-link" href="#main-content">Skip to main content</a>
-    <header class="oc-container oc-public-header">
+    <header class="oc-container oc-public-header mc-header">
+      <a class="oc-brand mc-brand" href="./" aria-label="OneCore home">
+        <span class="oc-brand-mark" aria-hidden="true">O</span>
+        <span class="oc-brand__text">
+          <strong>OneCore</strong>
+          <span>Business OS</span>
+        </span>
+      </a>
+      <button
+        id="marketing-menu-toggle"
+        class="mc-menu-toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="marketing-nav"
+        aria-label="Open navigation"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16" />
+        </svg>
+      </button>
+      <nav
+        id="marketing-nav"
+        class="oc-public-nav mc-nav"
+        aria-label="Main navigation"
+      >
+        <a href="./" aria-current="page">Home</a>
+        <a href="#features">Features</a>
+        <a href="#industries">Industries</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#products">Resources</a>
+        <a class="oc-button mc-nav__cta" href="register/">Get Started</a>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <section class="mc-hero" aria-labelledby="hero-title">
+        <div class="mc-container mc-hero__inner">
+          <div class="mc-hero__copy">
+            <p class="mc-eyebrow">ALL YOUR BUSINESS. ONE PLATFORM.</p>
+            <h1 id="hero-title">
+              Simple. Powerful.<br /><span>Built for Growth.</span>
+            </h1>
+            <p class="mc-hero__description">
+              OneCore Business OS gives you the tools to manage your operations,
+              teams, customers, and finances — all in one place. Streamline your
+              business and stay ahead.
+            </p>
+            <div class="mc-hero__actions">
+              <a class="oc-button mc-button-primary" href="register/">
+                Start Free Trial
+              </a>
+              <a
+                class="oc-button oc-button--secondary mc-button-watch"
+                href="#features"
+              >
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="m7.5 5.7 6.3 4.3-6.3 4.3z" />
+                </svg>
+                Watch Demo
+              </a>
+            </div>
+          </div>
+
+          <div class="mc-hero__visual">
+            <div
+              class="mc-photo-frame"
+              data-image-slot
+              role="img"
+              aria-label="Business owner using a tablet"
+            >
+              <div
+                class="mc-image-placeholder"
+                data-image-placeholder
+                aria-hidden="true"
+              >
+                <span class="mc-placeholder-mark" aria-hidden="true">
+                  <svg viewBox="0 0 48 48">
+                    <rect x="7" y="9" width="34" height="29" rx="3" />
+                    <circle cx="18" cy="19" r="3" />
+                    <path d="m10 34 10-9 6 5 6-7 6 11" />
+                  </svg>
+                </span>
+                <span>Hero photograph</span>
+              </div>
+              <img
+                data-src="./assets/images/hero-business-owner.webp.png"
+                alt=""
+                width="537"
+                height="281"
+                hidden
+              />
+            </div>
+            <aside
+              class="mc-growth-card"
+              aria-label="Illustrative business growth preview"
+            >
+              <div class="mc-growth-card__top">
+                <strong>Business Growth</strong>
+                <span class="mc-growth-card__change">↑ 24%</span>
+              </div>
+              <div class="mc-growth-chart" aria-hidden="true">
+                <span></span><span></span><span></span><span></span
+                ><span></span> <span></span><span></span><span></span
+                ><span></span>
+              </div>
+              <ul class="mc-growth-list">
+                <li><span aria-hidden="true">✓</span> Sales &amp; POS</li>
+                <li><span aria-hidden="true">✓</span> Inventory</li>
+                <li><span aria-hidden="true">✓</span> Accounting</li>
+                <li><span aria-hidden="true">✓</span> HR &amp; Payroll</li>
+              </ul>
+              <span class="mc-growth-card__note">Illustrative preview</span>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="products"
+        class="mc-container mc-modules"
+        aria-labelledby="modules-title"
+      >
+        <header class="mc-section-heading">
+          <p class="mc-eyebrow">CORE BUSINESS MODULES</p>
+          <h2 id="modules-title">Everything You Need to Run Your Business</h2>
+          <p>
+            Powerful, integrated modules designed to help you manage every
+            aspect of your business — from day-to-day operations to long-term
+            growth.
+          </p>
+          <p class="mc-availability-note">
+            Module availability depends on your organization; some capabilities
+            shown are not yet available.
+          </p>
+        </header>
+
+        <div class="mc-module-grid">
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--blue"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <rect x="3.5" y="5" width="17" height="14" rx="2" />
+                <path d="M8 5V3.5h8V5M8 10h8M8 14h5" />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Business Manager</h3>
+            <p>Centralize your operations, teams, and workflows.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--mint"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <path
+                  d="M4 4h2l2.1 10.2a2 2 0 0 0 2 1.6h7.4a2 2 0 0 0 1.9-1.4L21 8H7"
+                />
+                <circle cx="10" cy="19" r="1.3" />
+                <circle cx="18" cy="19" r="1.3" />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Sales &amp; POS</h3>
+            <p>Process sales, manage customers, and grow revenue.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--peach"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="m4 8 8-4 8 4-8 4zM4 8v9l8 4 8-4V8M12 12v9M8 6l8 4" />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Inventory Management</h3>
+            <p>Track stock, manage suppliers, reduce waste.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--lavender"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M3 7h2l2 10h11l2-7H6" />
+                <path d="M9 7V4h6v3M9 12h6" />
+                <circle cx="9" cy="20" r="1" />
+                <circle cx="17" cy="20" r="1" />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Purchasing &amp; Suppliers</h3>
+            <p>Automate purchasing and manage supplier relationships.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--yellow"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M4 19V5M4 19h17M8 15l4-4 3 2 5-7" />
+                <path d="M16 6h4v4" />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Finance &amp; Accounting</h3>
+            <p>Track finances, automate reporting, and plan for the future.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--rose"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <circle cx="9" cy="8" r="3" />
+                <path
+                  d="M3.5 20v-1a5.5 5.5 0 0 1 11 0v1M16 5a3 3 0 0 1 0 6m1 3a5 5 0 0 1 3.5 4.8V20"
+                />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">HR &amp; Payroll</h3>
+            <p>Manage your team and keep payroll simple.</p>
+          </article>
+          <article class="mc-module">
+            <span class="mc-module-icon mc-module-icon--sky" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path
+                  d="M3 20V9l5 3V8l5 4V5h8v15zM7 20v-4h4v4M16 9h2M16 13h2"
+                />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Industry-Specific Modules</h3>
+            <p>Tailored solutions for your industry needs.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--mint"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M4 19V5M4 19h17M8 16v-4M12 16V8M16 16v-6M20 16V4" />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Reporting &amp; Analytics</h3>
+            <p>Turn your data into better decisions.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--peach"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <path
+                  d="m12 3 1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"
+                />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">OneCore AI</h3>
+            <p>Get intelligent insights and automate tasks.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--lavender"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <circle cx="10" cy="8" r="3" />
+                <path d="M4 20v-1a6 6 0 0 1 12 0v1M18 8v6M15 11h6" />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Customer Management &amp; CRM</h3>
+            <p>Build stronger customer relationships.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--yellow"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M4 5h16v14H4zM8 9h8M8 13h4" />
+                <path d="m15 15 2 2 4-5" />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Product &amp; Service Catalog</h3>
+            <p>Manage your products, services, and pricing.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--rose"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <path
+                  d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"
+                />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Notifications &amp; Communications</h3>
+            <p>Keep your team and customers informed.</p>
+          </article>
+          <article class="mc-module">
+            <span class="mc-module-icon mc-module-icon--sky" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <circle cx="5" cy="6" r="2" />
+                <circle cx="19" cy="18" r="2" />
+                <path
+                  d="M7 6h5a4 4 0 0 1 4 4v4a4 4 0 0 0 3 4M5 8v8a3 3 0 0 0 3 3h9"
+                />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Workflow Automation</h3>
+            <p>Save time with automated business processes.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--mint"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <path
+                  d="M8 7V4M16 7V4M7 8h10a3 3 0 0 1 3 3v2a3 3 0 0 1-3 3h-2v4h-4v-4H9a3 3 0 0 1-3-3v-2a3 3 0 0 1 3-3zM4 11v2M20 11v2"
+                />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Webhooks &amp; Integrations</h3>
+            <p>Connect with your favorite tools and extend your platform.</p>
+          </article>
+          <article class="mc-module">
+            <span
+              class="mc-module-icon mc-module-icon--blue"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24">
+                <rect x="4" y="4" width="7" height="7" rx="1" />
+                <rect x="13" y="4" width="7" height="5" rx="1" />
+                <rect x="13" y="11" width="7" height="9" rx="1" />
+                <rect x="4" y="13" width="7" height="7" rx="1" />
+              </svg>
+            </span>
+            <h3 class="mc-module-title">Business Dashboard</h3>
+            <p>Track performance, monitor activity, and take action.</p>
+          </article>
+        </div>
+      </section>
+
+      <section
+        id="features"
+        class="mc-advantage"
+        aria-labelledby="advantage-title"
+      >
+        <div class="mc-container mc-advantage__inner">
+          <div class="mc-advantage__copy">
+            <p class="mc-eyebrow">THE ONECORE ADVANTAGE</p>
+            <h2 id="advantage-title">Built for Every Stage of Your Business</h2>
+            <p>
+              From startups to enterprises, OneCore adapts to your needs with
+              flexible modules, powerful integrations, and enterprise-grade
+              security.
+            </p>
+            <a class="oc-button mc-button-primary" href="#products">
+              Explore All Features <span aria-hidden="true">→</span>
+            </a>
+          </div>
+          <div
+            class="mc-dashboard-frame"
+            data-image-slot
+            role="img"
+            aria-label="OneCore Business OS dashboard preview"
+          >
+            <div
+              class="mc-image-placeholder"
+              data-image-placeholder
+              aria-hidden="true"
+            >
+              <span class="mc-placeholder-mark" aria-hidden="true">
+                <svg viewBox="0 0 48 48">
+                  <rect x="6" y="7" width="36" height="34" rx="3" />
+                  <path d="M6 15h36M14 22h8v12h-8zM27 22h9M27 27h9M27 32h6" />
+                </svg>
+              </span>
+              <span>Dashboard screenshot</span>
+            </div>
+            <img
+              data-src="./assets/images/business-dashboard.png"
+              alt=""
+              width="397"
+              height="157"
+              hidden
+            />
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="industries"
+        class="mc-container mc-limits"
+        aria-labelledby="industries-title"
+      >
+        <p class="mc-eyebrow">INDUSTRIES</p>
+        <h2 id="industries-title">A foundation for every kind of business</h2>
+        <p>
+          Industry-specific workflows are not yet available. Module access
+          depends on supported features and your organization's enabled
+          entitlements.
+        </p>
+      </section>
+
+      <section id="pricing" class="mc-pricing" aria-labelledby="pricing-title">
+        <div class="mc-container mc-pricing__inner">
+          <div>
+            <p class="mc-eyebrow">PLANS &amp; PRICING</p>
+            <h2 id="pricing-title">Contact your OneCore administrator</h2>
+            <p>
+              Public plan details are not available. Organization applications
+              are reviewed before account setup; submitting an application does
+              not create an owner login or activate a workspace.
+            </p>
+          </div>
+          <a class="oc-button mc-button-primary" href="register/"
+            >Get Started</a
+          >
+        </div>
+      </section>
+    </main>
+
+    <footer class="oc-container oc-public-footer mc-footer">
       <a class="oc-brand" href="./" aria-label="OneCore home">
         <span class="oc-brand-mark" aria-hidden="true">O</span>
         <span class="oc-brand__text">
@@ -21,215 +446,13 @@
           <span>Business OS</span>
         </span>
       </a>
-      <nav class="oc-public-nav" aria-label="Main navigation">
-        <a href="#products">Products</a>
-        <a href="#industries">Industries</a>
-        <a href="#features">Features</a>
-        <a href="#pricing">Pricing</a>
-        <a class="oc-button" href="register/"> Get started </a>
-        <a class="oc-button oc-button--secondary" href="../business/">
-          Sign in
-        </a>
-      </nav>
-    </header>
-
-    <main id="main-content" class="oc-container">
-      <section class="oc-hero" aria-labelledby="hero-title">
-        <div class="oc-hero__copy">
-          <span class="oc-status">OneCore Business OS</span>
-          <h1 id="hero-title" class="oc-title">
-            One platform.<br />
-            <span class="oc-hero__accent">Every organization.</span>
-          </h1>
-          <p>
-            A shared foundation for organization identity, access,
-            configuration, and the business capabilities each organization is
-            entitled to use.
-          </p>
-          <div class="oc-cluster">
-            <a class="oc-button" href="register/">Register your business</a>
-            <a class="oc-button oc-button--secondary" href="#products">
-              Explore the platform
-            </a>
-          </div>
-        </div>
-        <div
-          class="oc-platform-visual"
-          role="img"
-          aria-label="OneCore connects identity, organization context, and authorized capabilities."
-        >
-          <div class="oc-platform-visual__heading">
-            <span>OneCore foundation</span>
-            <strong>Connected by design</strong>
-          </div>
-          <div class="oc-platform-layer">
-            <span class="oc-platform-layer__icon" aria-hidden="true">01</span>
-            <span>
-              <strong>Identity &amp; access</strong>
-              Verified sign-in and permissions
-            </span>
-          </div>
-          <div class="oc-platform-layer">
-            <span class="oc-platform-layer__icon" aria-hidden="true">02</span>
-            <span>
-              <strong>Organization context</strong>
-              Work within authorized organizations and branches
-            </span>
-          </div>
-          <div class="oc-platform-layer">
-            <span class="oc-platform-layer__icon" aria-hidden="true">03</span>
-            <span>
-              <strong>Entitled capabilities</strong>
-              Shared services and Business Manager
-            </span>
-          </div>
-        </div>
-      </section>
-
-      <section
-        id="products"
-        class="oc-section-spaced oc-stack"
-        aria-labelledby="products-title"
-      >
-        <span class="oc-status">Products</span>
-        <h2 id="products-title" class="oc-section-title">
-          A platform foundation, not a catalogue of unfinished modules
-        </h2>
-        <p class="oc-muted">
-          OneCore currently provides shared identity, organization context,
-          access controls, configuration, events, notifications, and
-          entitlement-gated workflow foundations. Workflow jobs still require an
-          operational worker, which is not deployed by this repository.
-          Product-specific business modules are not yet available in this
-          workspace.
-        </p>
-        <div class="oc-grid oc-grid--cards">
-          <article class="oc-card oc-stack oc-feature-card">
-            <span class="oc-feature-card__icon" aria-hidden="true">01</span>
-            <h3>Organization workspace</h3>
-            <p class="oc-muted">
-              Sign in and work within an organization and authorized branch
-              context.
-            </p>
-            <a href="../business/">Open the workspace</a>
-          </article>
-          <article class="oc-card oc-stack oc-feature-card">
-            <span class="oc-feature-card__icon" aria-hidden="true">02</span>
-            <h3>Shared platform services</h3>
-            <p class="oc-muted">
-              Identity, permissions, module entitlements, settings, events, and
-              in-app notifications support future OneCore capabilities.
-            </p>
-          </article>
-          <article class="oc-card oc-stack oc-feature-card">
-            <span class="oc-feature-card__icon" aria-hidden="true">03</span>
-            <h3>Business modules</h3>
-            <p class="oc-muted">
-              POS, inventory, finance, HR, CRM, and industry-specific modules
-              are not included in the current product.
-            </p>
-          </article>
-        </div>
-        <p>
-          <a class="oc-button" href="register/">Get started with OneCore</a>
-        </p>
-      </section>
-
-      <section
-        id="industries"
-        class="oc-section-spaced oc-stack"
-        aria-labelledby="industries-title"
-      >
-        <span class="oc-status">Industries</span>
-        <h2 id="industries-title" class="oc-section-title">
-          A common foundation for organizations
-        </h2>
-        <p class="oc-muted">
-          OneCore is being built as a configurable multi-organization platform.
-          It does not currently offer specialized school, healthcare, hotel,
-          retail, or other industry workflows. Industry capabilities will be
-          presented here when implemented and supported.
-        </p>
-      </section>
-
-      <section
-        id="features"
-        class="oc-section-spaced oc-stack"
-        aria-labelledby="features-title"
-      >
-        <span class="oc-status">Platform features</span>
-        <h2 id="features-title" class="oc-section-title">
-          Shared capabilities with clear boundaries
-        </h2>
-        <div class="oc-grid oc-grid--cards">
-          <article class="oc-card oc-stack oc-feature-card">
-            <span class="oc-feature-card__icon" aria-hidden="true">01</span>
-            <h3>Verified organization context</h3>
-            <p class="oc-muted">
-              Organization membership and branch access are resolved by the
-              server for each protected request.
-            </p>
-          </article>
-          <article class="oc-card oc-stack oc-feature-card">
-            <span class="oc-feature-card__icon" aria-hidden="true">02</span>
-            <h3>Roles and permissions</h3>
-            <p class="oc-muted">
-              Central authorization and module entitlements define access.
-              Interface visibility never grants permission.
-            </p>
-          </article>
-          <article class="oc-card oc-stack oc-feature-card">
-            <span class="oc-feature-card__icon" aria-hidden="true">03</span>
-            <h3>Configuration and activity</h3>
-            <p class="oc-muted">
-              Supported settings, notifications, and workflow execution history
-              use existing authorized platform APIs.
-            </p>
-          </article>
-        </div>
-      </section>
-
-      <section
-        id="pricing"
-        class="oc-card oc-stack oc-section-spaced"
-        aria-labelledby="pricing-title"
-      >
-        <span class="oc-status">Plans and pricing</span>
-        <h2 id="pricing-title" class="oc-section-title">
-          Contact your OneCore administrator
-        </h2>
-        <p class="oc-muted">
-          Public plan details and self-service account provisioning are not
-          available. You can submit an organization application for review;
-          submission does not create an owner login or enable workspace access.
-        </p>
-        <div class="oc-cluster">
-          <a class="oc-button" href="register/">Register your business</a>
-          <a class="oc-button oc-button--secondary" href="../business/">
-            Sign in
-          </a>
-          <span class="oc-help">
-            Applications are reviewed by a OneCore administrator.
-          </span>
-        </div>
-      </section>
-    </main>
-
-    <footer class="oc-container oc-public-footer">
-      <a class="oc-brand" href="./">
-        <span class="oc-brand-mark" aria-hidden="true">O</span>
-        <span class="oc-brand__text">
-          <strong>OneCore</strong>
-          <span>Business OS</span>
-        </span>
-      </a>
-      <nav class="oc-cluster" aria-label="Footer">
-        <a href="#products">Products</a>
+      <nav class="mc-footer__nav" aria-label="Footer">
+        <a href="#products">Modules</a>
         <a href="#features">Features</a>
         <a href="register/">Get started</a>
         <a href="../business/">Workspace sign in</a>
       </nav>
-      <span class="oc-help">One platform. Every organization. Anywhere.</span>
+      <span class="oc-help">One platform. Every organization.</span>
     </footer>
   </body>
 </html>

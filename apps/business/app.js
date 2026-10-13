@@ -297,6 +297,7 @@ const inventoryPageSize = 50;
 let salesLoadSequence = 0;
 let salesOffset = 0;
 let selectedSaleId = null;
+let saleNotice = null;
 const salesPageSize = 50;
 let preferenceLocale = workflowLocale;
 const resourceViews = {
@@ -2132,7 +2133,7 @@ function renderSalesRows(container, sales) {
   container.append(wrapper);
 }
 
-function renderSaleDetails(container, sale) {
+function renderSaleDetails(container, sale, capabilities = {}) {
   const back = document.createElement("button");
   back.className = "oc-button oc-button--secondary";
   back.type = "button";
@@ -2157,6 +2158,16 @@ function renderSaleDetails(container, sale) {
     ["Total", `${sale.total} ${sale.currency}`],
   ]);
   container.append(summary);
+  if (saleNotice?.saleId === sale.id) {
+    const notice = appendText(
+      container,
+      "p",
+      saleNotice.message,
+      "oc-alert oc-alert--success",
+    );
+    notice.setAttribute("role", "status");
+    saleNotice = null;
+  }
   appendText(
     container,
     "p",
@@ -2165,6 +2176,17 @@ function renderSaleDetails(container, sale) {
       : "This sale is cancelled. No payment or receipt state is inferred.",
     "oc-help",
   );
+  if (sale.status === "OPEN" && capabilities.canCancel === true) {
+    const cancel = document.createElement("button");
+    cancel.className = "oc-button oc-button--danger";
+    cancel.type = "button";
+    cancel.textContent = "Cancel unpaid sale";
+    cancel.addEventListener(
+      "click",
+      () => void cancelSaleFromDetails(container, sale, cancel),
+    );
+    container.append(cancel);
+  }
   renderSimpleTable(
     container,
     ["Product", "SKU / reference", "Quantity", "Unit price", "Line total"],
@@ -2176,6 +2198,47 @@ function renderSaleDetails(container, sale) {
       `${line.lineTotal} ${sale.currency}`,
     ]),
   );
+}
+
+async function cancelSaleFromDetails(container, sale, button) {
+  if (
+    !window.confirm(
+      "Cancel this unpaid sale? Any stock reservation will be released. No payment or receipt will be created.",
+    )
+  ) {
+    return;
+  }
+  button.disabled = true;
+  try {
+    const organizationId = currentSession?.organization?.organizationId;
+    if (!organizationId)
+      throw new ApiError(401, "UNAUTHORIZED", "Sign in to continue.");
+    const result = await authenticatedRequest(
+      `/organizations/${encodeURIComponent(organizationId)}/sales/${encodeURIComponent(sale.id)}/cancel`,
+      { method: "POST", body: {} },
+    );
+    if (result.sale?.id !== sale.id || result.sale.status !== "CANCELLED") {
+      throw new TypeError("The cancellation response could not be confirmed.");
+    }
+    saleNotice = {
+      saleId: sale.id,
+      message: result.idempotent
+        ? "This sale was already cancelled. No payment or receipt was created."
+        : "Unpaid sale cancelled. Any stock reservation was released.",
+    };
+    const successMessage = saleNotice.message;
+    await loadSalesView(container);
+    announce(successMessage, "success");
+  } catch (requestError) {
+    const alert = appendText(
+      container,
+      "p",
+      errorMessage(requestError),
+      "oc-alert oc-alert--error",
+    );
+    alert.setAttribute("role", "alert");
+    button.disabled = false;
+  }
 }
 
 async function loadSalesView(container) {
@@ -2221,7 +2284,7 @@ async function loadSalesView(container) {
     loading.remove();
     if (selectedSaleId) {
       if (!result.sale) throw new TypeError("The sale response is incomplete.");
-      renderSaleDetails(container, result.sale);
+      renderSaleDetails(container, result.sale, result.capabilities);
       return;
     }
     const sales = Array.isArray(result.items) ? result.items : [];

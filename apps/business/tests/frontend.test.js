@@ -466,6 +466,17 @@ describe("Business Manager capability boundary", () => {
     expect(application).toContain(
       "Payment completion and receipt issuance are not supported",
     );
+    expect(application).toContain(
+      'if (sale.status === "OPEN" && capabilities.canCancel === true)',
+    );
+    expect(application).toContain('cancel.textContent = "Cancel unpaid sale"');
+    expect(application).toContain("async function cancelSaleFromDetails");
+    expect(application).toContain(
+      "/sales/${encodeURIComponent(sale.id)}/cancel",
+    );
+    expect(application).toContain('result.sale.status !== "CANCELLED"');
+    expect(application).toContain("await loadSalesView(container)");
+    expect(application).toContain("Any stock reservation was released.");
     expect(application).not.toMatch(/\/(payments|receipts)\b/);
     expect(application).toContain('"sales-nav"');
   });

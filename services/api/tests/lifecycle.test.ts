@@ -260,6 +260,56 @@ describe("lifecycle API routes", () => {
     await app.close();
   });
 
+  it("returns an empty public module catalogue when no modules are available", async () => {
+    const lifecycle = testLifecycleService({
+      listPublicModules: vi.fn(async () => []),
+    });
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+      undefined,
+      { lifecycleMutations: lifecycle },
+    );
+    const response = await app.inject({
+      method: "GET",
+      url: "/public/organization-applications/modules",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ modules: [] });
+    await app.close();
+  });
+
+  it("accepts a valid application with no additional module requests as pending", async () => {
+    const lifecycle = testLifecycleService();
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+      undefined,
+      { lifecycleMutations: lifecycle },
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: "/public/organization-applications",
+      headers: { "content-type": "application/json" },
+      payload: { ...applicationPayload, requestedModules: [] },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().application).toMatchObject({
+      organizationName: "Example Trading Limited",
+      status: "PENDING",
+    });
+    expect(response.body).not.toContain("ownerUserId");
+    expect(response.body).not.toContain("password");
+    expect(lifecycle.submitOrganizationApplication).toHaveBeenCalledWith(
+      expect.objectContaining({ requestedModules: [] }),
+      expect.objectContaining({ requestId: expect.any(String) }),
+    );
+    expect(lifecycle.createOrganization).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("rejects public applications when the shared rate limit is exceeded", async () => {
     const lifecycle = testLifecycleService();
     const app = buildApp(

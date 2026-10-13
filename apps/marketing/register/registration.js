@@ -16,6 +16,7 @@ const steps = ["Business", "Owner", "Modules", "Review"];
 const state = {
   step: 0,
   modules: [],
+  moduleCatalogStatus: "loading",
   values: {
     name: "",
     slug: "",
@@ -166,7 +167,36 @@ function render() {
       "Requested modules",
       "Choose from modules currently available in OneCore. Requests are subject to review and do not grant access.",
     );
-    if (!state.modules.length) {
+    if (state.moduleCatalogStatus === "loading") {
+      form.append(
+        element(
+          "p",
+          "Loading available modules…",
+          "oc-state oc-state--loading",
+        ),
+      );
+    } else if (state.moduleCatalogStatus === "error") {
+      const catalogError = element(
+        "p",
+        "The module catalogue could not be loaded. You can continue without requesting additional modules, or retry.",
+        "oc-state oc-state--error",
+      );
+      catalogError.setAttribute("role", "alert");
+      const retry = element(
+        "button",
+        "Retry module catalogue",
+        "oc-button oc-button--secondary",
+      );
+      retry.type = "button";
+      retry.addEventListener("click", () => {
+        captureForm();
+        state.moduleCatalogStatus = "loading";
+        showMessage("");
+        render();
+        void loadModules();
+      });
+      form.append(catalogError, retry);
+    } else if (!state.modules.length) {
       form.append(
         element(
           "p",
@@ -329,14 +359,19 @@ async function loadModules() {
         typeof module.name === "string" &&
         typeof module.displayName === "string",
     );
-    render();
+    captureForm();
+    state.moduleCatalogStatus = "loaded";
+    showMessage("");
   } catch {
-    state.modules = [];
-    showMessage(
-      "The module catalog could not be loaded. Retry by refreshing this page.",
-    );
-    render();
+    captureForm();
+    state.moduleCatalogStatus = "error";
+    if (state.step !== 2) {
+      showMessage(
+        "The module catalogue could not be loaded. You can continue without requesting additional modules, or retry.",
+      );
+    }
   }
+  render();
 }
 
 render();
