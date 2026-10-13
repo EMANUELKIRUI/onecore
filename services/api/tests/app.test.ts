@@ -129,6 +129,46 @@ describe("API foundation", () => {
     await app.close();
   });
 
+  it("requires explicit frontend origins for mutation requests through the API proxy", async () => {
+    const headers = {
+      host: "onecore-api.onrender.com",
+      origin: "https://business.example",
+      "content-type": "application/json",
+    };
+    const unconfiguredApp = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+    );
+    const rejected = await unconfiguredApp.inject({
+      method: "POST",
+      url: "/auth/logout",
+      headers,
+      payload: {},
+    });
+
+    expect(rejected.statusCode).toBe(403);
+    expect(rejected.json().error.code).toBe("FORBIDDEN");
+    await unconfiguredApp.close();
+
+    const configuredApp = buildApp(
+      loadConfig({
+        NODE_ENV: "test",
+        LOG_LEVEL: "silent",
+        AUTH_ALLOWED_ORIGINS: "https://business.example",
+      }),
+      new MemoryIdentityRepository(),
+    );
+    const accepted = await configuredApp.inject({
+      method: "POST",
+      url: "/auth/logout",
+      headers,
+      payload: {},
+    });
+
+    expect(accepted.statusCode).toBe(204);
+    await configuredApp.close();
+  });
+
   it("reports ready when the required dependency check succeeds", async () => {
     const readinessCheck = vi.fn(async () => {});
     const app = buildApp(
