@@ -4,7 +4,7 @@ Phase 2 adds a production-database migration boundary. Hosting and release proce
 
 ## Runtime environment
 
-The API validates environment variables at startup through `@onecore/config`. `NODE_ENV` must be exactly one of `development`, `test`, `staging`, or `production`; production is explicitly supported, and other values are rejected. The `.env.example` file uses `development` for local work. Staging/production or a supplied `PORT` defaults the listener to `0.0.0.0`; local development retains `127.0.0.1`. The port uses `process.env.PORT` when provided and otherwise defaults to `3000`. Set `NODE_ENV=production` for a production service and provide Render's assigned `PORT` and PostgreSQL `DATABASE_URL`. The API's checked-in Render service uses `npm ci && npm run build` and `npm start`; automatic deploy is disabled. `AUTH_ALLOWED_ORIGINS` must contain the exact comma-separated browser origins when cross-origin browser requests are supported; the current frontend contract uses same-origin routing.
+The API validates environment variables at startup through `@onecore/config`. `NODE_ENV` must be exactly one of `development`, `test`, `staging`, or `production`; production is explicitly supported, and other values are rejected. The `.env.example` file uses `development` for local work. Staging/production or a supplied `PORT` defaults the listener to `0.0.0.0`; local development retains `127.0.0.1`. The port uses `process.env.PORT` when provided and otherwise defaults to `3000`. Set `NODE_ENV=production` for a production service and provide Render's assigned `PORT` and PostgreSQL `DATABASE_URL`. The API's checked-in Render service uses `npm ci && npm run build` and `npm start`; automatic deploy is disabled. `AUTH_ALLOWED_ORIGINS` must contain exact browser origins forwarded by the same-origin proxy for mutation origin validation; CORS middleware is not needed for these same-origin requests.
 
 First-Owner setup invitations additionally require the server-side
 `BUSINESS_APP_ORIGIN` (the exact HTTPS origin of the Business static app),
@@ -19,7 +19,22 @@ live email delivery was not exercised by repository tests.
 
 Marketing, Business, Superadmin, and Support are separate native static HTML, CSS, and ES-module applications. Each Vercel project uses its corresponding `apps/<name>` Root Directory, runs the checked-in build command, and publishes `dist`. Enable Vercel's **Include files outside the Root Directory** setting so the build can read `scripts/build-static-app.mjs` and `packages/ui`; the build copies the required shared stylesheet and modules into each app output. No bundler or external frontend dependency is required. Superadmin provides the existing organization application review API; Support has no connected support API and displays an unavailable state without customer data.
 
-Set `ONECORE_BUSINESS_URL` on Marketing and `ONECORE_MARKETING_URL` on Business, Superadmin, and Support to the corresponding public app URLs; each Vercel build fails if its required cross-app URL is missing. The static build injects these values into cross-app links. `ONECORE_API_BASE_PATH` may set a same-origin API path prefix such as `/api`; the current API client intentionally rejects cross-origin URLs and sends same-origin cookies. Route that prefix through a reviewed same-origin proxy to the Render API. These values are public URL/path configuration only; never put credentials or service secrets in frontend build variables.
+Marketing, Business, and Superadmin configure `ONECORE_API_BASE_PATH=/api` in
+their checked-in Vercel build commands and rewrite `/api/:path*` to
+`https://onecore-api.onrender.com/:path*`. The API routes are rooted at `/`;
+the rewrite removes the frontend-only `/api` prefix. This same-origin path lets
+the frontend API client send the host-only session cookie without browser CORS.
+Support intentionally has no API rewrite until authorized support endpoints
+exist.
+
+Set `ONECORE_BUSINESS_URL` on Marketing and `ONECORE_MARKETING_URL` on Business,
+Superadmin, and Support to the corresponding public app URLs; each Vercel build
+fails if its required cross-app URL is missing. The static build injects these
+values into cross-app links. Configure `AUTH_ALLOWED_ORIGINS` on the Render API
+with the exact deployed Marketing, Business, and Superadmin HTTPS origins.
+These origins are checked for state-changing requests; do not use wildcards.
+Keep all frontend build values public and never place credentials or service
+secrets there.
 
 ## Organization deployment types
 

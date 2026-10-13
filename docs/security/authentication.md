@@ -4,7 +4,7 @@
 
 The Phase 2 `users` table remains the canonical global identity. It now contains the normalized-login email source, lifecycle status, Argon2id password hash, optional verification timestamp, failed-login window/counter, lock expiry, and last successful login. Membership remains in `organization_memberships`; no second customer-user or account table was added.
 
-Organization roles remain tenant-owned in `roles` and are attached through memberships. Platform roles use the separate `platform_user_roles` table. A platform role is not an organization role, does not grant membership, and does not bypass RLS. The API currently does not implement Superadmin or support authorization.
+Organization roles remain tenant-owned in `roles` and are attached through memberships. Platform roles use the separate `platform_user_roles` table. A platform role is not an organization role, does not grant membership, and does not bypass RLS. The organization-application lifecycle operations verify an active session and the `SUPERADMIN` platform role in the lifecycle service. A general platform administration authorization framework and support authorization are not implemented.
 
 Mandatory MFA policy is resolved server-side from `platform_user_roles` and
 active system Organization Owner/Admin assignments. Request-body flags and
