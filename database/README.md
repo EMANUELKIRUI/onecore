@@ -13,11 +13,17 @@ Install PostgreSQL 16+ separately, create a development database, and provision 
 ```sh
 createdb onecore_dev
 export ADMIN_DATABASE_URL='postgresql://postgres:admin-local-password@127.0.0.1:5432/postgres'
-psql "$ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE onecore_migrator LOGIN PASSWORD 'migrator-local-password'"
+psql "$ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE onecore_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD 'migrator-local-password'"
+psql "$ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -c "ALTER ROLE onecore_migrator SET search_path TO public"
 psql "$ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -c "GRANT CONNECT, CREATE ON DATABASE onecore_dev TO onecore_migrator"
 psql "$ADMIN_DATABASE_URL" -d onecore_dev -v ON_ERROR_STOP=1 -c "GRANT USAGE, CREATE ON SCHEMA public TO onecore_migrator"
 export DATABASE_URL='postgresql://onecore_migrator:migrator-local-password@127.0.0.1:5432/onecore_dev'
+export ONECORE_MIGRATION_ENVIRONMENT=development
+export ONECORE_MIGRATION_EXPECTED_HOST=127.0.0.1
+export ONECORE_MIGRATION_EXPECTED_PORT=5432
+export ONECORE_MIGRATION_EXPECTED_DATABASE=onecore_dev
 npm ci
+npm run db:validate
 npm run db:migrate
 ```
 
@@ -63,7 +69,7 @@ Before seeding, explicitly confirm the target is a disposable local database by 
 - Generate a migration with `npm run db:generate`.
 - Review generated SQL, including constraints, RLS, and audit-trigger effects; update migration documentation/tests if needed.
 - Commit both the schema and migration. Never edit a deployed database manually or use schema-push in production.
-- Apply committed SQL with `npm run db:migrate`. The command must run using a separate schema-owner migration credential.
+- Run `npm run db:validate` before `npm run db:migrate`; the former performs read-only target and migration-history checks. Both require the `onecore_migrator` role and explicit environment/host/port/database settings; staging/production additionally require a provider resource ID, and production needs a matching confirmation value. See [the migration runbook](migrations/README.md) for exact variables, initialization approvals, ledger reconciliation, and backup requirements. PostgreSQL cannot prove provider-resource identity from an operator-supplied ID.
 - Run `npm run test -w @onecore/database` to apply every migration against a clean in-memory PostgreSQL-compatible database and check tenant policies and constraints.
 
 Use expand → migrate → verify → contract. Add nullable/new structures first, backfill in a bounded and observable migration or job, verify old and new readers/writers, and only then remove obsolete structures in a separately reviewed contract migration. Migrations are forward-only: use a compensating migration or restore a verified backup rather than assuming a down migration is safe.

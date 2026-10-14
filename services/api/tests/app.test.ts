@@ -79,6 +79,21 @@ describe("API foundation", () => {
     await app.close();
   });
 
+  it("does not expose Support routes when the database integration is absent", async () => {
+    const app = buildApp(
+      loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
+      new MemoryIdentityRepository(),
+    );
+    const response = await app.inject({
+      method: "GET",
+      url: "/support/requests",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe("NOT_FOUND");
+    await app.close();
+  });
+
   it("rejects disallowed origins on state-changing routes", async () => {
     const app = buildApp(
       loadConfig({

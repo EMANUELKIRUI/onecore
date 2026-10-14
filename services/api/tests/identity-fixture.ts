@@ -192,7 +192,10 @@ export class MemoryIdentityRepository implements IdentityRepository {
   }
 
   async userRequiresMfa(userId: string): Promise<boolean> {
-    if (this.platformRoles.get(userId)?.has("SUPERADMIN")) {
+    if (
+      this.platformRoles.get(userId)?.has("SUPERADMIN") ||
+      this.platformRoles.get(userId)?.has("SUPPORT")
+    ) {
       return true;
     }
     return [...this.organizationRoles.entries()].some(

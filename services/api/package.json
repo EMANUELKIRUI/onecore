@@ -7,6 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "build": "tsc -p tsconfig.json",
+    "bootstrap:superadmin": "node dist/bootstrap-superadmin.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run --hookTimeout=30000"

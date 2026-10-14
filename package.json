@@ -26,6 +26,7 @@
     "test:e2e": "npm run build && node scripts/business-manager-e2e.mjs",
     "db:generate": "npm run db:generate -w @onecore/database",
     "db:migrate": "npm run db:migrate -w @onecore/database",
+    "db:validate": "npm run db:validate -w @onecore/database",
     "db:seed": "npm run db:seed -w @onecore/database",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm test && npm run build"
   },

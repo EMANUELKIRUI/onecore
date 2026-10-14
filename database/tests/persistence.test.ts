@@ -323,8 +323,11 @@ describe("PostgreSQL persistence foundation", () => {
       "feature_flag_assignments:INSERT",
       "organization_settings:UPDATE",
       "jobs:SELECT",
+      "modules:SELECT",
+      "rate_limit_buckets:SELECT",
       "rate_limit_buckets:INSERT",
       "rate_limit_buckets:UPDATE",
+      "rate_limit_buckets:DELETE",
     ];
     for (const privilege of required) {
       expect(initialApplicationPrivileges.has(privilege), privilege).toBe(true);
@@ -1514,10 +1517,14 @@ describe("PostgreSQL persistence foundation", () => {
           email: `mfa-ordinary-${crypto.randomUUID()}@example.test`,
           displayName: "MFA Ordinary",
         },
+        {
+          email: `mfa-support-${crypto.randomUUID()}@example.test`,
+          displayName: "MFA Support",
+        },
       ])
       .returning();
-    const [owner, superadmin, ordinary] = users;
-    if (!owner || !superadmin || !ordinary) {
+    const [owner, superadmin, ordinary, support] = users;
+    if (!owner || !superadmin || !ordinary || !support) {
       throw new Error("MFA policy users were not created");
     }
     const [membership] = await database
@@ -1547,10 +1554,15 @@ describe("PostgreSQL persistence foundation", () => {
       userId: superadmin.id,
       role: "SUPERADMIN",
     });
+    await database.insert(schema.platformUserRoles).values({
+      userId: support.id,
+      role: "SUPPORT",
+    });
 
     const identity = createIdentityRepository(database as unknown as Database);
     expect(await identity.userRequiresMfa(owner.id)).toBe(true);
     expect(await identity.userRequiresMfa(superadmin.id)).toBe(true);
+    expect(await identity.userRequiresMfa(support.id)).toBe(true);
     expect(await identity.userRequiresMfa(ordinary.id)).toBe(false);
 
     const session = {

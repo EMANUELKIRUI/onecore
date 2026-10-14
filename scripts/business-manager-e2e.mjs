@@ -30,6 +30,8 @@ import {
   permissions,
   planModules,
   platformUserRoles,
+  supportRequests,
+  supportRootAdministrators,
   plans,
   rolePermissions,
   roles,
@@ -54,6 +56,7 @@ const memberEmail = "e2e-member@onecore.test";
 const viewerEmail = "e2e-viewer@onecore.test";
 const foreignEmail = "e2e-foreign@onecore.test";
 const platformAdminEmail = "e2e-platform-admin@onecore.test";
+const supportUserEmail = "e2e-support@onecore.test";
 const applicationOwnerEmail = "e2e-new-owner@onecore.test";
 const e2eMfaSecrets = new Map();
 const branchPermissionKeys = [
@@ -72,6 +75,7 @@ const expectedMigrationNames = [
   "20261012092151_orange_proudstar",
   "20261012092652_safe_iron_lad",
   "20261012110014_owner_credential_setup",
+  "20261014222000_support_workspace",
 ];
 const ownerPermissionKeys = [
   ...branchPermissionKeys,
@@ -235,6 +239,11 @@ async function createFixture(database) {
         displayName: "E2E Platform Reviewer",
         passwordHash: userPasswordHash,
       },
+      {
+        email: supportUserEmail,
+        displayName: "E2E Assigned Support",
+        passwordHash: userPasswordHash,
+      },
     ])
     .returning();
   const owner = createdUsers.find((user) => user.email === ownerEmail);
@@ -244,13 +253,37 @@ async function createFixture(database) {
   const platformAdmin = createdUsers.find(
     (user) => user.email === platformAdminEmail,
   );
-  if (!owner || !member || !viewer || !foreign || !platformAdmin) {
+  const supportUser = createdUsers.find(
+    (user) => user.email === supportUserEmail,
+  );
+  if (
+    !owner ||
+    !member ||
+    !viewer ||
+    !foreign ||
+    !platformAdmin ||
+    !supportUser
+  ) {
     throw new Error("Synthetic users were not created");
   }
   await database.insert(platformUserRoles).values({
     userId: platformAdmin.id,
     role: "SUPERADMIN",
   });
+  await database.insert(supportRootAdministrators).values({
+    userId: platformAdmin.id,
+  });
+  const [foreignSupportRequest] = await database
+    .insert(supportRequests)
+    .values({
+      organizationId: foreignOrganization.id,
+      createdByUserId: foreign.id,
+      subject: "Foreign organization support request",
+    })
+    .returning();
+  if (!foreignSupportRequest) {
+    throw new Error("Foreign support request fixture was not created");
+  }
 
   const memberships = await database
     .insert(organizationMemberships)
@@ -559,6 +592,8 @@ async function createFixture(database) {
   return {
     organizationId: organization.id,
     foreignOrganizationId: foreignOrganization.id,
+    supportUserId: supportUser.id,
+    foreignSupportRequestId: foreignSupportRequest.id,
     checkoutBranchId: checkoutBranch.id,
     ownerMembershipId: ownerMembership.id,
     memberMembershipId: memberMembership.id,
@@ -570,6 +605,7 @@ function createFrontendServer(apiPort) {
   const frontendRoot = resolve(root, "apps/business");
   const registrationRoot = resolve(root, "apps/marketing/register");
   const superadminRoot = resolve(root, "apps/superadmin");
+  const supportRoot = resolve(root, "apps/support");
   const uiModuleRoot = resolve(root, "packages/ui/src");
   const uiModules = new Map(
     ["api-client.js", "elements.js", "localization.js", "mfa-login.js"].map(
@@ -619,6 +655,18 @@ function createFrontendServer(apiPort) {
     [
       "/superadmin/app.js",
       [resolve(superadminRoot, "app.js"), "text/javascript; charset=utf-8"],
+    ],
+    [
+      "/support/",
+      [resolve(supportRoot, "index.html"), "text/html; charset=utf-8"],
+    ],
+    [
+      "/support/index.html",
+      [resolve(supportRoot, "index.html"), "text/html; charset=utf-8"],
+    ],
+    [
+      "/support/app.js",
+      [resolve(supportRoot, "app.js"), "text/javascript; charset=utf-8"],
     ],
     [
       "/setup.html",
@@ -1032,6 +1080,9 @@ try {
     ),
   );
   await adminRoot.db.execute(
+    sql.raw("ALTER ROLE onecore_migrator SET search_path TO public"),
+  );
+  await adminRoot.db.execute(
     sql.raw(
       `CREATE ROLE onecore_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${appPassword}'`,
     ),
@@ -1041,15 +1092,18 @@ try {
       `CREATE ROLE onecore_worker NOLOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${workerPassword}'`,
     ),
   );
-  await adminRoot.db.execute(
-    sql.raw("CREATE DATABASE onecore_e2e OWNER onecore_migrator"),
-  );
+  await adminRoot.db.execute(sql.raw("CREATE DATABASE onecore_e2e"));
   await adminRoot.close();
   adminRootConnection = undefined;
 
   const adminUrl = `${adminBase}/onecore_e2e`;
   const admin = createDatabase(adminUrl, { maxConnections: 1 });
   adminConnection = admin;
+  await admin.db.execute(
+    sql.raw(
+      "GRANT CONNECT, CREATE ON DATABASE onecore_e2e TO onecore_migrator",
+    ),
+  );
   await admin.db.execute(
     sql.raw("GRANT USAGE, CREATE ON SCHEMA public TO onecore_migrator"),
   );
@@ -1059,7 +1113,17 @@ try {
 
   const migratorUrl = `postgres://onecore_migrator:${migratorPassword}@127.0.0.1:${mappedPort}/onecore_e2e`;
   run("npm", ["run", "db:migrate"], {
-    env: { ...process.env, DATABASE_URL: migratorUrl },
+    env: {
+      ...process.env,
+      DATABASE_URL: migratorUrl,
+      NODE_ENV: "test",
+      ONECORE_MIGRATION_ENVIRONMENT: "test",
+      ONECORE_MIGRATION_EXPECTED_HOST: "127.0.0.1",
+      ONECORE_MIGRATION_EXPECTED_PORT: String(mappedPort),
+      ONECORE_MIGRATION_EXPECTED_DATABASE: "onecore_e2e",
+      ONECORE_MIGRATION_REVIEWED_UNTRACKED:
+        "20261014150000_initial_superadmin_bootstrap,20261014222000_support_workspace",
+    },
     stdio: "inherit",
   });
 
@@ -1579,9 +1643,15 @@ try {
   await expect(ownerPage.locator("#sidebar-organization")).toHaveText(
     "E2E Registration Applicant Ltd.",
   );
+  const branchSelectionResponse = ownerPage.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/auth/branch") &&
+      response.request().method() === "POST",
+  );
   await ownerPage.locator("#branch-select").selectOption({
     value: provisionResult.branch.id,
   });
+  assert.equal((await branchSelectionResponse).status(), 200);
   const selectedOwnerBranch = await ownerPage.evaluate(async () => {
     const response = await globalThis.fetch("/api/auth/session");
     return response.json();
@@ -1615,6 +1685,159 @@ try {
     fixture.organizationId,
   );
   assert.equal(crossTenantResponse, 403);
+  await ownerPage.goto(`${webOrigin}/support/`);
+  const supportSubject = "E2E authenticated support request";
+  await expect(ownerPage.locator("#request-create-form")).toBeVisible();
+  await ownerPage.getByLabel("Subject").fill(supportSubject);
+  await ownerPage
+    .getByLabel("Describe the issue")
+    .fill("Synthetic support issue for the disposable database test.");
+  const supportCreateResponse = ownerPage.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/support/requests") &&
+      response.request().method() === "POST",
+  );
+  await ownerPage.getByRole("button", { name: "Submit request" }).click();
+  const supportCreate = await supportCreateResponse;
+  assert.equal(supportCreate.status(), 201);
+  const createdSupportRequest = await supportCreate.json();
+  const supportRequestId = createdSupportRequest.request.id;
+  assert.equal(
+    createdSupportRequest.request.organizationId,
+    applicationOrganization[0].id,
+  );
+  const foreignSupportStatus = await ownerPage.evaluate(async (requestId) => {
+    const response = await globalThis.fetch(
+      `/api/support/requests/${encodeURIComponent(requestId)}`,
+    );
+    return response.status;
+  }, fixture.foreignSupportRequestId);
+  assert.equal(foreignSupportStatus, 404);
+
+  const rootSupportSetup = await adminPage.evaluate(
+    async ({ organizationId, supportUserId, requestId }) => {
+      const request = (path, body, method = "POST") =>
+        globalThis.fetch(`/api${path}`, {
+          method,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      const staff = await request("/platform/support/staff", {
+        userId: supportUserId,
+      });
+      const grant = await request(
+        `/platform/support/organizations/${encodeURIComponent(organizationId)}/grants`,
+        {
+          supportUserId,
+          reason: "Synthetic browser test access",
+          expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+        },
+      );
+      const assignment = await request(
+        `/platform/support/requests/${encodeURIComponent(requestId)}/assignment`,
+        { supportUserId },
+      );
+      return {
+        staff: staff.status,
+        grant: grant.status,
+        assignment: assignment.status,
+      };
+    },
+    {
+      organizationId: applicationOrganization[0].id,
+      supportUserId: fixture.supportUserId,
+      requestId: supportRequestId,
+    },
+  );
+  assert.deepEqual(rootSupportSetup, {
+    staff: 204,
+    grant: 201,
+    assignment: 200,
+  });
+
+  const supportStaffContext = await browser.newContext();
+  const supportStaffPage = await supportStaffContext.newPage();
+  await supportStaffPage.goto(`${webOrigin}/support/`);
+  await supportStaffPage.locator("#support-email").fill(supportUserEmail);
+  await supportStaffPage.locator("#support-password").fill(testPassword);
+  const supportStaffLoginResponse = supportStaffPage.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/auth/login") &&
+      response.request().method() === "POST",
+  );
+  await supportStaffPage
+    .getByRole("button", { name: "Sign in", exact: true })
+    .click();
+  await completeMfaLogin(
+    supportStaffPage,
+    await supportStaffLoginResponse,
+    supportUserEmail,
+  );
+  await expect(supportStaffPage.locator("#request-list")).toContainText(
+    supportSubject,
+  );
+  await expect(
+    supportStaffPage.getByRole("button", {
+      name: /E2E authenticated support request/,
+    }),
+  ).toBeVisible();
+  await supportStaffPage
+    .getByRole("button", { name: /E2E authenticated support request/ })
+    .click();
+  await expect(
+    supportStaffPage.locator("#request-detail-content"),
+  ).toContainText("Synthetic support issue");
+  const internalNoteText =
+    "E2E staff-only note must not be visible to the customer.";
+  await supportStaffPage
+    .locator("#request-detail-content textarea")
+    .nth(1)
+    .fill(internalNoteText);
+  const noteResponse = supportStaffPage.waitForResponse(
+    (response) =>
+      response
+        .url()
+        .endsWith(`/api/support/requests/${supportRequestId}/notes`) &&
+      response.request().method() === "POST",
+  );
+  await supportStaffPage
+    .locator("#request-detail-content form")
+    .nth(1)
+    .getByRole("button", { name: "Send" })
+    .click();
+  assert.equal((await noteResponse).status(), 201);
+  const statusUpdateResponse = supportStaffPage.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/api/support/requests/${supportRequestId}`) &&
+      response.request().method() === "PATCH",
+  );
+  await supportStaffPage
+    .locator("#request-detail-content select")
+    .nth(0)
+    .selectOption("IN_PROGRESS");
+  await supportStaffPage
+    .getByRole("button", { name: "Update request" })
+    .click();
+  assert.equal((await statusUpdateResponse).status(), 200);
+
+  await ownerPage.reload();
+  await expect(ownerPage.locator("#request-list")).toContainText(
+    supportSubject,
+  );
+  await ownerPage
+    .getByRole("button", { name: /E2E authenticated support request/ })
+    .click();
+  await expect(ownerPage.locator("#request-detail-content")).toContainText(
+    "IN PROGRESS",
+  );
+  await expect(ownerPage.locator("#request-detail-content")).not.toContainText(
+    internalNoteText,
+  );
+  globalThis.console.info(
+    "PASS: Support customer creation, tenant isolation, Root staff/grant/assignment controls, mandatory staff MFA, status changes, and customer-hidden internal notes verified in browser",
+  );
+  await supportStaffContext.close();
+
   globalThis.console.info(
     "PASS: first Owner uses a mocked invitation email, single-use setup activates the account, mandatory MFA precedes session issuance, and sign-in selects only the new tenant",
   );
@@ -2071,17 +2294,16 @@ try {
   page.once("dialog", (dialog) => dialog.accept());
   const cancellationResponsePromise = page.waitForResponse(
     (response) =>
-      response.url().endsWith(
-        `/api/organizations/${fixture.organizationId}/sales/${firstCheckoutSaleId}/cancel`,
-      ) && response.request().method() === "POST",
+      response
+        .url()
+        .endsWith(
+          `/api/organizations/${fixture.organizationId}/sales/${firstCheckoutSaleId}/cancel`,
+        ) && response.request().method() === "POST",
   );
   await page.getByRole("button", { name: "Cancel unpaid sale" }).click();
   const cancellationResponse = await cancellationResponsePromise;
   assert.equal(cancellationResponse.status(), 200);
-  assert.equal(
-    (await cancellationResponse.json()).sale.status,
-    "CANCELLED",
-  );
+  assert.equal((await cancellationResponse.json()).sale.status, "CANCELLED");
   await expect(page.locator("#boundary-content")).toContainText(
     "This sale is cancelled. No payment or receipt state is inferred.",
   );

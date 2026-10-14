@@ -5,11 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="OneCore support workspace availability."
+      content="OneCore authorized customer support workspace."
     />
+    <meta name="onecore-api-base" content="" />
     <meta name="theme-color" content="#10284f" />
     <title>OneCore Support</title>
     <link rel="stylesheet" href="../../packages/ui/styles.css" />
+    <script type="module" src="./app.js"></script>
   </head>
   <body class="oc-business-app oc-support-app">
     <a class="oc-skip-link" href="#main-content">Skip to main content</a>
@@ -29,24 +31,25 @@
           <span class="oc-nav__group-label">Workspace</span>
           <a href="#support-home" aria-current="page"
             ><span class="oc-nav__icon" aria-hidden="true">⌂</span
-            ><span>Overview</span></a
-          >
-          <span class="oc-nav__disabled" aria-disabled="true"
-            ><span class="oc-nav__icon" aria-hidden="true">▤</span
-            ><span>Support requests</span></span
+            ><span>Support requests</span></a
           >
         </nav>
-        <div class="oc-sidebar-context">
+        <div class="oc-sidebar-context" id="support-context">
           <span class="oc-sidebar-context__label">Support access</span>
-          <strong>Not enabled</strong>
-          <span>No support API is connected.</span>
+          <strong>Checking access</strong>
+          <span>Connecting securely to OneCore.</span>
         </div>
-        <a class="oc-sidebar-profile" href="../marketing/">
-          <span class="oc-avatar" aria-hidden="true">O</span>
+        <button
+          id="support-logout"
+          class="oc-sidebar-profile"
+          type="button"
+          hidden
+        >
+          <span class="oc-avatar" aria-hidden="true">↪</span>
           <span class="oc-sidebar-profile__text"
-            ><strong>OneCore</strong><span>Support workspace</span></span
+            ><strong>Sign out</strong><span>End this session</span></span
           >
-        </a>
+        </button>
       </aside>
       <button
         id="support-sidebar-backdrop"
@@ -82,33 +85,230 @@
         <header class="oc-main-header">
           <div class="oc-stack">
             <span class="oc-status">SUPPORT WORKSPACE</span>
-            <h1 class="oc-title">Support console</h1>
+            <h1 class="oc-title">Support requests</h1>
             <p class="oc-muted">
-              A clear view of support workflows when they are available.
+              Requests and organization details are shown only when authorized
+              by OneCore.
             </p>
           </div>
-          <span class="oc-badge oc-badge--warning">Unavailable</span>
+          <span id="support-status" class="oc-badge oc-badge--warning"
+            >Checking</span
+          >
         </header>
+
         <section
-          id="support-home"
+          id="support-unavailable"
           class="oc-state oc-state--unavailable"
           aria-labelledby="support-unavailable-title"
+          hidden
         >
           <span class="oc-feature-card__icon" aria-hidden="true">i</span>
           <h2 id="support-unavailable-title" class="oc-section-title">
-            Support workflows are not enabled yet
+            Support is unavailable
           </h2>
-          <p>
-            No authorized support request, organization lookup, or activity API
-            is available in this release. No customer or organization data is
-            shown here.
+          <p id="support-unavailable-message">
+            The authorized Support API is not configured or could not be
+            reached. No customer records are shown.
           </p>
-          <a class="oc-button oc-button--secondary" href="../marketing/"
-            >Back to OneCore</a
+          <button
+            id="support-retry-unavailable"
+            class="oc-button oc-button--secondary"
+            type="button"
           >
+            Retry
+          </button>
+        </section>
+        <section
+          id="support-loading"
+          class="oc-state"
+          aria-label="Loading Support"
+          role="status"
+          hidden
+        >
+          <span class="oc-skeleton" aria-hidden="true"></span>
+          <p class="oc-muted">
+            Checking your session and authorized Support access…
+          </p>
+        </section>
+
+        <section
+          id="support-login"
+          class="oc-card oc-auth-card oc-stack"
+          aria-labelledby="support-login-title"
+          hidden
+        >
+          <h2 id="support-login-title" class="oc-section-title">
+            Sign in to Support
+          </h2>
+          <p class="oc-muted">
+            Use your authorized OneCore account. Support staff must verify with
+            an authenticator app.
+          </p>
+          <div
+            id="support-login-message"
+            class="oc-alert oc-alert--error"
+            role="alert"
+            hidden
+          ></div>
+          <form id="support-login-form" class="oc-stack">
+            <div class="oc-field">
+              <label for="support-email">Email address</label
+              ><input
+                id="support-email"
+                class="oc-input"
+                name="email"
+                type="email"
+                autocomplete="username"
+                required
+                maxlength="320"
+              />
+            </div>
+            <div class="oc-field">
+              <label for="support-password">Password</label
+              ><input
+                id="support-password"
+                class="oc-input"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+                maxlength="1024"
+              />
+            </div>
+            <button class="oc-button" type="submit">Sign in</button>
+          </form>
+        </section>
+
+        <section
+          id="support-forbidden"
+          class="oc-state"
+          aria-labelledby="support-forbidden-title"
+          hidden
+        >
+          <h2 id="support-forbidden-title" class="oc-section-title">
+            Support access not enabled
+          </h2>
+          <p id="support-forbidden-message">
+            Your account is not authorized to access these support requests.
+          </p>
+        </section>
+
+        <section
+          id="support-error"
+          class="oc-state oc-state--unavailable"
+          aria-labelledby="support-error-title"
+          hidden
+        >
+          <h2 id="support-error-title" class="oc-section-title">
+            Could not load support requests
+          </h2>
+          <p id="support-error-message" role="alert"></p>
+          <button
+            id="support-retry"
+            class="oc-button oc-button--secondary"
+            type="button"
+          >
+            Retry
+          </button>
+        </section>
+
+        <section
+          id="support-workspace"
+          class="oc-stack"
+          aria-label="Support workspace"
+          hidden
+        >
+          <div
+            id="support-alert"
+            class="oc-alert"
+            role="status"
+            aria-live="polite"
+            hidden
+          ></div>
+          <section
+            id="organization-picker"
+            class="oc-card oc-stack"
+            aria-label="Organization context"
+            hidden
+          >
+            <label for="organization-select">Organization</label>
+            <select id="organization-select" class="oc-input"></select>
+          </section>
+          <div class="oc-app-grid">
+            <section
+              class="oc-card oc-stack"
+              aria-labelledby="request-list-title"
+            >
+              <div class="oc-cluster oc-cluster--between">
+                <h2 id="request-list-title" class="oc-section-title">
+                  Requests
+                </h2>
+                <button
+                  id="support-refresh"
+                  class="oc-button oc-button--secondary"
+                  type="button"
+                >
+                  Refresh
+                </button>
+              </div>
+              <p id="request-empty" class="oc-muted" hidden>
+                No support requests are available in your authorized scope.
+              </p>
+              <ol
+                id="request-list"
+                class="oc-list"
+                aria-label="Support requests"
+              ></ol>
+              <button
+                id="request-next-page"
+                class="oc-button oc-button--secondary"
+                type="button"
+                hidden
+              >
+                Load more
+              </button>
+            </section>
+            <section
+              id="request-details"
+              class="oc-card oc-stack"
+              aria-labelledby="request-details-title"
+            >
+              <h2 id="request-details-title" class="oc-section-title">
+                Request details
+              </h2>
+              <p id="request-details-empty" class="oc-muted">
+                Choose an authorized request to view its details.
+              </p>
+              <div id="request-detail-content" class="oc-stack" hidden></div>
+            </section>
+          </div>
+          <form id="request-create-form" class="oc-card oc-stack" hidden>
+            <h2 class="oc-section-title">Create a support request</h2>
+            <div class="oc-field">
+              <label for="request-subject">Subject</label
+              ><input
+                id="request-subject"
+                class="oc-input"
+                name="subject"
+                required
+                maxlength="200"
+              />
+            </div>
+            <div class="oc-field">
+              <label for="request-body">Describe the issue</label
+              ><textarea
+                id="request-body"
+                class="oc-input"
+                name="body"
+                rows="5"
+                required
+                maxlength="10000"
+              ></textarea>
+            </div>
+            <button class="oc-button" type="submit">Submit request</button>
+          </form>
         </section>
       </main>
     </div>
-    <script type="module" src="./app.js"></script>
   </body>
 </html>

@@ -4,5 +4,11 @@
     "rootDir": ".",
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "schema/**/*.ts", "seeds/**/*.ts", "tests/**/*.ts"]
+  "include": [
+    "scripts/**/*.ts",
+    "src/**/*.ts",
+    "schema/**/*.ts",
+    "seeds/**/*.ts",
+    "tests/**/*.ts"
+  ]
 }

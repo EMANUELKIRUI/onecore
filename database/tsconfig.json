@@ -4,5 +4,10 @@
     "rootDir": ".",
     "outDir": "dist"
   },
-  "include": ["src/**/*.ts", "schema/**/*.ts", "seeds/**/*.ts"]
+  "include": [
+    "scripts/**/*.ts",
+    "src/**/*.ts",
+    "schema/**/*.ts",
+    "seeds/**/*.ts"
+  ]
 }

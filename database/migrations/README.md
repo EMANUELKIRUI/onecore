@@ -1,8 +1,93 @@
 # Database migrations
 
-PostgreSQL 16+ and Drizzle Kit are selected for Phase 2; see [ADR 0002](../../docs/architecture/adr/0002-postgresql-drizzle-persistence.md). PostgreSQL 18.6 live migration and RLS validation completed on 2026-10-05. Drizzle schema source is in `../schema/`; generated, reviewed SQL migrations and Drizzle snapshots/journal are stored here.
+PostgreSQL 16+ and Drizzle Kit are selected for Phase 2; see [ADR 0002](../../docs/architecture/adr/0002-postgresql-drizzle-persistence.md). Drizzle schema source is in `../schema/`; reviewed migration SQL is stored in timestamped directories here. The installed Drizzle ORM migrator reads each directory's `migration.sql`; it does not need a `_journal.json`. Legacy `meta/_journal.json` migration folders are rejected by this runner. Snapshots are generator metadata, not runtime migration evidence.
 
-Run `npm run db:generate` to generate a migration and `npm run db:migrate` to apply committed SQL using a `DATABASE_URL` for `onecore_migrator`. This role requires database `CREATE` for Drizzle's migration metadata schema and `USAGE, CREATE` on `public`; the API must use `onecore_app`, which is neither a table owner nor `BYPASSRLS`. npm does not load `.env` automatically, so export the appropriate role-specific URL before each command. Never use schema push or manually edit a production database. Migrations are forward-only; recover through a compensating migration or verified backup restore.
+## Supported migration entry point and preflight
+
+Use `npm run db:validate` for a read-only preflight and `npm run db:migrate`
+only for an explicitly approved migration. Both commands use
+`database/scripts/migrate.ts`; direct `drizzle-kit migrate` is blocked by the
+config guard, but that guard is not a security boundary against custom code
+that imports Drizzle's migrator.
+
+npm does not load `.env` automatically. Set the role-specific `DATABASE_URL`
+through the approved secret manager or current shell, without placing it in
+command arguments or source control. Also set these non-secret target values
+for every invocation:
+
+```sh
+export ONECORE_MIGRATION_ENVIRONMENT=development
+export ONECORE_MIGRATION_EXPECTED_HOST=127.0.0.1
+export ONECORE_MIGRATION_EXPECTED_PORT=5432
+export ONECORE_MIGRATION_EXPECTED_DATABASE=onecore_dev
+npm run db:validate
+```
+
+For `test`, use `ONECORE_MIGRATION_ENVIRONMENT=test` and a loopback disposable
+database. Development and test endpoints are restricted to loopback. Staging
+and production additionally require `ONECORE_MIGRATION_EXPECTED_RESOURCE_ID`;
+production requires `NODE_ENV=production` and
+`ONECORE_MIGRATION_CONFIRM_PRODUCTION=<resource-id>/<database>`. Initializing an
+empty staging or production database also requires
+`ONECORE_MIGRATION_INITIALIZE_EMPTY_DATABASE=<resource-id>/<database>`.
+Any uncommitted migration SQL or metadata blocks staging and production. In
+development/test, every uncommitted migration must be named exactly in the
+comma-separated `ONECORE_MIGRATION_REVIEWED_UNTRACKED` variable.
+
+The expected host, port, database, environment, and provider resource ID must
+be independently checked against the approved deployment record before a
+remote migration. PostgreSQL can report the connected database and roles, but
+cannot attest that its endpoint belongs to a particular Render resource ID.
+These environment values are operator assertions, not provider identity
+proofs.
+
+The supported `onecore_migrator` login must be `NOSUPERUSER`, `NOBYPASSRLS`,
+`NOCREATEDB`, `NOCREATEROLE`, and `NOREPLICATION`, have no role memberships,
+and must not own the database. It needs effective `CONNECT` and `CREATE` on
+the database for Drizzle metadata, and `USAGE, CREATE` on `public`. Existing
+application objects and Drizzle metadata must be owned by this role. Its
+literal `search_path` must be exactly `public`. Do not use the API, worker,
+seed, superuser, database-owner, or RLS-bypass role for migrations.
+
+`npm run db:validate` checks target identity and privileges in a read-only
+transaction, validates the ledger and repository migration files, and never
+invokes Drizzle's migrator. An uninitialized remote target is not migrated
+unless the exact resource/database initialization confirmation is supplied.
+Validation is not a backup, a production data-presence check outside the
+connected database, or independent proof of provider resource identity.
+
+The installed Drizzle migrator sorts directories by name, selects pending
+migrations by ledger `name`, and records the SQL SHA-256 hash and folder
+timestamp. It does not compare a previously stored hash or require that the
+applied rows form a complete prefix. It creates the configured metadata schema
+and ledger table before running pending migration SQL and ledger inserts in a
+transaction. A failed invocation can therefore leave metadata objects behind;
+the migration runner reports this uncertainty and requires read-only
+reconciliation before retry. The OneCore preflight adds the history checks.
+If a ledger row is missing a usable name, timestamp, or checksum, if a stored
+checksum differs, if rows are duplicated/out of order, or if application
+objects exist without a ledger, stop and reconcile the complete target state
+with the migration owner. Never manually insert, update, delete, or fabricate
+ledger rows to bypass a failed check; never infer success from filenames or a
+later ledger row.
+
+Before a real migration, independently verify the provider resource and target,
+review all pending SQL and the migration ledger, obtain migration-owner
+approval, and take and validate a restorable backup. On uncertain or failed
+forward-only migrations, stop the runner and use an approved, evidence-based
+recovery plan: reconcile partial effects before a reviewed compensating
+migration, or restore a verified backup. Do not blindly retry, skip, baseline,
+or rewrite migration history. PGlite tests and local validation do not establish
+production database identity or state.
+
+Run the focused safety tests and database regression suite only against the
+repository's local test tooling:
+
+```sh
+npm run test -w @onecore/database -- tests/migration-target.test.ts tests/migration-history.test.ts tests/migration-runner.test.ts tests/migration-git-state.test.ts
+npm run typecheck:test -w @onecore/database
+npm run test -w @onecore/database
+```
 
 Schema changes follow **expand → migrate → verify → contract**. Destructive contract steps require explicit review after deployed readers and writers no longer depend on the old schema. Tenant scoping is enforced in trusted server-side query boundaries and by PostgreSQL RLS; application connections must not own protected tables or bypass RLS.
 

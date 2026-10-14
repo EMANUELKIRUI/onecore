@@ -17,24 +17,50 @@ live email delivery was not exercised by repository tests.
 
 ## Static frontend deployment
 
-Marketing, Business, Superadmin, and Support are separate native static HTML, CSS, and ES-module applications. Each Vercel project uses its corresponding `apps/<name>` Root Directory, runs the checked-in build command, and publishes `dist`. Enable Vercel's **Include files outside the Root Directory** setting so the build can read `scripts/build-static-app.mjs` and `packages/ui`; the build copies the required shared stylesheet and modules into each app output. No bundler or external frontend dependency is required. Superadmin provides the existing organization application review API; Support has no connected support API and displays an unavailable state without customer data.
+Marketing, Business, Superadmin, and Support are separate native static HTML, CSS, and ES-module applications. Each Vercel project uses its corresponding `apps/<name>` Root Directory, runs the checked-in build command, and publishes `dist`. Enable Vercel's **Include files outside the Root Directory** setting so the build can read `scripts/build-static-app.mjs` and `packages/ui`; the build copies the required shared stylesheet and modules into each app output. No bundler or external frontend dependency is required. Superadmin provides the organization application review API; Support uses session-authenticated, row-level-secured request routes and remains unavailable when its API is not configured or reachable.
 
-Marketing, Business, and Superadmin configure `ONECORE_API_BASE_PATH=/api` in
+Marketing, Business, Superadmin, and Support configure `ONECORE_API_BASE_PATH=/api` in
 their checked-in Vercel build commands and rewrite `/api/:path*` to
 `https://onecore-api.onrender.com/:path*`. The API routes are rooted at `/`;
 the rewrite removes the frontend-only `/api` prefix. This same-origin path lets
 the frontend API client send the host-only session cookie without browser CORS.
-Support intentionally has no API rewrite until authorized support endpoints
-exist.
+Support uses the same `/api` rewrite and host-only session-cookie flow now
+that its authenticated support routes exist. Verify the live Vercel project
+root, API rewrite destination, `ONECORE_MARKETING_URL`, and the exact
+`AUTH_ALLOWED_ORIGINS` entry before enabling the Support deployment.
 
 Set `ONECORE_BUSINESS_URL` on Marketing and `ONECORE_MARKETING_URL` on Business,
 Superadmin, and Support to the corresponding public app URLs; each Vercel build
 fails if its required cross-app URL is missing. The static build injects these
 values into cross-app links. Configure `AUTH_ALLOWED_ORIGINS` on the Render API
-with the exact deployed Marketing, Business, and Superadmin HTTPS origins.
+with the exact deployed Marketing, Business, Superadmin, and Support HTTPS origins.
 These origins are checked for state-changing requests; do not use wildcards.
 Keep all frontend build values public and never place credentials or service
 secrets there.
+
+## Initial Superadmin provisioning
+
+The initial platform administrator is a global `SUPERADMIN` platform-role
+assignment, not an organization membership. After the reviewed
+`20261014150000_initial_superadmin_bootstrap` migration has been applied by the
+approved migration process, build the workspace and run
+`npm run bootstrap:superadmin -w @onecore/api` from an approved administrative
+host. Supply `DATABASE_URL` through the secret manager as the
+`onecore_migrator` connection; the command verifies the connected database
+role and refuses to run through `onecore_app`. Do not put database credentials
+in command arguments or committed files.
+
+The command requires an interactive TTY. It prompts for the account email and
+display name, requires explicit confirmation, and prompts twice for a password
+without echoing it. It stores only an Argon2id hash. It creates an active user
+and one `SUPERADMIN` assignment only when no Superadmin exists; repeat execution
+for that same active account makes no account changes. It refuses a different
+existing identity or an already-provisioned Superadmin. No organization
+membership is created. Superadmin sign-in requires TOTP enrollment; configure
+the API-only `MFA_ENCRYPTION_KEY` through the approved secret manager before
+enrollment. Then verify sign-in and access through the deployed Superadmin
+portal and its same-origin `/api` proxy. Do not run the command against
+production until separately approved.
 
 ## Organization deployment types
 
@@ -49,9 +75,70 @@ The exact infrastructure placement, residency, service levels, tenancy model for
 
 ## Database deployment
 
-Use separate secret-managed credentials for schema migrations and application runtime. The migration principal owns/provisions the schema; the application principal must be a non-owner with `NOBYPASSRLS` and least-privilege grants. Configure TLS and network allowlists for the selected managed PostgreSQL service.
+Use separate secret-managed credentials for schema migrations and application runtime. The migration principal owns/provisions application schema objects but must not own the database; it must have no superuser, RLS-bypass, database/role creation, replication, or inherited role privileges. The application principal must be a non-owner with `NOBYPASSRLS` and least-privilege grants. Configure TLS and network allowlists for the selected managed PostgreSQL service.
 
-Before a release, back up the target database, review and apply the committed migration with the approved migration job, verify schema and application health, and monitor. Use expand → migrate → verify → contract. A failed/unsafe change requires a forward repair or a tested backup restore; do not assume automatic migration rollback. Validate backups and restores against the actual production provider before launch.
+Use `npm run db:validate` for a read-only migration preflight and
+`npm run db:migrate` only as an explicit migration action. Both require the
+`onecore_migrator` login and non-secret
+`ONECORE_MIGRATION_ENVIRONMENT`,
+`ONECORE_MIGRATION_EXPECTED_HOST`, `ONECORE_MIGRATION_EXPECTED_PORT`, and
+`ONECORE_MIGRATION_EXPECTED_DATABASE` settings. Staging and production also
+require `ONECORE_MIGRATION_EXPECTED_RESOURCE_ID`, verified by the operator
+against the current provider resource and deployment record. Production
+requires `NODE_ENV=production` and
+`ONECORE_MIGRATION_CONFIRM_PRODUCTION=<resource-id>/<database>`. The preflight
+checks the server-reported database, authenticated/current role, role flags and
+memberships, effective database/schema privileges, object ownership, literal
+`search_path=public`, migration ledger schema, repository files, and recorded
+checksums/order. It rejects application objects without reconcilable ledger
+history and never edits the ledger. PostgreSQL cannot attest that its endpoint
+belongs to the provider resource ID supplied by the operator; these checks do
+not replace independent provider verification, migration-owner approval,
+backup, and recovery review. See the [migration runbook](../../database/migrations/README.md).
+
+The API must use a dedicated `onecore_app` login; the worker must use its own
+login with membership only in the `onecore_worker` group role. These are
+separate from `onecore_migrator`. In the provider dashboard, independently
+confirm that the API and worker `DATABASE_URL` settings reference the same
+approved PostgreSQL resource, without copying either value into logs or
+tickets; confirm each login's effective grants using authorized read-only
+catalog checks. The checked-in blueprint declares these settings as
+operator-supplied and does not prove the live service configuration. Rotate
+database credentials through the approved secret manager, update every
+intended service consistently, and confirm the old credential is no longer
+used before revoking it. Never expose URLs or passwords during comparison.
+
+Before a release, obtain migration-owner approval and take a provider backup
+or snapshot. Confirm its completion and restore it to an isolated database;
+verify the restored schema and application-level consistency before treating
+it as a recovery point. Then review and apply only the committed migration
+with the approved migration job, verify schema and application health, and
+monitor. Use expand → migrate → verify → contract. The installed Drizzle
+migrator creates its metadata schema/table before its migration SQL and ledger
+inserts transaction, so a failed invocation may leave metadata objects even
+when the migration transaction rolls back. Re-run read-only validation and
+reconcile transaction/ledger state before retrying; never manually edit the
+ledger. Non-transactional effects or ambiguous commit outcomes require a
+reviewed forward repair or a tested backup restore. Do not assume automatic
+migration rollback. Backup existence and restore success must be verified for
+the actual production provider before release; neither is established by this
+repository or local tests.
+
+## Disposable browser E2E
+
+On Linux, install the Playwright Chromium runtime and its operating-system
+dependencies before the first browser run:
+
+```sh
+npx playwright install --with-deps chromium
+env -u DATABASE_URL NODE_ENV=test npm run test:e2e
+```
+
+The CI workflow uses the same Playwright installation command. The E2E runner
+refuses production mode or an inherited `DATABASE_URL`; it starts a disposable
+PostgreSQL container bound to loopback and explicitly supplies its generated
+test-only target to the migration and API processes. Do not remove that guard
+or run the suite with hosted credentials.
 
 Configure the Render web service health-check path as `/ready`. `/health` and `/health/live` are liveness-only and do not query PostgreSQL. `/ready` performs a read-only PostgreSQL connectivity check bounded to two seconds and returns `503` with `{"status":"not_ready"}` if the check fails or times out; `/health/ready` is a compatibility alias. Neither readiness response nor liveness response exposes dependency details. The blueprint defines the `onecore-api` web service alongside the workflow worker, with automatic deploy disabled; adding this service to the file does not import it, change Render settings, or deploy it. No production deploy/rollback workflow exists yet.
 

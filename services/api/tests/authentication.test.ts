@@ -376,6 +376,7 @@ describe("identity and authentication API", () => {
       organizationId: orgA,
       membershipId: expect.any(String),
       branchId: null,
+      mfaVerifiedAt: null,
     });
 
     const unauthorizedBranch = await app.inject({
@@ -779,6 +780,13 @@ describe("identity and authentication API", () => {
     expect(valid.headers["set-cookie"]).toContain("onecore_session=");
     expect(valid.body).not.toContain(encrypted);
     expect(valid.body).not.toContain(secret);
+    const session = await app.inject({
+      method: "GET",
+      url: "/auth/session",
+      headers: { cookie: cookieFrom(valid) },
+    });
+    expect(session.statusCode).toBe(200);
+    expect(session.json().memberships).toEqual([]);
     const decrypted = decryptSecret(
       encrypted,
       "0123456789abcdef0123456789abcdef",

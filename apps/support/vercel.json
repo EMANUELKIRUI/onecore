@@ -1,4 +1,10 @@
 {
-  "buildCommand": "node ../../scripts/build-static-app.mjs support",
-  "outputDirectory": "dist"
+  "buildCommand": "ONECORE_API_BASE_PATH=/api node ../../scripts/build-static-app.mjs support",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://onecore-api.onrender.com/:path*"
+    }
+  ]
 }

@@ -51,6 +51,28 @@ export function runWithRequestContext<T>(
   return requestContext.run(context, operation);
 }
 
+function findPostgresError(
+  error: unknown,
+): Record<string, unknown> | undefined {
+  const seen = new Set<object>();
+  let current = error;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (typeof current !== "object" || current === null || seen.has(current)) {
+      return undefined;
+    }
+    seen.add(current);
+    const candidate = current as Record<string, unknown>;
+    if (
+      typeof candidate.code === "string" &&
+      /^[0-9A-Z]{5}$/.test(candidate.code)
+    ) {
+      return candidate;
+    }
+    current = candidate.cause;
+  }
+  return undefined;
+}
+
 export function classifyError(error: unknown): ErrorCategory {
   if (typeof error !== "object" || error === null) return "internal";
 
@@ -61,7 +83,13 @@ export function classifyError(error: unknown): ErrorCategory {
   };
   const statusCode =
     typeof candidate.statusCode === "number" ? candidate.statusCode : 0;
-  const code = typeof candidate.code === "string" ? candidate.code : "";
+  const postgresError = findPostgresError(error);
+  const code =
+    typeof candidate.code === "string"
+      ? candidate.code
+      : typeof postgresError?.code === "string"
+        ? postgresError.code
+        : "";
   const name = typeof candidate.name === "string" ? candidate.name : "";
 
   if (
@@ -78,10 +106,9 @@ export function classifyError(error: unknown): ErrorCategory {
   if (statusCode === 404) return "not_found";
   if (statusCode === 409) return "conflict";
   if (statusCode === 429) return "rate_limited";
+  if (name === "DrizzleQueryError") return "database";
   if (/^23/.test(code)) return "conflict";
-  if (/^(08|25|28|40|42|53|54|55|57|58|XX)/.test(code)) {
-    return "database";
-  }
+  if (/^[0-9A-Z]{5}$/.test(code)) return "database";
   if (["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND"].includes(code)) {
     return "external_dependency";
   }
@@ -135,7 +162,47 @@ function sanitizeDiagnosticValue(value: unknown, depth = 0): unknown {
   );
 }
 
+function postgresErrorMetadata(error: unknown): Record<string, string> {
+  const candidate = findPostgresError(error);
+  if (!candidate || typeof candidate.code !== "string") return {};
+  const metadata: Record<string, string> = {};
+  metadata.sqlState = candidate.code;
+
+  for (const [target, sources] of Object.entries({
+    schema: ["schema_name", "schema"],
+    relation: ["table_name", "table"],
+    column: ["column_name", "column"],
+    constraint: ["constraint_name", "constraint"],
+  })) {
+    const value = sources
+      .map((source) => candidate[source])
+      .find((item) => typeof item === "string");
+    if (
+      typeof value === "string" &&
+      /^[A-Za-z_][A-Za-z0-9_$]{0,62}$/.test(value)
+    ) {
+      metadata[target] = value;
+    }
+  }
+
+  return metadata;
+}
+
 export function sanitizeErrorForLog(error: unknown): unknown {
+  const metadata = postgresErrorMetadata(error);
+  if (
+    metadata.sqlState ||
+    (typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      error.name === "DrizzleQueryError")
+  ) {
+    return {
+      name: "DatabaseError",
+      message: "Database operation failed.",
+      ...metadata,
+    };
+  }
   if (error instanceof Error) {
     return {
       name: error.name,

@@ -108,6 +108,7 @@ export interface AuthenticatedRequestContext {
   organizationId: string | null;
   membershipId: string | null;
   branchId: string | null;
+  mfaVerifiedAt: Date | null;
 }
 
 declare module "fastify" {
@@ -425,6 +426,7 @@ export function registerAuthentication(
         organizationId,
         membershipId,
         branchId,
+        mfaVerifiedAt: resolved.session.mfaVerifiedAt ?? null,
       };
       if (request.observabilityContext) {
         Object.assign(request.observabilityContext, {

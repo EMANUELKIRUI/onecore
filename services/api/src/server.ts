@@ -37,6 +37,7 @@ async function startApi(): Promise<void> {
         readinessCheck: () => checkDatabaseConnectivity(db),
         rateLimiter: createDatabaseRateLimiter(db),
         lifecycleMutations: createLifecycleMutationService(db),
+        database: db,
       },
     );
     app.addHook("onClose", close);

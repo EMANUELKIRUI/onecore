@@ -832,6 +832,147 @@ export const platformUserRoles = pgTable(
   ],
 );
 
+export const supportRootAdministrators = pgTable(
+  "support_root_administrators",
+  {
+    userId: uuid("user_id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provisionedAt: timestamp("provisioned_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+);
+
+export const supportAccessGrants = pgTable(
+  "support_access_grants",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    supportUserId: uuid("support_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    grantedByUserId: uuid("granted_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    reason: varchar("reason", { length: 500 }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index("support_access_grants_user_org_expiry_idx").on(
+      table.supportUserId,
+      table.organizationId,
+      table.expiresAt,
+    ),
+    check(
+      "support_access_grants_expiry_after_creation",
+      sql`${table.expiresAt} > ${table.createdAt}`,
+    ),
+    check(
+      "support_access_grants_reason_nonempty",
+      sql`length(btrim(${table.reason})) > 0`,
+    ),
+  ],
+);
+
+export const supportRequests = pgTable(
+  "support_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    assignedSupportUserId: uuid("assigned_support_user_id").references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
+    status: varchar("status", { length: 20 })
+      .$type<
+        "OPEN" | "IN_PROGRESS" | "WAITING_ON_CUSTOMER" | "RESOLVED" | "CLOSED"
+      >()
+      .notNull()
+      .default("OPEN"),
+    priority: varchar("priority", { length: 10 })
+      .$type<"LOW" | "NORMAL" | "HIGH" | "URGENT">()
+      .notNull()
+      .default("NORMAL"),
+    subject: varchar("subject", { length: 200 }).notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("support_requests_org_updated_idx").on(
+      table.organizationId,
+      table.updatedAt,
+    ),
+    index("support_requests_assigned_updated_idx").on(
+      table.assignedSupportUserId,
+      table.updatedAt,
+    ),
+    unique("support_requests_org_id_id_unique").on(
+      table.organizationId,
+      table.id,
+    ),
+    check(
+      "support_requests_status_check",
+      sql`${table.status} in ('OPEN', 'IN_PROGRESS', 'WAITING_ON_CUSTOMER', 'RESOLVED', 'CLOSED')`,
+    ),
+    check(
+      "support_requests_priority_check",
+      sql`${table.priority} in ('LOW', 'NORMAL', 'HIGH', 'URGENT')`,
+    ),
+    check(
+      "support_requests_subject_nonempty",
+      sql`length(btrim(${table.subject})) > 0`,
+    ),
+  ],
+);
+
+export const supportMessages = pgTable(
+  "support_messages",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id").notNull(),
+    requestId: uuid("request_id").notNull(),
+    authorUserId: uuid("author_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    visibility: varchar("visibility", { length: 10 })
+      .$type<"CUSTOMER" | "INTERNAL">()
+      .notNull(),
+    body: text("body").notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    foreignKey({
+      name: "support_messages_request_fk",
+      columns: [table.organizationId, table.requestId],
+      foreignColumns: [supportRequests.organizationId, supportRequests.id],
+    }).onDelete("cascade"),
+    index("support_messages_request_created_idx").on(
+      table.organizationId,
+      table.requestId,
+      table.createdAt,
+    ),
+    check(
+      "support_messages_visibility_check",
+      sql`${table.visibility} in ('CUSTOMER', 'INTERNAL')`,
+    ),
+    check(
+      "support_messages_body_nonempty",
+      sql`length(btrim(${table.body})) > 0`,
+    ),
+  ],
+);
+
 export const organizationMemberships = pgTable(
   "organization_memberships",
   {

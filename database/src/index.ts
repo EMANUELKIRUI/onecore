@@ -78,6 +78,11 @@ export {
   type IdentityUser,
 } from "./identity-repository.js";
 export {
+  InitialSuperadminProvisioningError,
+  provisionInitialSuperadmin,
+  type InitialSuperadminProvisionResult,
+} from "./platform-identity.js";
+export {
   evaluateFeatureFlag,
   resolveFeatureFlag,
   type FeatureFlagContext,

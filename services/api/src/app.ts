@@ -5,6 +5,7 @@ import {
   type IdentityRepository,
   type LifecycleMutationService,
   type RateLimiter,
+  type Database,
 } from "@onecore/database";
 import type { ApiErrorResponse, HealthResponse } from "@onecore/contracts";
 import type { SecretStore } from "@onecore/core-domain";
@@ -38,6 +39,7 @@ import { registerLifecycleRoutes } from "./lifecycle.js";
 import { createApiFastify } from "./fastify-instance.js";
 import { unavailableSecretStore } from "./integration-boundaries.js";
 import type { TransactionalEmailSender } from "./identity-security.js";
+import { registerSupportRoutes } from "./support.js";
 
 export interface ApiAppOptions {
   readinessCheck?: () => Promise<void>;
@@ -45,6 +47,7 @@ export interface ApiAppOptions {
   lifecycleMutations?: LifecycleMutationService;
   secretStore?: SecretStore;
   transactionalEmailSender?: TransactionalEmailSender;
+  database?: Database;
 }
 
 declare module "fastify" {
@@ -238,6 +241,7 @@ export function buildApp(
       options.rateLimiter,
     );
   }
+  if (options.database) registerSupportRoutes(app, options.database);
 
   app.setNotFoundHandler((_request, reply) => {
     const body: ApiErrorResponse = {
@@ -286,6 +290,7 @@ export function buildApp(
     request.log.error(
       {
         ...request.observabilityContext,
+        operation: `${request.method} ${request.routeOptions.url ?? request.url.split("?")[0]}`,
         errorCategory: category,
         errorCode: category,
         err: sanitizeErrorForLog(error),

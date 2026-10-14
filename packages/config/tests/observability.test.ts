@@ -51,6 +51,12 @@ describe("observability foundations", () => {
     expect(classifyError({ statusCode: 429 })).toBe("rate_limited");
     expect(classifyError({ code: "23505" })).toBe("conflict");
     expect(classifyError({ code: "08006" })).toBe("database");
+    expect(
+      classifyError({
+        name: "DrizzleQueryError",
+        cause: { code: "42501" },
+      }),
+    ).toBe("database");
     expect(classifyError({ code: "ECONNREFUSED" })).toBe("external_dependency");
     expect(classifyError(new Error("private internal details"))).toBe(
       "internal",
@@ -124,6 +130,69 @@ describe("observability foundations", () => {
     expect(JSON.stringify(diagnostics)).not.toContain("hidden-token");
     expect(JSON.stringify(diagnostics)).toContain(
       "[REDACTED_CONNECTION_STRING]",
+    );
+  });
+
+  it("extracts safe PostgreSQL diagnostics from Drizzle causes without logging SQL or params", () => {
+    const postgresError = Object.assign(
+      new Error("permission denied for table modules"),
+      {
+        code: "42501",
+        schema_name: "public",
+        table_name: "modules",
+        constraint_name: "modules_key_unique",
+        detail: "sensitive row contents",
+      },
+    );
+    const query = "SELECT private_value FROM modules WHERE key = $1";
+    const parameter = "private-parameter-value";
+    const error = Object.assign(
+      new Error(`Failed query: ${query}\nparams: ${parameter}`, {
+        cause: postgresError,
+      }),
+      {
+        name: "DrizzleQueryError",
+        query,
+        params: [parameter],
+      },
+    );
+
+    expect(classifyError(error)).toBe("database");
+    expect(sanitizeErrorForLog(error)).toMatchObject({
+      name: "DatabaseError",
+      message: "Database operation failed.",
+      sqlState: "42501",
+      schema: "public",
+      relation: "modules",
+      constraint: "modules_key_unique",
+    });
+    expect(JSON.stringify(sanitizeErrorForLog(error))).not.toContain(
+      "sensitive row contents",
+    );
+    expect(JSON.stringify(sanitizeErrorForLog(error))).not.toContain(query);
+    expect(JSON.stringify(sanitizeErrorForLog(error))).not.toContain(parameter);
+    expect(JSON.stringify(sanitizeErrorForLog(error))).not.toContain(
+      "permission denied",
+    );
+  });
+
+  it("omits malformed PostgreSQL diagnostic fields", () => {
+    const error = Object.assign(new Error("Failed query: SELECT secret"), {
+      name: "DrizzleQueryError",
+      code: "not-sqlstate",
+      query: "SELECT secret",
+      params: ["sensitive-value"],
+      table_name: "table name with unsafe content",
+    });
+
+    expect(classifyError(error)).toBe("database");
+    expect(sanitizeErrorForLog(error)).toEqual({
+      name: "DatabaseError",
+      message: "Database operation failed.",
+    });
+    expect(JSON.stringify(sanitizeErrorForLog(error))).not.toContain("SELECT");
+    expect(JSON.stringify(sanitizeErrorForLog(error))).not.toContain(
+      "sensitive-value",
     );
   });
 });

@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { Algorithm, hash as hashPassword } from "@node-rs/argon2";
 import { PGlite } from "@electric-sql/pglite";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -280,6 +280,57 @@ describe("production lifecycle mutations", () => {
 
   afterAll(async () => {
     await client.close();
+  });
+
+  it("lists only available modules in the public catalogue", async () => {
+    const prefix = `public-catalogue-${crypto.randomUUID()}`;
+    const moduleKeys = {
+      available: `${prefix}.available`,
+      disabled: `${prefix}.disabled`,
+      retired: `${prefix}.retired`,
+    };
+    try {
+      await database.insert(schema.modules).values([
+        {
+          key: moduleKeys.available,
+          name: "Available module",
+          description: "Public description",
+          lifecycle: "AVAILABLE",
+          isAvailable: true,
+        },
+        {
+          key: moduleKeys.disabled,
+          name: "Disabled module",
+          lifecycle: "AVAILABLE",
+          isAvailable: false,
+        },
+        {
+          key: moduleKeys.retired,
+          name: "Retired module",
+          lifecycle: "RETIRED",
+          isAvailable: true,
+        },
+      ]);
+      const lifecycle = createLifecycleMutationService(
+        database as unknown as Database,
+      );
+
+      const catalogue = await lifecycle.listPublicModules();
+
+      expect(
+        catalogue.filter(({ name }) => name === moduleKeys.available),
+      ).toEqual([
+        {
+          name: moduleKeys.available,
+          displayName: "Available module",
+          description: "Public description",
+        },
+      ]);
+    } finally {
+      await database
+        .delete(schema.modules)
+        .where(inArray(schema.modules.key, Object.values(moduleKeys)));
+    }
   });
 
   it("creates a pending organization with an active bootstrap owner, without adding the superadmin", async () => {

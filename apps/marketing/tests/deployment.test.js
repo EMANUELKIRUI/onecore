@@ -11,7 +11,7 @@ async function readVercelConfig(app) {
 }
 
 describe("frontend API proxy deployment", () => {
-  it.each(["marketing", "business", "superadmin"])(
+  it.each(["marketing", "business", "superadmin", "support"])(
     "configures the %s build and same-origin API rewrite",
     async (app) => {
       const config = await readVercelConfig(app);
@@ -28,14 +28,4 @@ describe("frontend API proxy deployment", () => {
       ]);
     },
   );
-
-  it("leaves Support disconnected from the API", async () => {
-    const config = await readVercelConfig("support");
-
-    expect(config.buildCommand).toBe(
-      "node ../../scripts/build-static-app.mjs support",
-    );
-    expect(config.outputDirectory).toBe("dist");
-    expect(config.rewrites).toBeUndefined();
-  });
 });

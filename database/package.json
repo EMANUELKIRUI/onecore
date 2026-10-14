@@ -15,7 +15,8 @@
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run --hookTimeout=30000",
     "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
-    "db:migrate": "drizzle-kit migrate --config=drizzle.config.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:validate": "tsx scripts/migrate.ts --validate-only",
     "db:seed": "tsx seeds/seed.ts"
   },
   "dependencies": {

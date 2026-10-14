@@ -113,4 +113,82 @@ describe("Marketing static image assets", () => {
       await rm(temporaryRoot, { recursive: true, force: true });
     }
   });
+
+  describe("Support static build configuration", () => {
+    it("injects the same-origin API path and preserves fail-closed application assets", async () => {
+      const temporaryRoot = await mkdtemp(
+        join(tmpdir(), "onecore-support-build-"),
+      );
+      const appRoot = join(temporaryRoot, "apps", "support");
+      const uiRoot = join(temporaryRoot, "packages", "ui");
+      const scriptRoot = join(temporaryRoot, "scripts");
+
+      try {
+        await Promise.all([
+          mkdir(appRoot, { recursive: true }),
+          mkdir(join(uiRoot, "src"), { recursive: true }),
+          mkdir(scriptRoot, { recursive: true }),
+        ]);
+        await Promise.all([
+          cp(
+            join(workspaceRoot, "apps", "support", "index.html"),
+            join(appRoot, "index.html"),
+          ),
+          cp(
+            join(workspaceRoot, "apps", "support", "app.js"),
+            join(appRoot, "app.js"),
+          ),
+          cp(
+            join(workspaceRoot, "packages", "ui", "styles.css"),
+            join(uiRoot, "styles.css"),
+          ),
+          cp(
+            join(workspaceRoot, "packages", "ui", "src"),
+            join(uiRoot, "src"),
+            { recursive: true },
+          ),
+          cp(
+            join(workspaceRoot, "scripts", "build-static-app.mjs"),
+            join(scriptRoot, "build-static-app.mjs"),
+          ),
+        ]);
+
+        execFileSync(
+          process.execPath,
+          [join(scriptRoot, "build-static-app.mjs"), "support"],
+          {
+            cwd: temporaryRoot,
+            env: {
+              PATH: process.env.PATH ?? "",
+              ONECORE_API_BASE_PATH: "/api",
+            },
+            stdio: "pipe",
+          },
+        );
+
+        const distRoot = join(appRoot, "dist");
+        expect(await readFile(join(distRoot, "index.html"), "utf8")).toContain(
+          '<meta name="onecore-api-base" content="/api" />',
+        );
+        expect(await readFile(join(distRoot, "app.js"), "utf8")).toContain(
+          "The authorized Support API is not configured or could not be reached.",
+        );
+        const vercel = JSON.parse(
+          await readFile(
+            join(workspaceRoot, "apps", "support", "vercel.json"),
+            "utf8",
+          ),
+        );
+        expect(vercel.outputDirectory).toBe("dist");
+        expect(vercel.rewrites).toEqual([
+          {
+            source: "/api/:path*",
+            destination: "https://onecore-api.onrender.com/:path*",
+          },
+        ]);
+      } finally {
+        await rm(temporaryRoot, { recursive: true, force: true });
+      }
+    });
+  });
 });

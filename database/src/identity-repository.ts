@@ -1,4 +1,14 @@
-import { and, eq, exists, gt, isNull, lte, lt, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  exists,
+  gt,
+  inArray,
+  isNull,
+  lte,
+  lt,
+  sql,
+} from "drizzle-orm";
 import {
   auditLogs,
   branches,
@@ -271,7 +281,7 @@ async function requiresMfaInTransaction(
     .where(
       and(
         eq(platformUserRoles.userId, userId),
-        eq(platformUserRoles.role, "SUPERADMIN"),
+        inArray(platformUserRoles.role, ["SUPERADMIN", "SUPPORT"]),
       ),
     )
     .limit(1);
