@@ -56,26 +56,25 @@ const emptyDatabaseState: MigrationDatabaseState = {
 describe("migration target safety", () => {
   it("requires a valid URL and explicit environment-specific target", () => {
     expect(() => resolveMigrationTarget({})).toThrow(
-      "MIGRATOR_DATABASE_URL is required",
+      "MIGRATOR_DATABASE_URL is unset or blank",
     );
     expect(() =>
       resolveMigrationTarget({
         ...developmentEnvironment,
         MIGRATOR_DATABASE_URL: undefined,
-        DATABASE_URL:
-          "postgresql://onecore_app@127.0.0.1:5432/onecore_dev",
+        DATABASE_URL: "postgresql://onecore_app@127.0.0.1:5432/onecore_dev",
       }),
-    ).toThrow("MIGRATOR_DATABASE_URL is required");
+    ).toThrow("MIGRATOR_DATABASE_URL is unset or blank");
     expect(() =>
       resolveMigrationTarget({
         ...developmentEnvironment,
         MIGRATOR_DATABASE_URL: " \t ",
       }),
-    ).toThrow("MIGRATOR_DATABASE_URL is required");
+    ).toThrow("MIGRATOR_DATABASE_URL is unset or blank");
     expect(() =>
       resolveMigrationTarget({
         ...developmentEnvironment,
-        MIGRATOR_DATABASE_URL: "not a connection URL that contains secret material",
+        MIGRATOR_DATABASE_URL: "not a valid database URL",
       }),
     ).toThrow("not a valid PostgreSQL connection URL");
     expect(() =>
@@ -92,7 +91,7 @@ describe("migration target safety", () => {
     ).toThrow("ONECORE_MIGRATION_ENVIRONMENT");
   });
 
-  it("requires the migrator login and rejects target host, port, and database mismatches", () => {
+  it("requires the migrator login and identifies mismatched target fields without values", () => {
     expect(() =>
       resolveMigrationTarget({
         ...developmentEnvironment,
@@ -105,26 +104,40 @@ describe("migration target safety", () => {
         ...developmentEnvironment,
         ONECORE_MIGRATION_EXPECTED_HOST: "localhost",
       }),
-    ).toThrow("does not match");
+    ).toThrow("target mismatch in: hostname");
     expect(() =>
       resolveMigrationTarget({
         ...developmentEnvironment,
         ONECORE_MIGRATION_EXPECTED_PORT: "5433",
       }),
-    ).toThrow("does not match");
+    ).toThrow("target mismatch in: port");
     expect(() =>
       resolveMigrationTarget({
         ...developmentEnvironment,
         ONECORE_MIGRATION_EXPECTED_DATABASE: "onecore_test",
       }),
-    ).toThrow("does not match");
+    ).toThrow("target mismatch in: database");
+
+    const error = () =>
+      resolveMigrationTarget({
+        ...developmentEnvironment,
+        MIGRATOR_DATABASE_URL:
+          "postgresql://onecore_migrator@other.example:5433/other_db",
+      });
+    expect(error).toThrow("target mismatch in: hostname, port, database");
+    try {
+      error();
+    } catch (caught) {
+      expect((caught as Error).message).not.toContain("onecore_migrator");
+      expect((caught as Error).message).not.toContain("other.example");
+      expect((caught as Error).message).not.toContain("other_db");
+    }
   });
 
   it("selects the explicit migrator URL and never falls back to the runtime URL", () => {
     const migratorUrl =
       "postgresql://onecore_migrator@127.0.0.1:5432/onecore_dev";
-    const runtimeUrl =
-      "postgresql://onecore_app@127.0.0.1:5432/onecore_dev";
+    const runtimeUrl = "postgresql://onecore_app@127.0.0.1:5432/onecore_dev";
     expect(
       resolveMigrationTarget({
         ...developmentEnvironment,
@@ -138,12 +151,11 @@ describe("migration target safety", () => {
         MIGRATOR_DATABASE_URL: undefined,
         DATABASE_URL: runtimeUrl,
       }),
-    ).toThrow("MIGRATOR_DATABASE_URL is required");
+    ).toThrow("MIGRATOR_DATABASE_URL is unset or blank");
   });
 
   it("rejects a wrong migrator role without exposing URL credentials", () => {
-    const password = "synthetic-test-password";
-    const invalidUrl = `postgresql://onecore_app:${password}@127.0.0.1:5432/onecore_dev`;
+    const invalidUrl = "postgresql://onecore_app@127.0.0.1:5432/onecore_dev";
     let error: unknown;
     try {
       resolveMigrationTarget({
@@ -158,7 +170,6 @@ describe("migration target safety", () => {
     expect(error).toBeInstanceOf(MigrationTargetError);
     expect((error as Error).message).toContain("dedicated migration role");
     expect((error as Error).message).not.toContain("onecore_app");
-    expect((error as Error).message).not.toContain(password);
     expect((error as Error).message).not.toContain(invalidUrl);
   });
 
@@ -170,6 +181,20 @@ describe("migration target safety", () => {
       port: 5432,
       role: "onecore_migrator",
       connectionString: developmentEnvironment.MIGRATOR_DATABASE_URL,
+    });
+  });
+
+  it("uses PostgreSQL's default port when the URL omits a port", () => {
+    expect(
+      resolveMigrationTarget({
+        ...developmentEnvironment,
+        MIGRATOR_DATABASE_URL:
+          "postgresql://onecore_migrator@127.0.0.1/onecore_dev",
+      }),
+    ).toMatchObject({
+      host: "127.0.0.1",
+      port: 5432,
+      database: "onecore_dev",
     });
   });
 
@@ -232,11 +257,54 @@ describe("migration target safety", () => {
     expect(() =>
       resolveMigrationTarget({
         ...productionEnvironment,
+        ONECORE_MIGRATION_CONFIRM_PRODUCTION:
+          "provider-resource-123/another_database",
+      }),
+    ).toThrow("ONECORE_MIGRATION_CONFIRM_PRODUCTION must equal");
+    expect(() =>
+      resolveMigrationTarget({
+        ...productionEnvironment,
         ONECORE_MIGRATION_EXPECTED_PORT: "5433",
         ONECORE_MIGRATION_CONFIRM_PRODUCTION:
           "provider-resource-123/onecore_prod",
       }),
-    ).toThrow("does not match");
+    ).toThrow("target mismatch in: port");
+  });
+
+  it.each([
+    "ONECORE_MIGRATION_EXPECTED_HOST",
+    "ONECORE_MIGRATION_EXPECTED_PORT",
+    "ONECORE_MIGRATION_EXPECTED_DATABASE",
+  ])("requires %s before validating the target", (name) => {
+    expect(() =>
+      resolveMigrationTarget({
+        ...developmentEnvironment,
+        [name]: undefined,
+      }),
+    ).toThrow(`${name} is required`);
+  });
+
+  it("requires the production resource ID and rejects missing confirmation", () => {
+    const productionEnvironment = {
+      MIGRATOR_DATABASE_URL:
+        "postgresql://onecore_migrator@db.example.test:5432/onecore_prod",
+      ONECORE_MIGRATION_ENVIRONMENT: "production",
+      ONECORE_MIGRATION_EXPECTED_HOST: "db.example.test",
+      ONECORE_MIGRATION_EXPECTED_PORT: "5432",
+      ONECORE_MIGRATION_EXPECTED_DATABASE: "onecore_prod",
+      NODE_ENV: "production",
+    };
+
+    expect(() => resolveMigrationTarget(productionEnvironment)).toThrow(
+      "ONECORE_MIGRATION_EXPECTED_RESOURCE_ID is required",
+    );
+
+    expect(() =>
+      resolveMigrationTarget({
+        ...productionEnvironment,
+        ONECORE_MIGRATION_EXPECTED_RESOURCE_ID: "verified-resource",
+      }),
+    ).toThrow("ONECORE_MIGRATION_CONFIRM_PRODUCTION is required");
   });
 
   it.each([

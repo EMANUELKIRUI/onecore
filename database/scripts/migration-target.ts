@@ -107,7 +107,7 @@ export function resolveMigrationTarget(
   const configuredConnectionString = environment.MIGRATOR_DATABASE_URL;
   if (!configuredConnectionString?.trim()) {
     throw new MigrationTargetError(
-      "MIGRATOR_DATABASE_URL is required to migrate",
+      "MIGRATOR_DATABASE_URL is unset or blank; provide it securely to migrate",
     );
   }
   const connectionString = configuredConnectionString.trim();
@@ -196,13 +196,19 @@ export function resolveMigrationTarget(
       "ONECORE_MIGRATION_EXPECTED_PORT must be an integer from 1 to 65535",
     );
   }
-  if (
-    normalizeHost(expectedHost) !== normalizeHost(host) ||
-    expectedDatabase !== database ||
-    expectedPort !== port
-  ) {
+  const mismatchedFields: string[] = [];
+  if (normalizeHost(expectedHost) !== normalizeHost(host)) {
+    mismatchedFields.push("hostname");
+  }
+  if (expectedPort !== port) {
+    mismatchedFields.push("port");
+  }
+  if (expectedDatabase !== database) {
+    mismatchedFields.push("database");
+  }
+  if (mismatchedFields.length > 0) {
     throw new MigrationTargetError(
-      "MIGRATOR_DATABASE_URL does not match the configured migration host, port, and database",
+      `MIGRATOR_DATABASE_URL target mismatch in: ${mismatchedFields.join(", ")}. Verify the URL and matching ONECORE_MIGRATION_EXPECTED_* settings; values are suppressed.`,
     );
   }
 
