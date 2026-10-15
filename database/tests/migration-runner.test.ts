@@ -132,7 +132,9 @@ describe("migration runner", () => {
 
     expect(mocks.migrate).not.toHaveBeenCalled();
     expect(mocks.close).toHaveBeenCalledOnce();
-    expect(mocks.connect).toHaveBeenCalledWith(environment.MIGRATOR_DATABASE_URL);
+    expect(mocks.connect).toHaveBeenCalledWith(
+      environment.MIGRATOR_DATABASE_URL,
+    );
     expect(mocks.log).toHaveBeenCalledWith(
       expect.stringContaining(
         "No migration SQL or ledger writes were executed",
@@ -157,7 +159,7 @@ describe("migration runner", () => {
         },
         mocks.dependencies,
       ),
-    ).rejects.toThrow("MIGRATOR_DATABASE_URL is required");
+    ).rejects.toThrow("MIGRATOR_DATABASE_URL is unset or blank");
     expect(mocks.connect).not.toHaveBeenCalled();
   });
 
@@ -176,7 +178,7 @@ describe("migration runner", () => {
         },
         mocks.dependencies,
       ),
-    ).rejects.toThrow("does not match");
+    ).rejects.toThrow("target mismatch in: database");
 
     expect(mocks.connect).not.toHaveBeenCalled();
     expect(mocks.migrate).not.toHaveBeenCalled();

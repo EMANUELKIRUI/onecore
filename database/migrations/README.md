@@ -61,8 +61,14 @@ seed, superuser, database-owner, or RLS-bypass role for migrations.
 transaction, validates the ledger and repository migration files, and never
 invokes Drizzle's migrator. An uninitialized remote target is not migrated
 unless the exact resource/database initialization confirmation is supplied.
+Validation still opens a remote connection and reads identity, catalog, and
+ledger metadata; provider-side connection or audit logging may occur.
 Validation is not a backup, a production data-presence check outside the
 connected database, or independent proof of provider resource identity.
+When the URL does not match the expected host, port, or database, validation
+reports only the mismatched field names; it suppresses the URL and compared
+values. Recheck the securely supplied URL and each corresponding
+`ONECORE_MIGRATION_EXPECTED_*` setting without printing either.
 
 The installed Drizzle migrator sorts directories by name, selects pending
 migrations by ledger `name`, and records the SQL SHA-256 hash and folder
@@ -148,6 +154,144 @@ active, and scopes tenant buckets to the exact transaction-local organization
 and branch. It grants the API role only the DML operations needed for atomic
 bucket updates; the migration role remains the table owner. See
 [observability and security operations](../../docs/security/observability.md).
+
+### Rate-limit table missing from a deployed database
+
+The API error `relation "rate_limit_buckets" does not exist` does not establish
+whether its creation migration is pending or recorded as applied. The ordered
+migrations are
+`20261006171240_spooky_firestar` (creates the table, expiry index, constraints,
+organization RLS policy, and `onecore_app` DML grants) and
+`20261006180231_old_la_nuit` (adds `branch_id` and replaces the policy with
+organization-and-branch scoping). Keep both historical SQL files and their
+checksums unchanged.
+
+The migration preflight validates ledger order and checksums, and rejects a
+missing or empty ledger when application objects exist. It does not assert
+that every relation created by an applied migration still exists. Therefore,
+a clean validation result with zero migrations pending is not proof that
+`rate_limit_buckets` exists, and the ordinary migrator will not replay a
+creation migration already recorded in the ledger. Do not infer the deployed
+ledger or schema from this repository.
+
+Before choosing a path, an authorized operator must verify the intended
+provider resource and database using its approved deployment record, then
+obtain a read-only inspection of the complete migration ledger and relevant
+catalog state. Use a separately approved, least-privilege read-only inspection
+login with catalog visibility and SELECT access to the migration ledger; do
+not use the API's `onecore` login or the `onecore_migrator` migration
+credentials for this inspection. Independently confirm the provider resource
+and that `current_database()` returns `onecore_prod`; stop if either check
+fails. These queries do not replace the production migration runner's
+environment, resource-ID, and confirmation safeguards, and do not authorize
+production writes. On the approved read-only inspection connection, capture
+at least:
+
+```sql
+BEGIN TRANSACTION READ ONLY;
+
+SELECT current_database() AS database_name, current_user AS inspection_role;
+SELECT to_regclass('public.rate_limit_buckets') AS bucket_table,
+       to_regclass('drizzle.__drizzle_migrations') AS migration_ledger;
+
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'rate_limit_buckets'
+ORDER BY ordinal_position;
+
+SELECT c.relname, pg_get_userbyid(c.relowner) AS owner,
+       c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
+FROM pg_catalog.pg_class AS c
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relname = 'rate_limit_buckets';
+
+SELECT policyname, cmd, roles, qual, with_check
+FROM pg_catalog.pg_policies
+WHERE schemaname = 'public' AND tablename = 'rate_limit_buckets';
+
+SELECT indexname, indexdef
+FROM pg_catalog.pg_indexes
+WHERE schemaname = 'public' AND tablename = 'rate_limit_buckets';
+
+SELECT conname, pg_catalog.pg_get_constraintdef(oid) AS definition
+FROM pg_catalog.pg_constraint AS c
+JOIN pg_catalog.pg_class AS t ON t.oid = c.conrelid
+JOIN pg_catalog.pg_namespace AS n ON n.oid = t.relnamespace
+WHERE n.nspname = 'public' AND t.relname = 'rate_limit_buckets'
+ORDER BY c.conname;
+
+SELECT grantee, privilege_type
+FROM information_schema.role_table_grants
+WHERE table_schema = 'public' AND table_name = 'rate_limit_buckets'
+  AND grantee IN ('onecore_app', 'onecore_migrator')
+ORDER BY grantee, privilege_type;
+
+ROLLBACK;
+```
+
+If `to_regclass('drizzle.__drizzle_migrations')` returned a relation, start a
+separate read-only transaction and inspect its columns first:
+
+```sql
+BEGIN TRANSACTION READ ONLY;
+
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'drizzle'
+  AND table_name = '__drizzle_migrations'
+ORDER BY ordinal_position;
+
+ROLLBACK;
+```
+
+Only if that inspection confirms the expected columns, query its records in
+another read-only transaction:
+
+```sql
+BEGIN TRANSACTION READ ONLY;
+
+SELECT id, name, created_at, hash
+FROM drizzle.__drizzle_migrations
+ORDER BY id;
+
+ROLLBACK;
+```
+
+Compare names, timestamps, and exact hashes for both rate-limit migrations
+against the unchanged repository files. Also verify the final table has the
+expected `branch_id`, key/hash and hit-count constraints, expiry index,
+migrator ownership, enabled and forced RLS, the branch-scoped policy defined
+by the second migration, and only the documented application-role grants.
+Preserve the inspection output with the incident record; do not expose
+connection URLs or credentials.
+
+Use the evidence to choose only a human-reviewed next step:
+
+- If the creation migration is genuinely pending, the ledger is a verified
+  complete prefix, no partial/conflicting table or migration effects exist,
+  and the approved inspection confirms the intended target, the existing
+  ordered migration runner can apply pending SQL after migration-owner
+  approval, a verified restorable backup, and the normal production
+  confirmation checks. Run its read-only preflight first; do not run it while
+  history or schema evidence is ambiguous.
+- If the creation migration is recorded as applied but its table is absent,
+  stop. The ordinary runner skips that historical migration. Do not edit the
+  ledger or replay either historical file. The migration owner must approve
+  either a verified backup restore or a new, reviewed forward-only repair
+  migration that restores the complete current schema and security state,
+  including branch-scoped RLS. The repair must be tested against local
+  fixtures and go through the normal ordered runner; no such production
+  repair is currently provided by this repository.
+- If the ledger is absent/incomplete while application objects exist, a hash
+  or timestamp is malformed/mismatched, migrations are out of order, a later
+  migration exists without its predecessor, or observed objects/policies/
+  grants differ from the expected state, stop and escalate for an
+  evidence-based recovery or verified restore. Never baseline, skip, fabricate,
+  or manually edit migration history.
+
+This read-only procedure is evidence gathering, not authorization to migrate,
+repair, or change a hosted database. No production ledger or schema state is
+asserted here.
 
 The runtime-role grants migration consolidates the documented identity, RBAC,
 and configuration privileges into forward-only SQL. Identity updates and
