@@ -777,6 +777,43 @@ describe("production lifecycle mutations", () => {
     ]);
   });
 
+  it("submits an application without module requests when the catalogue is unavailable", async () => {
+    const lifecycle = createLifecycleMutationService(applicationDatabase);
+    await client.exec(
+      'ALTER TABLE "modules" RENAME TO "lifecycle_test_modules_unavailable"',
+    );
+
+    try {
+      const result = await lifecycle.submitOrganizationApplication(
+        {
+          name: "Application Without Modules",
+          slug: `application-no-modules-${crypto.randomUUID()}`,
+          industry: "Retail",
+          deploymentType: "SAAS",
+          contactEmail: `contact-${crypto.randomUUID()}@example.test`,
+          contactPhone: "+254700000000",
+          ownerName: "Application Owner",
+          ownerEmail: `applicant-${crypto.randomUUID()}@example.test`,
+          countryCode: "KE",
+          region: "Nairobi",
+          city: "Nairobi",
+          address: "Central Nairobi",
+          requestedModules: [],
+        },
+        metadata(),
+      );
+
+      expect(result.organization.status).toBe("PENDING");
+      expect(result.organization.profile).toMatchObject({
+        application: { requestedModules: [] },
+      });
+    } finally {
+      await client.exec(
+        'ALTER TABLE "lifecycle_test_modules_unavailable" RENAME TO "modules"',
+      );
+    }
+  });
+
   it("limits review transitions to superadmins and records the pending review lifecycle", async () => {
     const lifecycle = createLifecycleMutationService(applicationDatabase);
     const ownerEmail = `review-${crypto.randomUUID()}@example.test`;

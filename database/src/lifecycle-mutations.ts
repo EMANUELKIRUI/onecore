@@ -685,18 +685,21 @@ export function createLifecycleMutationService(
         await transaction.execute(
           sql`select set_config('app.organization_application_slug', ${data.slug}, true)`,
         );
-        const availableModules = await transaction
-          .select({ key: modules.key })
-          .from(modules)
-          .where(
-            and(
-              eq(modules.lifecycle, "AVAILABLE"),
-              eq(modules.isAvailable, true),
-            ),
-          );
-        const availableModuleKeys = new Set(
-          availableModules.map(({ key }) => key),
-        );
+        const availableModuleKeys = new Set<string>();
+        if (data.requestedModules.length > 0) {
+          const availableModules = await transaction
+            .select({ key: modules.key })
+            .from(modules)
+            .where(
+              and(
+                eq(modules.lifecycle, "AVAILABLE"),
+                eq(modules.isAvailable, true),
+              ),
+            );
+          for (const { key } of availableModules) {
+            availableModuleKeys.add(key);
+          }
+        }
         if (
           new Set(data.requestedModules).size !==
             data.requestedModules.length ||
