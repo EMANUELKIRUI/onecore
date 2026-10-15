@@ -14,7 +14,8 @@ import type {
 } from "../scripts/migration-target.js";
 
 const environment = {
-  DATABASE_URL: "postgresql://onecore_migrator@127.0.0.1:5432/onecore_test",
+  MIGRATOR_DATABASE_URL:
+    "postgresql://onecore_migrator@127.0.0.1:5432/onecore_test",
   ONECORE_MIGRATION_ENVIRONMENT: "test",
   ONECORE_MIGRATION_EXPECTED_HOST: "127.0.0.1",
   ONECORE_MIGRATION_EXPECTED_PORT: "5432",
@@ -131,11 +132,54 @@ describe("migration runner", () => {
 
     expect(mocks.migrate).not.toHaveBeenCalled();
     expect(mocks.close).toHaveBeenCalledOnce();
+    expect(mocks.connect).toHaveBeenCalledWith(environment.MIGRATOR_DATABASE_URL);
     expect(mocks.log).toHaveBeenCalledWith(
       expect.stringContaining(
         "No migration SQL or ledger writes were executed",
       ),
     );
+  });
+
+  it("rejects runtime DATABASE_URL without MIGRATOR_DATABASE_URL before connecting", async () => {
+    const mocks = await makeDependencies(inspection());
+    const runtimeOnlyEnvironment = {
+      ...environment,
+      MIGRATOR_DATABASE_URL: undefined,
+      DATABASE_URL: "postgresql://onecore_app@127.0.0.1:5432/onecore_test",
+    };
+
+    await expect(
+      runMigration(
+        {
+          environment: runtimeOnlyEnvironment,
+          migrationsFolder,
+          validateOnly: true,
+        },
+        mocks.dependencies,
+      ),
+    ).rejects.toThrow("MIGRATOR_DATABASE_URL is required");
+    expect(mocks.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mismatched migration target before connecting", async () => {
+    const mocks = await makeDependencies(inspection());
+
+    await expect(
+      runMigration(
+        {
+          environment: {
+            ...environment,
+            ONECORE_MIGRATION_EXPECTED_DATABASE: "another_test_database",
+          },
+          migrationsFolder,
+          validateOnly: false,
+        },
+        mocks.dependencies,
+      ),
+    ).rejects.toThrow("does not match");
+
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.migrate).not.toHaveBeenCalled();
   });
 
   it("stops on preflight identity failure before migration and closes the connection", async () => {
@@ -241,7 +285,7 @@ describe("migration runner", () => {
 
   it("requires explicit approval before initializing an empty production database", async () => {
     const productionEnvironment = {
-      DATABASE_URL:
+      MIGRATOR_DATABASE_URL:
         "postgresql://onecore_migrator@db.example.test:5432/onecore_prod",
       ONECORE_MIGRATION_ENVIRONMENT: "production",
       ONECORE_MIGRATION_EXPECTED_HOST: "db.example.test",
@@ -274,7 +318,7 @@ describe("migration runner", () => {
 
   it("rejects uncommitted migrations in production even when locally reviewed", async () => {
     const productionEnvironment = {
-      DATABASE_URL:
+      MIGRATOR_DATABASE_URL:
         "postgresql://onecore_migrator@db.example.test:5432/onecore_prod",
       ONECORE_MIGRATION_ENVIRONMENT: "production",
       ONECORE_MIGRATION_EXPECTED_HOST: "db.example.test",

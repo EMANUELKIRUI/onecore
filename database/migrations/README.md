@@ -10,10 +10,12 @@ only for an explicitly approved migration. Both commands use
 config guard, but that guard is not a security boundary against custom code
 that imports Drizzle's migrator.
 
-npm does not load `.env` automatically. Set the role-specific `DATABASE_URL`
-through the approved secret manager or current shell, without placing it in
-command arguments or source control. Also set these non-secret target values
-for every invocation:
+npm does not load `.env` automatically. Supply `MIGRATOR_DATABASE_URL` for
+the dedicated `onecore_migrator` login through the approved secret manager or
+a protected shell. The migration runner never falls back to `DATABASE_URL`,
+which remains for API/worker runtime and the development seed. Do not place
+the migrator URL in command arguments, `.env.example`, logs, or source control.
+Also set these non-secret target values for every invocation:
 
 ```sh
 export ONECORE_MIGRATION_ENVIRONMENT=development
@@ -22,6 +24,12 @@ export ONECORE_MIGRATION_EXPECTED_PORT=5432
 export ONECORE_MIGRATION_EXPECTED_DATABASE=onecore_dev
 npm run db:validate
 ```
+
+Provide `MIGRATOR_DATABASE_URL` securely before either `npm run db:validate`
+or `npm run db:migrate`; both commands select only that variable and fail
+closed when it is absent, even when `DATABASE_URL` is set. The selected URL
+must authenticate as `onecore_migrator` and match the independently verified
+host, port, and database below.
 
 For `test`, use `ONECORE_MIGRATION_ENVIRONMENT=test` and a loopback disposable
 database. Development and test endpoints are restricted to loopback. Staging

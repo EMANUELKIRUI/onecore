@@ -58,7 +58,7 @@ function decodeUrlComponent(value: string, label: string): string {
     return decodeURIComponent(value);
   } catch {
     throw new MigrationTargetError(
-      `DATABASE_URL has invalid encoding in its ${label}`,
+      `MIGRATOR_DATABASE_URL has invalid encoding in its ${label}`,
     );
   }
 }
@@ -104,35 +104,38 @@ function parseEnvironment(value: string): MigrationEnvironment {
 export function resolveMigrationTarget(
   environment: NodeJS.ProcessEnv,
 ): MigrationTarget {
-  const connectionString = environment.DATABASE_URL;
-  if (!connectionString) {
-    throw new MigrationTargetError("DATABASE_URL is required to migrate");
+  const configuredConnectionString = environment.MIGRATOR_DATABASE_URL;
+  if (!configuredConnectionString?.trim()) {
+    throw new MigrationTargetError(
+      "MIGRATOR_DATABASE_URL is required to migrate",
+    );
   }
+  const connectionString = configuredConnectionString.trim();
 
   let url: URL;
   try {
     url = new URL(connectionString);
   } catch {
     throw new MigrationTargetError(
-      "DATABASE_URL is not a valid PostgreSQL connection URL",
+      "MIGRATOR_DATABASE_URL is not a valid PostgreSQL connection URL",
     );
   }
 
   if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
     throw new MigrationTargetError(
-      "DATABASE_URL must use the postgres or postgresql protocol",
+      "MIGRATOR_DATABASE_URL must use the postgres or postgresql protocol",
     );
   }
   if (url.hash) {
     throw new MigrationTargetError(
-      "DATABASE_URL must not contain a URL fragment",
+      "MIGRATOR_DATABASE_URL must not contain a URL fragment",
     );
   }
 
   const role = decodeUrlComponent(url.username, "username");
   if (role !== "onecore_migrator") {
     throw new MigrationTargetError(
-      "Migrations must connect as the documented onecore_migrator role",
+      "MIGRATOR_DATABASE_URL must authenticate as the dedicated migration role",
     );
   }
 
@@ -150,7 +153,7 @@ export function resolveMigrationTarget(
     port > 65535
   ) {
     throw new MigrationTargetError(
-      "DATABASE_URL must include a valid host, port, and database name",
+      "MIGRATOR_DATABASE_URL must include a valid host, port, and database name",
     );
   }
 
@@ -199,7 +202,7 @@ export function resolveMigrationTarget(
     expectedPort !== port
   ) {
     throw new MigrationTargetError(
-      "DATABASE_URL does not match the configured migration host, port, and database",
+      "MIGRATOR_DATABASE_URL does not match the configured migration host, port, and database",
     );
   }
 

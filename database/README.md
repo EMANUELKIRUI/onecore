@@ -8,7 +8,7 @@ The persistence choice and alternatives are recorded in [ADR 0002](../docs/archi
 
 ## Local PostgreSQL setup
 
-Install PostgreSQL 16+ separately, create a development database, and provision a local migration-owner role. Set `DATABASE_URL` in the shell; these CLI commands do not load `.env` automatically. Do not use production credentials for development.
+Install PostgreSQL 16+ separately, create a development database, and provision a local migration-owner role. Supply `MIGRATOR_DATABASE_URL` through the approved secret manager or a protected shell for migration commands; npm does not load `.env` automatically. Never commit the migrator URL or put credentials in shell history. Do not use production credentials for development.
 
 ```sh
 createdb onecore_dev
@@ -17,7 +17,7 @@ psql "$ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE onecore_migrator L
 psql "$ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -c "ALTER ROLE onecore_migrator SET search_path TO public"
 psql "$ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -c "GRANT CONNECT, CREATE ON DATABASE onecore_dev TO onecore_migrator"
 psql "$ADMIN_DATABASE_URL" -d onecore_dev -v ON_ERROR_STOP=1 -c "GRANT USAGE, CREATE ON SCHEMA public TO onecore_migrator"
-export DATABASE_URL='postgresql://onecore_migrator:migrator-local-password@127.0.0.1:5432/onecore_dev'
+# Supply MIGRATOR_DATABASE_URL securely for the onecore_migrator login.
 export ONECORE_MIGRATION_ENVIRONMENT=development
 export ONECORE_MIGRATION_EXPECTED_HOST=127.0.0.1
 export ONECORE_MIGRATION_EXPECTED_PORT=5432
@@ -42,7 +42,7 @@ The runtime-role migration grants only the access used by the services. Narrow
 timestamp-column `UPDATE` privileges on membership, organization, branch, and
 branch-assignment tables support the trusted context helpers' `SELECT ... FOR
 SHARE` row locks; they do not grant table-level `UPDATE` or access to
-domain/key columns. Set the API `DATABASE_URL` to this role after migrations.
+domain/key columns. Set the API runtime `DATABASE_URL` to this role after migrations.
 Expand grants only as new trusted services require them; never grant table
 ownership, schema-management privileges, or RLS bypass to an API.
 
@@ -61,7 +61,7 @@ ONECORE_ALLOW_DEMO_SEED=YES npm run db:seed
 
 Before seeding, explicitly confirm the target is a disposable local database by running `ONECORE_ALLOW_DEMO_SEED=YES npm run db:seed`; the seed rejects `NODE_ENV=production` and refuses to run without this opt-in. Seed identities include a platform Superadmin separate from organization memberships, each demo organization's owner, and a multi-organization identity. By default these users have no password. Set `ONECORE_DEMO_PASSWORD` to a development-only value of at least 16 characters when seeding if local authentication is required. The seed never prints the password. The shared development password must never be reused outside local development.
 
-`DATABASE_URL` is read by migration, seed, and API startup. The API requires the non-owner application role; the liveness endpoint itself remains process-only. The checked-in `.env.example` uses only replaceable local placeholders. Set TLS options in the production connection URL or managed PostgreSQL provider configuration; obtain secrets from the deployment secret manager.
+`MIGRATOR_DATABASE_URL` is used only by the custom migration validation and execution runner. Runtime API/worker startup and the development seed use `DATABASE_URL`; keep those paths on their respective runtime or seed credentials. The API requires the non-owner application role; the liveness endpoint itself remains process-only. The checked-in `.env.example` contains placeholders only and is not automatically loaded by npm. Set TLS options through the managed PostgreSQL provider configuration or securely provisioned connection URL; obtain secrets from the deployment secret manager.
 
 ## Schema and migrations
 
@@ -69,7 +69,7 @@ Before seeding, explicitly confirm the target is a disposable local database by 
 - Generate a migration with `npm run db:generate`.
 - Review generated SQL, including constraints, RLS, and audit-trigger effects; update migration documentation/tests if needed.
 - Commit both the schema and migration. Never edit a deployed database manually or use schema-push in production.
-- Run `npm run db:validate` before `npm run db:migrate`; the former performs read-only target and migration-history checks. Both require the `onecore_migrator` role and explicit environment/host/port/database settings; staging/production additionally require a provider resource ID, and production needs a matching confirmation value. See [the migration runbook](migrations/README.md) for exact variables, initialization approvals, ledger reconciliation, and backup requirements. PostgreSQL cannot prove provider-resource identity from an operator-supplied ID.
+- Run `npm run db:validate` before `npm run db:migrate`; the former performs read-only target and migration-history checks. Both require `MIGRATOR_DATABASE_URL` for the `onecore_migrator` role and explicit environment/host/port/database settings; staging/production additionally require a provider resource ID, and production needs a matching confirmation value. npm does not load `.env`; provide the migrator URL through the approved secret manager or protected shell and never commit it. See [the migration runbook](migrations/README.md) for exact variables, initialization approvals, ledger reconciliation, and backup requirements. PostgreSQL cannot prove provider-resource identity from an operator-supplied ID.
 - Run `npm run test -w @onecore/database` to apply every migration against a clean in-memory PostgreSQL-compatible database and check tenant policies and constraints.
 
 Use expand → migrate → verify → contract. Add nullable/new structures first, backfill in a bounded and observable migration or job, verify old and new readers/writers, and only then remove obsolete structures in a separately reviewed contract migration. Migrations are forward-only: use a compensating migration or restore a verified backup rather than assuming a down migration is safe.
@@ -92,7 +92,7 @@ Resolve invalid lifecycle values and duplicate case-insensitive identities throu
 
 The local live-validation target used the `postgres:18` image (PostgreSQL 18.6). Use `onecore_migrator` only for migrations and `onecore_app` only for API connections. The migration role needs `CONNECT, CREATE` on the database because Drizzle creates its `drizzle` migration-metadata schema, plus `USAGE, CREATE` on `public`; it owns the migrated tables but need not own the `public` schema. Do not give database `CREATE`, schema `CREATE`, table ownership, or `BYPASSRLS` to `onecore_app`.
 
-`npm` scripts do not load `.env`; export the correct role-specific `DATABASE_URL` before invoking them. Run `npm run db:generate` and confirm there are no unexpected schema changes, then run `npm run db:migrate` as `onecore_migrator`. Configure the API runtime with the `onecore_app` URL only after migration. Never put either password in source control.
+`npm` scripts do not load `.env`; supply `MIGRATOR_DATABASE_URL` securely for `npm run db:validate` and `npm run db:migrate`. Run `npm run db:generate` and confirm there are no unexpected schema changes, then run `npm run db:migrate` as `onecore_migrator`. Configure API and worker runtime `DATABASE_URL` values with their intended runtime roles only after migration. Never put passwords or connection URLs in source control.
 
 For an RLS smoke check, use an administrative connection only to establish disposable fixtures, then switch the test transaction to `onecore_app` and set context transaction-locally:
 
