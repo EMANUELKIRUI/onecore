@@ -1115,7 +1115,7 @@ try {
   run("npm", ["run", "db:migrate"], {
     env: {
       ...process.env,
-      DATABASE_URL: migratorUrl,
+      MIGRATOR_DATABASE_URL: migratorUrl,
       NODE_ENV: "test",
       ONECORE_MIGRATION_ENVIRONMENT: "test",
       ONECORE_MIGRATION_EXPECTED_HOST: "127.0.0.1",
