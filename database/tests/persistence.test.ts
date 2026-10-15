@@ -7,6 +7,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { classifyError, sanitizeErrorForLog } from "@onecore/config";
 import {
   createDomainEvent,
   moduleManifestSchema,
@@ -970,6 +971,317 @@ describe("PostgreSQL persistence foundation", () => {
     );
     expect(concurrent.filter(({ allowed }) => allowed)).toHaveLength(2);
     expect(concurrent.filter(({ allowed }) => !allowed)).toHaveLength(4);
+  });
+
+  it("persists global login limits using the least-privilege application role", async () => {
+    const applicationDatabase = {
+      transaction: <T>(
+        operation: (transaction: OrganizationTransaction) => Promise<T>,
+      ) =>
+        database.transaction(async (transaction) => {
+          await transaction.execute(sql`SET LOCAL ROLE onecore_app`);
+          return operation(transaction as unknown as OrganizationTransaction);
+        }),
+    } as unknown as Database;
+    const rateLimiter = createDatabaseRateLimiter(applicationDatabase);
+    const columns = await client.query<{
+      column_name: string;
+      data_type: string;
+    }>(`
+      SELECT column_name, data_type
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'rate_limit_buckets'
+    `);
+    expect(columns.rows).toEqual(
+      expect.arrayContaining([
+        { column_name: "key_hash", data_type: "character varying" },
+        { column_name: "organization_id", data_type: "uuid" },
+        { column_name: "branch_id", data_type: "uuid" },
+        { column_name: "hit_count", data_type: "integer" },
+        { column_name: "expires_at", data_type: "timestamp with time zone" },
+        { column_name: "updated_at", data_type: "timestamp with time zone" },
+      ]),
+    );
+    const indexes = await client.query<{ indexdef: string }>(`
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public' AND tablename = 'rate_limit_buckets'
+    `);
+    expect(indexes.rows.map(({ indexdef }) => indexdef).join(" ")).toContain(
+      "rate_limit_buckets_expiry_idx",
+    );
+    const rowSecurity = await client.query<{
+      enabled: boolean;
+      forced: boolean;
+    }>(`
+      SELECT relrowsecurity AS enabled, relforcerowsecurity AS forced
+      FROM pg_class
+      WHERE oid = 'public.rate_limit_buckets'::regclass
+    `);
+    expect(rowSecurity.rows).toEqual([{ enabled: true, forced: true }]);
+    const policy = await client.query<{
+      cmd: string;
+      roles: string[];
+      qual: string | null;
+      with_check: string | null;
+    }>(`
+      SELECT cmd, roles, qual, with_check
+      FROM pg_policies
+      WHERE schemaname = 'public'
+        AND tablename = 'rate_limit_buckets'
+        AND policyname = 'rate_limit_buckets_scope_isolation'
+    `);
+    expect(policy.rows).toHaveLength(1);
+    expect(policy.rows[0]).toMatchObject({
+      cmd: "ALL",
+      roles: ["public"],
+    });
+    expect(policy.rows[0]?.qual).toContain("current_organization_id");
+    expect(policy.rows[0]?.qual).toContain("current_branch_id");
+    expect(policy.rows[0]?.with_check).toContain("current_organization_id");
+    expect(policy.rows[0]?.with_check).toContain("current_branch_id");
+    const privileges = await client.query<{
+      select: boolean;
+      insert: boolean;
+      update: boolean;
+      delete: boolean;
+      truncate: boolean;
+      references: boolean;
+      trigger: boolean;
+    }>(`
+      SELECT
+        has_table_privilege('onecore_app', 'public.rate_limit_buckets', 'SELECT') AS "select",
+        has_table_privilege('onecore_app', 'public.rate_limit_buckets', 'INSERT') AS "insert",
+        has_table_privilege('onecore_app', 'public.rate_limit_buckets', 'UPDATE') AS "update",
+        has_table_privilege('onecore_app', 'public.rate_limit_buckets', 'DELETE') AS "delete",
+        has_table_privilege('onecore_app', 'public.rate_limit_buckets', 'TRUNCATE') AS "truncate",
+        has_table_privilege('onecore_app', 'public.rate_limit_buckets', 'REFERENCES') AS "references",
+        has_table_privilege('onecore_app', 'public.rate_limit_buckets', 'TRIGGER') AS "trigger"
+    `);
+    expect(privileges.rows).toEqual([
+      {
+        select: true,
+        insert: true,
+        update: true,
+        delete: true,
+        truncate: false,
+        references: false,
+        trigger: false,
+      },
+    ]);
+    const input = {
+      scope: "authentication.login",
+      subject: `runtime-role-${crypto.randomUUID()}`,
+      requestId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      limit: 1,
+      windowMs: 60_000,
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    };
+
+    expect(await rateLimiter.consume(input)).toMatchObject({
+      allowed: true,
+      remaining: 0,
+    });
+    expect(await rateLimiter.consume(input)).toMatchObject({
+      allowed: false,
+      remaining: 0,
+    });
+
+    const bucket = await database
+      .select({ hitCount: schema.rateLimitBuckets.hitCount })
+      .from(schema.rateLimitBuckets)
+      .where(
+        eq(
+          schema.rateLimitBuckets.keyHash,
+          createHash("sha256")
+            .update(JSON.stringify([null, null, input.scope, input.subject]))
+            .digest("hex"),
+        ),
+      );
+    expect(bucket).toEqual([{ hitCount: 2 }]);
+    const audit = await database
+      .select({ result: schema.auditLogs.result })
+      .from(schema.auditLogs)
+      .where(
+        and(
+          eq(schema.auditLogs.action, "security.rate_limit.triggered"),
+          eq(schema.auditLogs.resourceId, input.scope),
+          sql`${schema.auditLogs.requestMetadata}->>'requestId' = ${input.requestId}`,
+        ),
+      );
+    expect(audit).toEqual([{ result: "FAILURE" }]);
+
+    const concurrentInput = {
+      ...input,
+      scope: "authentication.login.concurrent",
+      subject: `runtime-role-concurrent-${crypto.randomUUID()}`,
+    };
+    const concurrent = await Promise.all(
+      Array.from({ length: 6 }, () => rateLimiter.consume(concurrentInput)),
+    );
+    expect(concurrent.filter(({ allowed }) => allowed)).toHaveLength(1);
+    expect(concurrent.filter(({ allowed }) => !allowed)).toHaveLength(5);
+  });
+
+  it("rolls back failed rate-limit writes and recovers after storage is restored", async () => {
+    const applicationDatabase = {
+      transaction: <T>(
+        operation: (transaction: OrganizationTransaction) => Promise<T>,
+      ) =>
+        database.transaction(async (transaction) => {
+          await transaction.execute(sql`SET LOCAL ROLE onecore_app`);
+          return operation(transaction as unknown as OrganizationTransaction);
+        }),
+    } as unknown as Database;
+    const rateLimiter = createDatabaseRateLimiter(applicationDatabase);
+    const input = {
+      scope: "authentication.login.transient",
+      subject: `runtime-role-transient-${crypto.randomUUID()}`,
+      requestId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      limit: 1,
+      windowMs: 60_000,
+    };
+    const keyHash = createHash("sha256")
+      .update(JSON.stringify([null, null, input.scope, input.subject]))
+      .digest("hex");
+    await client.exec(`
+      CREATE FUNCTION fail_test_rate_limit_write() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'synthetic rate limiter storage failure';
+      END;
+      $$;
+      CREATE TRIGGER fail_test_rate_limit_write_trigger
+      BEFORE INSERT OR UPDATE ON rate_limit_buckets
+      FOR EACH ROW EXECUTE FUNCTION fail_test_rate_limit_write();
+    `);
+    try {
+      let storageError: unknown;
+      try {
+        await rateLimiter.consume(input);
+      } catch (error) {
+        storageError = error;
+      }
+      expect(storageError).toBeDefined();
+      expect(classifyError(storageError)).toBe("database");
+      const safeError = JSON.stringify(sanitizeErrorForLog(storageError));
+      expect(safeError).toContain("Database operation failed.");
+      expect(safeError).not.toContain("insert into");
+      expect(safeError).not.toContain("params");
+      expect(safeError).not.toContain(input.subject);
+      const failedBucket = await database
+        .select({ keyHash: schema.rateLimitBuckets.keyHash })
+        .from(schema.rateLimitBuckets)
+        .where(eq(schema.rateLimitBuckets.keyHash, keyHash));
+      expect(failedBucket).toEqual([]);
+    } finally {
+      await client.exec(`
+        DROP TRIGGER fail_test_rate_limit_write_trigger ON rate_limit_buckets;
+        DROP FUNCTION fail_test_rate_limit_write();
+      `);
+    }
+
+    expect(await rateLimiter.consume(input)).toMatchObject({
+      allowed: true,
+      remaining: 0,
+    });
+    expect(await rateLimiter.consume(input)).toMatchObject({
+      allowed: false,
+      remaining: 0,
+    });
+  });
+
+  it("rolls back rate-limit decisions when threshold auditing fails", async () => {
+    const applicationDatabase = {
+      transaction: <T>(
+        operation: (transaction: OrganizationTransaction) => Promise<T>,
+      ) =>
+        database.transaction(async (transaction) => {
+          await transaction.execute(sql`SET LOCAL ROLE onecore_app`);
+          return operation(transaction as unknown as OrganizationTransaction);
+        }),
+    } as unknown as Database;
+    const rateLimiter = createDatabaseRateLimiter(applicationDatabase);
+    const input = {
+      scope: "authentication.login.audit_failure",
+      subject: `runtime-role-audit-${crypto.randomUUID()}`,
+      requestId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      limit: 1,
+      windowMs: 60_000,
+    };
+    const keyHash = createHash("sha256")
+      .update(JSON.stringify([null, null, input.scope, input.subject]))
+      .digest("hex");
+    expect(await rateLimiter.consume(input)).toMatchObject({
+      allowed: true,
+      remaining: 0,
+    });
+    await client.exec(`
+      CREATE FUNCTION fail_test_rate_limit_audit() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.action = 'security.rate_limit.triggered' THEN
+          RAISE EXCEPTION 'synthetic rate-limit audit storage failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER fail_test_rate_limit_audit_trigger
+      BEFORE INSERT ON audit_logs
+      FOR EACH ROW EXECUTE FUNCTION fail_test_rate_limit_audit();
+    `);
+    try {
+      let auditError: unknown;
+      try {
+        await rateLimiter.consume(input);
+      } catch (error) {
+        auditError = error;
+      }
+      expect(auditError).toBeDefined();
+      expect(classifyError(auditError)).toBe("database");
+      const safeError = JSON.stringify(sanitizeErrorForLog(auditError));
+      expect(safeError).not.toContain("insert into");
+      expect(safeError).not.toContain(input.subject);
+      const bucket = await database
+        .select({ hitCount: schema.rateLimitBuckets.hitCount })
+        .from(schema.rateLimitBuckets)
+        .where(eq(schema.rateLimitBuckets.keyHash, keyHash));
+      expect(bucket).toEqual([{ hitCount: 1 }]);
+      const audit = await database
+        .select({ id: schema.auditLogs.id })
+        .from(schema.auditLogs)
+        .where(
+          and(
+            eq(schema.auditLogs.action, "security.rate_limit.triggered"),
+            sql`${schema.auditLogs.requestMetadata}->>'requestId' = ${input.requestId}`,
+          ),
+        );
+      expect(audit).toEqual([]);
+    } finally {
+      await client.exec(`
+        DROP TRIGGER fail_test_rate_limit_audit_trigger ON audit_logs;
+        DROP FUNCTION fail_test_rate_limit_audit();
+      `);
+    }
+
+    expect(await rateLimiter.consume(input)).toMatchObject({
+      allowed: false,
+      remaining: 0,
+    });
+    const audit = await database
+      .select({ result: schema.auditLogs.result })
+      .from(schema.auditLogs)
+      .where(
+        and(
+          eq(schema.auditLogs.action, "security.rate_limit.triggered"),
+          sql`${schema.auditLogs.requestMetadata}->>'requestId' = ${input.requestId}`,
+        ),
+      );
+    expect(audit).toEqual([{ result: "FAILURE" }]);
   });
 
   it("keeps tenant rate-limit buckets inaccessible without matching RLS context", async () => {

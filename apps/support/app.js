@@ -292,9 +292,9 @@ function createMessageForm(requestId, title, endpoint) {
           body: { body: input.value },
         },
       );
-      setAlert(endpoint === "notes" ? "Internal note added." : "Reply sent.");
-      await loadRequest(requestId);
       await loadRequests(false);
+      await loadRequest(requestId);
+      setAlert(endpoint === "notes" ? "Internal note added." : "Reply sent.");
     } catch (error) {
       handleApiError(error);
     } finally {

@@ -701,6 +701,25 @@ describe("identity and authentication API", () => {
     await app.close();
   });
 
+  it("fails closed when the shared login rate limiter is unavailable", async () => {
+    const identity = new MemoryIdentityRepository();
+    identity.addUser(testUser());
+    const { app } = createTestApp(identity, 100, {
+      consume: async () => {
+        throw new Error("synthetic rate limiter failure");
+      },
+    });
+
+    const response = await login(app);
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe("SERVICE_UNAVAILABLE");
+    expect(identity.sessions.size).toBe(0);
+    expect(identity.events).toHaveLength(0);
+    expect(response.body).not.toContain("synthetic rate limiter failure");
+    await app.close();
+  });
+
   it.each(["SUPERADMIN", "Organization Owner", "Organization Admin"])(
     "requires TOTP before issuing a %s session",
     async (role) => {

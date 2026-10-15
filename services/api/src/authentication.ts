@@ -6,7 +6,11 @@ import {
 } from "@node-rs/argon2";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
-import { hashRateLimitIdentity, type RuntimeConfig } from "@onecore/config";
+import {
+  hashRateLimitIdentity,
+  sanitizeErrorForLog,
+  type RuntimeConfig,
+} from "@onecore/config";
 import type {
   AuthenticationAuditEvent,
   IdentityRepository,
@@ -631,15 +635,34 @@ export function registerAuthentication(
     {
       preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
         if (rateLimiter) {
-          const decision = await rateLimiter.consume({
-            scope: "authentication.login",
-            subject: request.ip,
-            requestId: request.id,
-            correlationId:
-              request.observabilityContext?.correlationId ?? request.id,
-            limit: config.AUTH_LOGIN_RATE_LIMIT_MAX,
-            windowMs: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
-          });
+          let decision: Awaited<ReturnType<RateLimiter["consume"]>>;
+          try {
+            decision = await rateLimiter.consume({
+              scope: "authentication.login",
+              subject: request.ip,
+              requestId: request.id,
+              correlationId:
+                request.observabilityContext?.correlationId ?? request.id,
+              limit: config.AUTH_LOGIN_RATE_LIMIT_MAX,
+              windowMs: config.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS,
+            });
+          } catch (error) {
+            request.log.error(
+              {
+                ...request.observabilityContext,
+                eventType: "rate_limit_unavailable",
+                scope: "authentication.login",
+                err: sanitizeErrorForLog(error),
+              },
+              "Authentication rate limiter is unavailable",
+            );
+            return reply.status(503).send({
+              error: {
+                code: "SERVICE_UNAVAILABLE",
+                message: "The service is temporarily unavailable.",
+              },
+            });
+          }
           if (!decision.allowed) {
             request.log.warn(
               {

@@ -1806,6 +1806,9 @@ try {
     .getByRole("button", { name: "Send" })
     .click();
   assert.equal((await noteResponse).status(), 201);
+  await expect(
+    supportStaffPage.locator("#request-detail-content"),
+  ).toContainText(internalNoteText);
   const statusUpdateResponse = supportStaffPage.waitForResponse(
     (response) =>
       response.url().endsWith(`/api/support/requests/${supportRequestId}`) &&
