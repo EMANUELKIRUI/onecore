@@ -1,11 +1,16 @@
 import { Algorithm, hash as hashPassword } from "@node-rs/argon2";
 import {
   createDatabase,
+  INITIAL_ROOT_SUPERADMIN_EMAIL,
   InitialSuperadminProvisioningError,
+  MigrationTargetError,
   provisionInitialSuperadmin,
+  resolveMigrationTarget,
 } from "@onecore/database";
+import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { fileURLToPath } from "node:url";
 
 const passwordOptions = {
   algorithm: Algorithm.Argon2id,
@@ -64,39 +69,59 @@ function askSecret(question: string): Promise<string> {
   });
 }
 
+export class InitialSuperadminInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InitialSuperadminInputError";
+  }
+}
+
+export function validateInitialSuperadminPassword(
+  password: string,
+  confirmation: string,
+): void {
+  if (password.length < 16 || password.length > 1_024) {
+    throw new InitialSuperadminInputError(
+      "Password must be between 16 and 1024 characters.",
+    );
+  }
+  if (password !== confirmation) {
+    throw new InitialSuperadminInputError("Passwords did not match.");
+  }
+}
+
+async function readInitialPasswordHash(): Promise<string> {
+  const password = await askSecret("Password (input hidden): ");
+  const confirmation = await askSecret("Confirm password: ");
+  validateInitialSuperadminPassword(password, confirmation);
+  return hashPassword(password, passwordOptions);
+}
+
 async function main(): Promise<void> {
   if (!stdin.isTTY || !stdout.isTTY) {
     throw new Error("A secure interactive terminal is required");
   }
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) throw new Error("DATABASE_URL is required");
+  const target = resolveMigrationTarget(process.env);
 
-  const email = (await ask("Initial Superadmin email: ")).trim().toLowerCase();
   const displayName = (await ask("Display name: ")).trim();
   const confirmation = await ask(
-    `Type CREATE to provision or confirm Root administrator access for ${email}: `,
+    `Type CREATE ${INITIAL_ROOT_SUPERADMIN_EMAIL} to provision or confirm the initial Root Superadmin: `,
   );
-  if (confirmation !== "CREATE") {
+  if (confirmation !== `CREATE ${INITIAL_ROOT_SUPERADMIN_EMAIL}`) {
     stdout.write("Provisioning cancelled.\n");
     return;
   }
 
-  const password = await askSecret("Password (input hidden): ");
-  const confirmationPassword = await askSecret("Confirm password: ");
-  if (password.length < 16 || password.length > 1_024) {
-    throw new Error("Password must be between 16 and 1024 characters");
-  }
-  if (password !== confirmationPassword) {
-    throw new Error("Passwords did not match");
-  }
-
-  const passwordHash = await hashPassword(password, passwordOptions);
-  const { db, close } = createDatabase(databaseUrl, { maxConnections: 1 });
+  const passwordHash = await readInitialPasswordHash();
+  const { db, close } = createDatabase(target.connectionString, {
+    maxConnections: 1,
+  });
   try {
     const result = await provisionInitialSuperadmin(db, {
-      email,
+      email: INITIAL_ROOT_SUPERADMIN_EMAIL,
       displayName,
       passwordHash,
+      expectedDatabase: target.database,
     });
     stdout.write(
       result.status === "CREATED"
@@ -108,13 +133,24 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
+function reportProvisioningError(error: unknown): void {
   if (error instanceof InitialSuperadminProvisioningError) {
     console.error(`Provisioning refused: ${error.code}`);
+  } else if (error instanceof MigrationTargetError) {
+    console.error(`Provisioning refused: ${error.message}`);
+  } else if (error instanceof InitialSuperadminInputError) {
+    console.error(`Provisioning refused: ${error.message}`);
   } else {
     console.error(
       "Provisioning failed or was cancelled. No credentials or database details were logged.",
     );
   }
   process.exitCode = 1;
-});
+}
+
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch(reportProvisioningError);
+}

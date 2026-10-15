@@ -68,7 +68,7 @@ class PostgresMigrationConnection implements MigrationConnection {
   private readonly client: ReturnType<typeof postgres>;
 
   constructor(connectionString: string) {
-    this.client = postgres(connectionString, { max: 1 });
+    this.client = postgres(connectionString, { max: 1, ssl: "verify-full" });
   }
 
   async applyMigrations(migrationsPath: string): Promise<void> {

@@ -78,10 +78,17 @@ export {
   type IdentityUser,
 } from "./identity-repository.js";
 export {
+  INITIAL_ROOT_SUPERADMIN_EMAIL,
   InitialSuperadminProvisioningError,
   provisionInitialSuperadmin,
   type InitialSuperadminProvisionResult,
 } from "./platform-identity.js";
+export {
+  MigrationTargetError,
+  resolveMigrationTarget,
+  type MigrationEnvironment,
+  type MigrationTarget,
+} from "../scripts/migration-target.js";
 export {
   evaluateFeatureFlag,
   resolveFeatureFlag,

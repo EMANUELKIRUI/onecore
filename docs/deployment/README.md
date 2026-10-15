@@ -45,22 +45,60 @@ assignment, not an organization membership. After the reviewed
 `20261014150000_initial_superadmin_bootstrap` migration has been applied by the
 approved migration process, build the workspace and run
 `npm run bootstrap:superadmin -w @onecore/api` from an approved administrative
-host. Supply `DATABASE_URL` through the secret manager as the
-`onecore_migrator` connection; the command verifies the connected database
-role and refuses to run through `onecore_app`. Do not put database credentials
-in command arguments or committed files.
+host. The only permitted initial root address is
+`emanuelkirui1@gmail.com`. The command requires `MIGRATOR_DATABASE_URL` for
+`onecore_migrator` and uses the same explicit target safeguards as migrations.
+It rejects an absent/blank URL, a mismatched expected host, port or database,
+an invalid environment, and production without the expected provider resource
+ID and confirmation. npm does not load `.env` automatically; provide the
+credential through the approved secret manager or protected shell, never in
+command arguments, logs, or committed files.
 
-The command requires an interactive TTY. It prompts for the account email and
-display name, requires explicit confirmation, and prompts twice for a password
-without echoing it. It stores only an Argon2id hash. It creates an active user
-and one `SUPERADMIN` assignment only when no Superadmin exists; repeat execution
-for that same active account makes no account changes. It refuses a different
-existing identity or an already-provisioned Superadmin. No organization
-membership is created. Superadmin sign-in requires TOTP enrollment; configure
-the API-only `MFA_ENCRYPTION_KEY` through the approved secret manager before
-enrollment. Then verify sign-in and access through the deployed Superadmin
-portal and its same-origin `/api` proxy. Do not run the command against
-production until separately approved.
+For a disposable local database, first supply the local migrator URL securely,
+then set the non-secret target values and run:
+
+```sh
+export NODE_ENV=development
+export ONECORE_MIGRATION_ENVIRONMENT=development
+export ONECORE_MIGRATION_EXPECTED_HOST=127.0.0.1
+export ONECORE_MIGRATION_EXPECTED_PORT=5432
+export ONECORE_MIGRATION_EXPECTED_DATABASE=onecore_dev
+npm run build
+npm run bootstrap:superadmin -w @onecore/api
+```
+
+For production, run only from an approved administrative host after separately
+verifying the Render resource, database, applied bootstrap/support migrations,
+and approval to provision. Set `NODE_ENV=production`,
+`ONECORE_MIGRATION_ENVIRONMENT=production`,
+`ONECORE_MIGRATION_EXPECTED_HOST`, `ONECORE_MIGRATION_EXPECTED_PORT`,
+`ONECORE_MIGRATION_EXPECTED_DATABASE`,
+`ONECORE_MIGRATION_EXPECTED_RESOURCE_ID`, and
+`ONECORE_MIGRATION_CONFIRM_PRODUCTION` to the exact independently verified
+`<resource-id>/<database>`. Source `MIGRATOR_DATABASE_URL` through the approved
+secret manager without echoing it. Build, then run the same npm bootstrap
+command interactively. The bootstrap itself does not run or validate
+migrations; stop if the approved migration process has not confirmed the
+required schema is installed.
+
+The command requires an interactive TTY, asks for a display name, requires the
+operator to type `CREATE emanuelkirui1@gmail.com`, and prompts twice for a
+password without echoing it. Passwords must be 16–1024 characters and are
+stored only as an Argon2id hash. It creates an active user, one `SUPERADMIN`
+assignment, and the root marker only when no existing Superadmin or root
+marker conflicts. Repeating it for an already-provisioned root account does
+not change the password or duplicate roles. Any other existing account,
+incomplete or conflicting root/Superadmin state, or a mismatched connected
+database causes a refusal for operator review. No organization membership is
+created. Sign-in requires TOTP enrollment;
+configure the API-only `MFA_ENCRYPTION_KEY` through the approved secret
+manager before enrollment. Then verify sign-in and access through the deployed
+Superadmin portal and its same-origin `/api` proxy.
+
+The current Superadmin UI and API do not provide general platform account
+creation or subordinate-Superadmin invitations. Do not create subordinate
+accounts manually or use the one-time root bootstrap to promote them. The
+required generic secure account invitation/setup flow is not implemented.
 
 ## Organization deployment types
 

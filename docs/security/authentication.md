@@ -4,7 +4,16 @@
 
 The Phase 2 `users` table remains the canonical global identity. It now contains the normalized-login email source, lifecycle status, Argon2id password hash, optional verification timestamp, failed-login window/counter, lock expiry, and last successful login. Membership remains in `organization_memberships`; no second customer-user or account table was added.
 
-Organization roles remain tenant-owned in `roles` and are attached through memberships. Platform roles use the separate `platform_user_roles` table. A platform role is not an organization role, does not grant membership, and does not bypass RLS. The organization-application lifecycle operations verify an active session and the `SUPERADMIN` platform role in the lifecycle service. A general platform administration authorization framework and support authorization are not implemented.
+Organization roles remain tenant-owned in `roles` and are attached through memberships. Platform roles use the separate `platform_user_roles` table. A platform role is not an organization role, does not grant membership, and does not bypass RLS. The organization-application lifecycle operations verify an active session and the `SUPERADMIN` platform role in the lifecycle service. A general platform administration authorization framework is not implemented; Support has a separate root-marker and MFA-enforced authorization boundary.
+
+The initial root Superadmin is provisioned only by the interactive
+`bootstrap:superadmin` operator command. It is restricted to
+`emanuelkirui1@gmail.com`, requires the dedicated `onecore_migrator`
+connection and explicit target confirmation, hashes the operator-entered
+password with Argon2id, and records the successful creation in the
+authentication audit log. Repeated provisioning does not change credentials.
+There is no public root-creation route or general subordinate-Superadmin
+account/invitation workflow.
 
 Mandatory MFA policy is resolved server-side from `platform_user_roles` and
 active system Organization Owner/Admin assignments. Request-body flags and
