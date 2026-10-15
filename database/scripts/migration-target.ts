@@ -2,8 +2,7 @@ export type MigrationEnvironment =
   "development" | "test" | "staging" | "production";
 
 export interface MigrationTarget {
-  connectionString: string;database/migrations/20261010201153_inventory_reservation_foundation/migration.sql
-  
+  connectionString: string;
   database: string;
   environment: MigrationEnvironment;
   host: string;
