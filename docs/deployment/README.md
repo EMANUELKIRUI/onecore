@@ -17,6 +17,12 @@ live email delivery was not exercised by repository tests.
 
 ## Static frontend deployment
 
+`AUTH_MFA_ENFORCEMENT` defaults to `required`. The temporary `disabled` value
+is accepted only with an explicitly configured `NODE_ENV=development` or
+`NODE_ENV=test`; configuration loading rejects it in staging and production.
+Do not set or deploy the disabled value to a hosted environment. Removing the
+setting or restoring `required` re-enables the existing role-based TOTP policy.
+
 Marketing, Business, Superadmin, and Support are separate native static HTML, CSS, and ES-module applications. Each Vercel project uses its corresponding `apps/<name>` Root Directory, runs the checked-in build command, and publishes `dist`. Enable Vercel's **Include files outside the Root Directory** setting so the build can read `scripts/build-static-app.mjs` and `packages/ui`; the build copies the required shared stylesheet and modules into each app output. No bundler or external frontend dependency is required. Superadmin provides the organization application review API; Support uses session-authenticated, row-level-secured request routes and remains unavailable when its API is not configured or reachable.
 
 Marketing, Business, Superadmin, and Support configure `ONECORE_API_BASE_PATH=/api` in

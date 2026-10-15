@@ -378,8 +378,13 @@ export class MemoryIdentityRepository implements IdentityRepository {
     now: Date,
     correlationId?: string,
     mfaVerified = false,
+    mfaEnforcementRequired = true,
   ): Promise<IdentitySession> {
-    if (!mfaVerified && (await this.userRequiresMfa(session.userId))) {
+    if (
+      mfaEnforcementRequired &&
+      !mfaVerified &&
+      (await this.userRequiresMfa(session.userId))
+    ) {
       throw new Error(
         "Mandatory MFA was not completed before session creation",
       );
@@ -428,11 +433,13 @@ export class MemoryIdentityRepository implements IdentityRepository {
   async findActiveSession(
     secretHash: string,
     now: Date,
+    mfaEnforcementRequired = true,
   ): Promise<{ session: IdentitySession; user: IdentityUser } | undefined> {
     const session = this.sessions.get(secretHash);
     if (!session || session.revokedAt || session.expiresAt <= now)
       return undefined;
     if (
+      mfaEnforcementRequired &&
       (await this.userRequiresMfa(session.userId)) &&
       !session.mfaVerifiedAt
     ) {

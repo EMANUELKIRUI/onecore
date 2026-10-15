@@ -340,4 +340,46 @@ describe("initial platform Superadmin provisioning", () => {
         .where(sql`${schema.platformUserRoles.role} = 'SUPERADMIN'`),
     ).toHaveLength(0);
   });
+
+  it("keeps the repository MFA guard enabled by default and honors explicit non-production disablement", async () => {
+    const created = await provisionInitialSuperadmin(
+      migratorDatabase,
+      bootstrapInput(),
+    );
+    const identity = createIdentityRepository(runtimeDatabase);
+    const now = new Date();
+    const session = {
+      secretHash: "a".repeat(64),
+      userId: created.userId,
+      organizationId: null,
+      branchId: null,
+      expiresAt: new Date(now.getTime() + 60_000),
+      ipAddress: "127.0.0.1",
+      userAgent: "mfa-policy-test",
+    };
+
+    await expect(
+      identity.createSession(session, crypto.randomUUID(), now),
+    ).rejects.toThrow("Mandatory MFA was not completed before session creation");
+
+    const passwordOnlySession = await identity.createSession(
+      { ...session, secretHash: "b".repeat(64) },
+      crypto.randomUUID(),
+      now,
+      undefined,
+      false,
+      false,
+    );
+    expect(passwordOnlySession.mfaVerifiedAt).toBeNull();
+    expect(
+      await identity.findActiveSession(passwordOnlySession.secretHash, now),
+    ).toBeUndefined();
+    expect(
+      await identity.findActiveSession(
+        passwordOnlySession.secretHash,
+        now,
+        false,
+      ),
+    ).toMatchObject({ session: { mfaVerifiedAt: null } });
+  });
 });

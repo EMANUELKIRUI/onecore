@@ -13,8 +13,37 @@ describe("loadConfig", () => {
       AUTH_SESSION_TTL_SECONDS: 43_200,
       AUTH_LOGIN_RATE_LIMIT_MAX: 5,
       AUTH_LOGIN_RATE_LIMIT_WINDOW_MS: 60_000,
+      AUTH_MFA_ENFORCEMENT: "required",
     });
     expect(config.DATABASE_URL).toBeUndefined();
+  });
+
+  it.each(["development", "test"] as const)(
+    "allows temporary MFA enforcement disablement only in %s",
+    (NODE_ENV) => {
+      expect(
+        loadConfig({ NODE_ENV, AUTH_MFA_ENFORCEMENT: "disabled" })
+          .AUTH_MFA_ENFORCEMENT,
+      ).toBe("disabled");
+    },
+  );
+
+  it.each(["staging", "production"] as const)(
+    "rejects disabled MFA enforcement in %s",
+    (NODE_ENV) => {
+      expect(() =>
+        loadConfig({ NODE_ENV, AUTH_MFA_ENFORCEMENT: "disabled" }),
+      ).toThrow(ConfigurationError);
+    },
+  );
+
+  it("requires an explicit non-production environment for disabled MFA", () => {
+    expect(() =>
+      loadConfig({ AUTH_MFA_ENFORCEMENT: "disabled" }),
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      loadConfig({ NODE_ENV: "development", AUTH_MFA_ENFORCEMENT: "false" }),
+    ).toThrow(ConfigurationError);
   });
 
   it("parses a valid port and deployment environment", () => {

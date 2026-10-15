@@ -153,10 +153,12 @@ export interface IdentityRepository {
     now: Date,
     correlationId?: string,
     mfaVerified?: boolean,
+    mfaEnforcementRequired?: boolean,
   ): Promise<IdentitySession>;
   findActiveSession(
     secretHash: string,
     now: Date,
+    mfaEnforcementRequired?: boolean,
   ): Promise<{ session: IdentitySession; user: IdentityUser } | undefined>;
   touchSession(secretHash: string, now: Date): Promise<void>;
   clearSessionOrganization(
@@ -949,12 +951,14 @@ export function createIdentityRepository(
       now,
       correlationId,
       mfaVerified = false,
+      mfaEnforcementRequired = true,
     ) {
       return withAuthenticatedUserTransaction(
         database,
         session.userId,
         async (transaction) => {
           if (
+            mfaEnforcementRequired &&
             !mfaVerified &&
             (await requiresMfaInTransaction(transaction, session.userId))
           ) {
@@ -1017,7 +1021,7 @@ export function createIdentityRepository(
         },
       );
     },
-    async findActiveSession(secretHash, now) {
+    async findActiveSession(secretHash, now, mfaEnforcementRequired = true) {
       return withSessionTransaction(
         database,
         secretHash,
@@ -1038,6 +1042,7 @@ export function createIdentityRepository(
             sql`select set_config('app.current_user_id', ${session.userId}, true)`,
           );
           if (
+            mfaEnforcementRequired &&
             (await requiresMfaInTransaction(transaction, session.userId)) &&
             !session.mfaVerifiedAt
           ) {

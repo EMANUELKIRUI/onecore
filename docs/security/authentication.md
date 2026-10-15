@@ -22,6 +22,16 @@ a session, again inside the repository session-creation transaction, and when
 resolving existing sessions. An old non-MFA session stops resolving if its
 identity is later granted a protected role.
 
+`AUTH_MFA_ENFORCEMENT` is the central temporary authentication policy and
+accepts `required` or `disabled`. It defaults to `required`; `disabled` is
+accepted only when `NODE_ENV` is explicitly `development` or `test`. The
+checked-in `.env.example` opts into `disabled` for local development only.
+Staging and production reject that value during configuration loading. When
+disabled, password verification, lockout, rate limiting, session controls,
+authorization, and audit behavior remain active; a session is not marked as
+MFA-verified. Returning to `required` causes protected sessions without MFA
+assurance to stop resolving and requires the normal enrollment/challenge flow.
+
 Account lifecycle transitions are represented by `canTransitionUserAccountStatus`:
 
 ```text

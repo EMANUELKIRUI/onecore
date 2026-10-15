@@ -242,6 +242,8 @@ export function registerAuthentication(
   rateLimiter?: RateLimiter,
   emailSender: TransactionalEmailSender = sendTransactionalEmail,
 ): void {
+  const mfaEnforcementRequired =
+    config.AUTH_MFA_ENFORCEMENT !== "disabled";
   app.register(cookie);
   app.register(rateLimit, { global: false });
   app.decorateRequest("auth", null);
@@ -356,7 +358,11 @@ export function registerAuthentication(
       }
 
       const secretHash = sessionDigest(secret);
-      const resolved = await identity.findActiveSession(secretHash, new Date());
+      const resolved = await identity.findActiveSession(
+        secretHash,
+        new Date(),
+        mfaEnforcementRequired,
+      );
       if (!resolved) {
         request.log.info(
           {
@@ -797,7 +803,10 @@ export function registerAuthentication(
         );
       }
 
-      if (await identity.userRequiresMfa(authenticatedUser.id)) {
+      if (
+        mfaEnforcementRequired &&
+        (await identity.userRequiresMfa(authenticatedUser.id))
+      ) {
         const credential = await identity.getMfaCredential(
           authenticatedUser.id,
         );
@@ -844,6 +853,8 @@ export function registerAuthentication(
         request.id,
         now,
         request.observabilityContext?.correlationId ?? request.id,
+        false,
+        mfaEnforcementRequired,
       );
       reply.setCookie(SESSION_COOKIE, secret, {
         ...cookieOptions(config),
@@ -1049,6 +1060,7 @@ export function registerAuthentication(
             now,
             request.observabilityContext?.correlationId ?? request.id,
             true,
+            mfaEnforcementRequired,
           );
           reply.setCookie(SESSION_COOKIE, sessionSecret, {
             ...cookieOptions(config),
@@ -1303,6 +1315,7 @@ export function registerAuthentication(
         now,
         request.observabilityContext?.correlationId ?? request.id,
         true,
+        mfaEnforcementRequired,
       );
       reply.setCookie(SESSION_COOKIE, sessionSecret, {
         ...cookieOptions(config),

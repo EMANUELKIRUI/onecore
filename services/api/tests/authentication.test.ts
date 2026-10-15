@@ -51,12 +51,14 @@ function createTestApp(
   identity = new MemoryIdentityRepository(),
   rateLimitMax = 100,
   rateLimiter?: RateLimiter,
+  mfaEnforcement: "required" | "disabled" = "required",
 ) {
   const config = loadConfig({
     NODE_ENV: "test",
     LOG_LEVEL: "silent",
     AUTH_LOGIN_RATE_LIMIT_MAX: String(rateLimitMax),
     AUTH_LOGIN_RATE_LIMIT_WINDOW_MS: "60000",
+    AUTH_MFA_ENFORCEMENT: mfaEnforcement,
     MFA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
   });
   const app = buildApp(
@@ -237,7 +239,8 @@ describe("identity and authentication API", () => {
       identity.addUser(user);
     });
     identity.addUser(testUser());
-    const { app } = createTestApp(identity, 100);
+    identity.addPlatformRole(userId, "SUPERADMIN");
+    const { app } = createTestApp(identity, 100, undefined, "disabled");
 
     for (let index = 0; index < statuses.length; index += 1) {
       const response = await login(app, `status-${index}@example.test`);
@@ -669,10 +672,12 @@ describe("identity and authentication API", () => {
     await app.close();
   });
 
-  it("enforces login rate limits and same-origin JSON mutation requests", async () => {
+  it.each(["required", "disabled"] as const)(
+    "enforces login rate limits and same-origin JSON mutation requests with MFA %s",
+    async (mfaEnforcement) => {
     const identity = new MemoryIdentityRepository();
     identity.addUser(testUser());
-    const { app } = createTestApp(identity, 2);
+      const { app } = createTestApp(identity, 2, undefined, mfaEnforcement);
     const body = { email: "owner@example.test", password: "incorrect" };
     const request = () =>
       app.inject({
@@ -682,51 +687,69 @@ describe("identity and authentication API", () => {
         payload: body,
       });
 
-    expect((await request()).statusCode).toBe(401);
-    expect((await request()).statusCode).toBe(401);
-    const limited = await request();
-    expect(limited.statusCode).toBe(429);
-    expect(limited.json().error.code).toBe("TOO_MANY_REQUESTS");
+      expect((await request()).statusCode).toBe(401);
+      expect((await request()).statusCode).toBe(401);
+      const limited = await request();
+      expect(limited.statusCode).toBe(429);
+      expect(limited.json().error.code).toBe("TOO_MANY_REQUESTS");
 
-    const crossSite = await app.inject({
-      method: "POST",
-      url: "/auth/logout",
-      headers: {
-        "content-type": "application/json",
-        origin: "https://attacker.example",
-      },
-      payload: {},
-    });
-    expect(crossSite.statusCode).toBe(403);
-    await app.close();
-  });
+      const crossSite = await app.inject({
+        method: "POST",
+        url: "/auth/logout",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://attacker.example",
+        },
+        payload: {},
+      });
+      expect(crossSite.statusCode).toBe(403);
+      await app.close();
+    },
+  );
 
-  it("fails closed when the shared login rate limiter is unavailable", async () => {
-    const identity = new MemoryIdentityRepository();
-    identity.addUser(testUser());
-    const { app } = createTestApp(identity, 100, {
-      consume: async () => {
-        throw new Error("synthetic rate limiter failure");
-      },
-    });
+  it.each(["required", "disabled"] as const)(
+    "fails closed when the shared login rate limiter is unavailable with MFA %s",
+    async (mfaEnforcement) => {
+      const identity = new MemoryIdentityRepository();
+      identity.addUser(testUser());
+      const missingLimiterRelation = Object.assign(
+        new Error('relation "rate_limit_buckets" does not exist'),
+        { code: "42P01", table_name: "rate_limit_buckets" },
+      );
+      const { app } = createTestApp(
+        identity,
+        100,
+        {
+          consume: async () => {
+            throw missingLimiterRelation;
+          },
+        },
+        mfaEnforcement,
+      );
 
-    const response = await login(app);
+      const response = await login(app);
 
-    expect(response.statusCode).toBe(503);
-    expect(response.json().error.code).toBe("SERVICE_UNAVAILABLE");
-    expect(identity.sessions.size).toBe(0);
-    expect(identity.events).toHaveLength(0);
-    expect(response.body).not.toContain("synthetic rate limiter failure");
-    await app.close();
-  });
+      expect(response.statusCode).toBe(503);
+      expect(response.json().error.code).toBe("SERVICE_UNAVAILABLE");
+      expect(identity.sessions.size).toBe(0);
+      expect(identity.events).toHaveLength(0);
+      expect(response.body).not.toContain("rate_limit_buckets");
+      await app.close();
+    },
+  );
 
-  it.each(["SUPERADMIN", "Organization Owner", "Organization Admin"])(
+  it.each([
+    "SUPERADMIN",
+    "SUPPORT",
+    "Organization Owner",
+    "Organization Admin",
+  ] as const)(
     "requires TOTP before issuing a %s session",
     async (role) => {
       const identity = new MemoryIdentityRepository();
       const user = testUser();
-      if (role === "SUPERADMIN") {
-        identity.addPlatformRole(user.id, "SUPERADMIN");
+      if (role === "SUPERADMIN" || role === "SUPPORT") {
+        identity.addPlatformRole(user.id, role);
       } else {
         identity.addMembership(user.id, {
           organizationId: orgA,
@@ -736,7 +759,7 @@ describe("identity and authentication API", () => {
         identity.addOrganizationRole(user.id, orgA, role);
       }
       identity.addUser(user);
-      const { app } = createTestApp(identity);
+      const { app } = createTestApp(identity, 100, undefined, "required");
 
       const response = await app.inject({
         method: "POST",
@@ -753,6 +776,89 @@ describe("identity and authentication API", () => {
       await app.close();
     },
   );
+
+  it.each([
+    "SUPERADMIN",
+    "SUPPORT",
+    "Organization Owner",
+    "Organization Admin",
+    "MEMBER",
+  ] as const)(
+    "allows password-only login and session bootstrap for %s when MFA enforcement is disabled",
+    async (role) => {
+      const identity = new MemoryIdentityRepository();
+      const user = testUser();
+      if (role === "SUPERADMIN" || role === "SUPPORT") {
+        identity.addPlatformRole(user.id, role);
+      } else {
+        identity.addMembership(user.id, {
+          organizationId: orgA,
+          name: "Demo Organization",
+          slug: "demo",
+        });
+        if (role !== "MEMBER") {
+          identity.addOrganizationRole(user.id, orgA, role);
+        }
+      }
+      identity.addUser(user);
+      const { app } = createTestApp(identity, 100, undefined, "disabled");
+
+      const response = await login(app);
+      expect(response.statusCode).toBe(200);
+      expect(await identity.userRequiresMfa(user.id)).toBe(role !== "MEMBER");
+      expect(response.json()).not.toHaveProperty("mfa");
+      expect(response.headers["set-cookie"]).toContain("onecore_session=");
+
+      const cookie = cookieFrom(response);
+      const session = await app.inject({
+        method: "GET",
+        url: "/auth/session",
+        headers: { cookie },
+      });
+      expect(session.statusCode).toBe(200);
+      expect(identity.sessions.size).toBe(1);
+
+      const logout = await app.inject({
+        method: "POST",
+        url: "/auth/logout",
+        headers: { cookie, "content-type": "application/json" },
+        payload: {},
+      });
+      expect(logout.statusCode).toBe(204);
+      expect(
+        (
+          await app.inject({
+            method: "GET",
+            url: "/auth/session",
+            headers: { cookie },
+          })
+        ).statusCode,
+      ).toBe(401);
+      await app.close();
+    },
+  );
+
+  it("rejects wrong passwords and unknown users when MFA enforcement is disabled", async () => {
+    const identity = new MemoryIdentityRepository();
+    const user = testUser();
+    identity.addPlatformRole(user.id, "SUPERADMIN");
+    identity.addUser(user);
+    const { app } = createTestApp(identity, 100, undefined, "disabled");
+
+    const wrongPassword = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: { email: user.email, password: "incorrect" },
+    });
+    const unknownUser = await login(app, "missing@example.test");
+
+    expect(wrongPassword.statusCode).toBe(401);
+    expect(unknownUser.statusCode).toBe(401);
+    expect(unknownUser.body).toBe(wrongPassword.body);
+    expect(identity.sessions.size).toBe(0);
+    await app.close();
+  });
 
   it("accepts a valid TOTP challenge and stores encrypted secrets", async () => {
     const identity = new MemoryIdentityRepository();

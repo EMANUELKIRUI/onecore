@@ -7,6 +7,14 @@ const application = await readFile(
   new URL("../app.js", import.meta.url),
   "utf8",
 );
+const superadminApplication = await readFile(
+  new URL("../../superadmin/app.js", import.meta.url),
+  "utf8",
+);
+const supportApplication = await readFile(
+  new URL("../../support/app.js", import.meta.url),
+  "utf8",
+);
 const pos = await readFile(new URL("../pos.js", import.meta.url), "utf8");
 const setupPage = await readFile(
   new URL("../setup.html", import.meta.url),
@@ -22,6 +30,21 @@ const styles = await readFile(
 );
 
 describe("authenticated business shell", () => {
+  it("uses password-only success and the shared MFA-required flow across authenticated apps", () => {
+    const applications = [
+      [application, "refreshSession"],
+      [superadminApplication, "loadApplications"],
+      [supportApplication, "loadSession"],
+    ];
+
+    for (const [source, bootstrap] of applications) {
+      expect(source).toContain("createMfaLoginFlow");
+      expect(source).toContain('/auth/login');
+      expect(source).toContain("mfaLogin.begin");
+      expect(source).toContain(`onAuthenticated: ${bootstrap}`);
+    }
+  });
+
   it("exposes accessible workspace, profile, security, and history boundaries", () => {
     for (const id of [
       "auth-view",

@@ -65,6 +65,28 @@ describe("shared UI foundations", () => {
     );
   });
 
+  it("returns successful password-only login responses for application session bootstrap", async () => {
+    const loginResponse = {
+      user: { id: "user-1", email: "owner@example.test" },
+      session: { expiresAt: "2026-10-15T12:00:00.000Z" },
+    };
+    const api = createApiClient(
+      "/api",
+      async () =>
+        new Response(JSON.stringify(loginResponse), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await expect(
+      api.request("/auth/login", {
+        method: "POST",
+        body: { email: "owner@example.test", password: "correct-password" },
+      }),
+    ).resolves.toEqual(loginResponse);
+  });
+
   it("sends JSON mutations and rejects cross-origin base paths", async () => {
     const fetchImplementation = vi
       .fn()

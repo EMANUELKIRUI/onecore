@@ -62,6 +62,7 @@ const environmentSchema = z.object({
     .min(1_000)
     .max(3_600_000)
     .default(60_000),
+  AUTH_MFA_ENFORCEMENT: z.enum(["required", "disabled"]).default("required"),
   MFA_ENCRYPTION_KEY: z.string().min(32).optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
   RESEND_FROM_EMAIL: z.string().email().optional(),
@@ -112,6 +113,14 @@ export function loadConfig(
     throw new ConfigurationError(
       invalidKeys.length > 0 ? invalidKeys : ["environment"],
     );
+  }
+
+  if (
+    result.data.AUTH_MFA_ENFORCEMENT === "disabled" &&
+    environment.NODE_ENV !== "development" &&
+    environment.NODE_ENV !== "test"
+  ) {
+    throw new ConfigurationError(["AUTH_MFA_ENFORCEMENT"]);
   }
 
   return result.data;

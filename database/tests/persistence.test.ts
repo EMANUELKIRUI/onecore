@@ -856,6 +856,36 @@ describe("PostgreSQL persistence foundation", () => {
     });
   });
 
+  it("surfaces SQLSTATE 42P01 when the isolated database lacks rate_limit_buckets", async () => {
+    const isolatedClient = new PGlite();
+    try {
+      const isolatedDatabase = drizzle({
+        client: isolatedClient,
+      }) as unknown as Database;
+      const rateLimiter = createDatabaseRateLimiter(isolatedDatabase);
+      let storageError: unknown;
+      try {
+        await rateLimiter.consume({
+          scope: "authentication.login",
+          subject: "isolated-test-client",
+          limit: 5,
+          windowMs: 60_000,
+        });
+      } catch (error) {
+        storageError = error;
+      }
+
+      expect(storageError).toBeDefined();
+      expect(classifyError(storageError)).toBe("database");
+      expect(String(storageError)).toContain('"rate_limit_buckets"');
+      const safeError = JSON.stringify(sanitizeErrorForLog(storageError));
+      expect(safeError).toContain('"sqlState":"42P01"');
+      expect(safeError).not.toContain("rate_limit_buckets");
+    } finally {
+      await isolatedClient.close();
+    }
+  });
+
   it("enforces atomic database-backed rate limits with tenant-separated keys", async () => {
     const rateLimiter = createDatabaseRateLimiter(
       database as unknown as Database,
